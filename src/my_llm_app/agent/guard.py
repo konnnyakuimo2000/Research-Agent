@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from my_llm_app.agent.state import MAX_CANDIDATES, MAX_QUESTIONS, MAX_STEPS, AgentState, Decision
+from my_llm_app.agent.state import MAX_CANDIDATES, MAX_PAGES, MAX_QUESTIONS, MAX_STEPS, AgentState, Decision
 
 
 def build_question(state: AgentState) -> str:
@@ -44,6 +44,13 @@ def check_decision(state: AgentState, decision: Decision) -> Decision:
             return {**d, "action": "search", "query": query, "names": [target["label"]],
                     "guard": "対象が決まったので、応答の前にその対象を調べる"}
 
+    if action == "respond" and not is_ambiguous(state):
+        # 応答の前に、ページ本文を読んで事実を確かめる（検索結果の要約だけでは答えない。設計書 G-1）
+        read = [p["url"] for p in state.get("pages_read", [])]
+        unread = [u for u in state.get("reading_list", []) if u not in read]
+        if unread and len(read) < MAX_PAGES and (not read or not state.get("verified")):
+            return {**d, "action": "read_pages", "guard": "応答の前に、ページ本文を読んで事実を確かめる"}
+
     if action == "respond" and is_ambiguous(state) and asked < MAX_QUESTIONS:
         # 例 A のパターン 2（適当な対象で答える・全部を平たく述べる）を防ぐ
         return {**d, "action": "ask_user", "question": build_question(state),
@@ -65,6 +72,10 @@ def check_decision(state: AgentState, decision: Decision) -> Decision:
             return {**d, "action": "respond", "guard": "同じ質問の繰り返しを防ぐため、前提を明示して応答する"}
 
     if action == "search":
+        if is_ambiguous(state) and asked == 0 and asked < MAX_QUESTIONS:
+            # 候補が複数見つかった後にさらに調べても、利用者がどれを指すかはわからない。先に聞き返す
+            return {**d, "action": "ask_user", "question": build_question(state),
+                    "guard": "候補が複数見つかったので、さらに調べる前に聞き返す"}
         query = (d.get("query") or "").strip() or state.get("request", "")
         if query in state.get("searched", []):
             fallback = "ask_user" if is_ambiguous(state) and asked < MAX_QUESTIONS else "respond"

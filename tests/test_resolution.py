@@ -71,3 +71,15 @@ def test_same_question_is_not_repeated():
     state["last_question"] = build_question(state)
     d = check_decision(state, {"action": "ask_user", "reason": ""})
     assert d["action"] == "respond"
+
+
+def test_evidence_ok():
+    from my_llm_app.agent.nodes import evidence_ok
+    # 依頼文が対象を絞り込んでいる → 認める
+    assert evidence_ok("太陽系の惑星", "太陽系の惑星の水星について調べて", "水星")
+    assert evidence_ok("2004年の", "2004年のスマトラ島沖地震について", "スマトラ島沖地震")
+    # 対象の名前そのもの・決まり文句だけ・依頼文にない語句 → 認めない
+    assert not evidence_ok("スマトラ島沖地震", "スマトラ島沖地震について調べて", "スマトラ島沖地震")
+    assert not evidence_ok("スマトラ島沖地震について調べて", "スマトラ島沖地震について調べて", "スマトラ島沖地震")
+    assert not evidence_ok("2004年", "スマトラ島沖地震について調べて", "スマトラ島沖地震")
+    assert not evidence_ok("", "水星について", "水星")

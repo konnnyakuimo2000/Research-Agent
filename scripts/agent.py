@@ -40,6 +40,12 @@ def summarize(node: str, update: dict) -> str:
         if f["infeasible_parts"]:
             s += f"\n   調べられない部分: {f['infeasible_parts']}"
         return s
+    if node == "read_pages":
+        lines = []
+        for p in update["pages_read"][-len(update["trace"][0]["pages"]):]:
+            status = f"事実 {p['verified']}/{p['extracted']} 件を照合" if p["ok"] else p["reason"]
+            lines.append(f"   - {p['url'][:80]}  {status}")
+        return "\n".join(lines)
     if node == "search":
         lines = ["   わかったこと:"]
         lines += [f"     - {k['text']}  <{k['source'] or '出典なし'}>" for k in update.get("known", [])]
@@ -89,6 +95,16 @@ def main() -> int:
 
     state = graph.get_state(config).values
     print("\n" + state.get("answer", "(回答なし)"))
+
+    # どの処理に時間がかかったか（利用者の入力待ちは含まない）
+    times: dict[str, float] = {}
+    for t in state.get("trace", []):
+        if "seconds" in t:
+            times[t["node"]] = times.get(t["node"], 0) + t["seconds"]
+    if times:
+        total = sum(times.values())
+        print(f"\n(所要時間 {total:.0f} 秒: " + ", ".join(
+            f"{k} {v:.0f}秒" for k, v in sorted(times.items(), key=lambda x: -x[1])) + ")")
 
     runs = REPO_ROOT / "runs"
     runs.mkdir(exist_ok=True)

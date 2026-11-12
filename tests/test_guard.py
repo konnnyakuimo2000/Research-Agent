@@ -74,3 +74,10 @@ def test_pick_candidate_by_number():
     assert pick_candidate("２番", CANDIDATES)["label"] == "水銀"
     assert pick_candidate("9", CANDIDATES) is None
     assert pick_candidate("水星についてです", CANDIDATES) is None
+
+
+def test_second_search_while_ambiguous_becomes_ask_user():
+    # 候補が複数見つかった後の追加の検索は、聞き返しに切り替える（時間の無駄を防ぐ）
+    d = check_decision(ambiguous_state(), {"action": "search", "reason": "", "query": "2004年 スマトラ"})
+    assert d["action"] == "ask_user"
+    assert "1. 水星" in d["question"]

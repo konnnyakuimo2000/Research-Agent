@@ -5,12 +5,14 @@ from __future__ import annotations
 import operator
 from typing import Annotated, Literal, TypedDict
 
-Action = Literal["search", "ask_user", "respond"]
+Action = Literal["search", "ask_user", "read_pages", "respond"]
 
 # 上限（設計書 5.2 Q-4、10.3）
 MAX_QUESTIONS = 2   # 利用者への質問は最大 2 往復
 MAX_STEPS = 8       # 行動の選択は最大 8 回
 MAX_CANDIDATES = 8  # 同名の候補は最大 8 件（すべて質問の選択肢に出す）
+PAGES_PER_READ = 4  # 1 回の read_pages で読むページ数
+MAX_PAGES = 8       # 1 回の調査で読むページの合計
 # 候補の 1 位の sitelinks（記事がある言語版などの数）が 2 位のこの倍数以上なら、
 # 一般にはその意味を指すとみなし、聞き返さずに前提を明示して進める（例: 富士山）
 DOMINANCE_RATIO = 4
@@ -33,6 +35,20 @@ class Fact(TypedDict):
     source: str        # 根拠の URL（取得した検索結果にない URL は空文字にする）
 
 
+class VerifiedFact(TypedDict):
+    text: str          # 事実（短い文）
+    quote: str         # 根拠となる本文の一節（本文に実在することをプログラムで確認済み）
+    source: str        # ページの URL
+
+
+class PageRead(TypedDict):
+    url: str
+    ok: bool
+    reason: str        # 読めなかった理由
+    extracted: int     # LLM が抜き出した事実の数
+    verified: int      # そのうち引用を照合できた数
+
+
 class Decision(TypedDict, total=False):
     action: Action
     reason: str
@@ -53,7 +69,10 @@ class AgentState(TypedDict, total=False):
     request: str                      # 利用者の依頼（原文）
     feasibility: Feasibility          # 公開情報で調べられる依頼かの判定（設計書 4 章 ④）
     clarifications: list[str]         # 質問に対する利用者の回答
-    known: list[Fact]                 # わかったこと（根拠の URL 付き）
+    known: list[Fact]                 # わかったこと（検索結果の要約から。次の行動を決める手がかりにだけ使う）
+    reading_list: list[str]           # 深掘りするページの URL（読む順）
+    pages_read: list[PageRead]        # 読んだ（読もうとした）ページ
+    verified: list[VerifiedFact]      # ページ本文から抜き出し、引用を照合できた事実（回答はこれだけで書く）
     unknown: list[str]                # わからないこと
     candidates: list[Candidate]       # 同名の候補
     target: Candidate | None          # 特定できた対象

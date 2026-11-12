@@ -10,15 +10,20 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from langgraph.types import interrupt
 
 from my_llm_app.agent import prompts
-from my_llm_app.agent.guard import check_decision
-from my_llm_app.agent.state import DOMINANCE_RATIO, AgentState, Candidate, Source
+from my_llm_app.agent.guard import check_decision, is_ambiguous
+from my_llm_app.agent.quotes import normalize, quote_in_text
+from my_llm_app.agent.state import DOMINANCE_RATIO, PAGES_PER_READ, AgentState, Candidate, PageRead, Source
 from my_llm_app.config import Settings
 from my_llm_app.llm import LLM
-from my_llm_app.tools import searxng, wikimedia
+from my_llm_app.tools import fetch, searxng, wikimedia
+
+# LLM に渡す本文の長さの上限（文字数）。長いページは先頭から
+MAX_PAGE_CHARS = 8000
 
 log = logging.getLogger(__name__)
 
@@ -97,6 +102,12 @@ class Nodes:
             info = {e.id: e for e in entities}
         candidates = rank([as_candidate(info[i]) for i in chosen if i in info]) or state.get("candidates", [])
         target = state.get("target") or (as_candidate(info[target_id]) if target_id in info else None)
+        if (target and not state.get("target") and not state.get("clarifications") and len(candidates) >= 2
+                and target != dominant(candidates)
+                and not evidence_ok(update.get("target_evidence", ""), state["request"], target["label"])):
+            # 利用者が答えていないのに LLM が対象を決めた。依頼文に根拠となる語句がなければ認めない（推測を防ぐ）
+            errors.append(f"target rejected: evidence={update.get('target_evidence', '')!r}")
+            target = None
         assumptions = state.get("assumptions", [])
         if not target and (primary := dominant(candidates)):
             target = primary
@@ -109,8 +120,9 @@ class Nodes:
         pages = {**state.get("pages", {}),
                  **{w.url: w.title for w in web.results},
                  **{e.url: f"Wikidata: {e.label}" for e in entities}}
-        known = [{"text": k["text"], "source": k["source"] if k.get("source") in pages else ""}
-                 for k in update["known"]]
+        # LLM には URL を書き写させず短い参照（W1 / Q308）で答えさせ、プログラムが URL に戻す（出力を短くするため）
+        refs = {f"W{i}": w.url for i, w in enumerate(web.results, 1)} | {e.id: e.url for e in entities}
+        known = [{"text": k["text"], "source": refs.get(k.get("source", "").strip(), "")} for k in update["known"]]
 
         result: dict = {
             "known": known,
@@ -135,6 +147,13 @@ class Nodes:
                 pages[ws.url] = f"Wikipedia: {ws.title}"
                 result.update(target_summary=ws.extract, summary_url=ws.url)
 
+        # 対象が決まっている（または曖昧でない）ときの検索結果を、深掘りするページの候補にする。
+        # 曖昧なまま集めた結果は、別の対象のページが混ざるので使わない
+        if not is_ambiguous({**state, **result}):
+            first = [result["summary_url"]] if result.get("summary_url") else []
+            urls = first + [w.url for w in web.results if not fetch.is_skipped_domain(w.url)]
+            result["reading_list"] = list(dict.fromkeys(state.get("reading_list", []) + urls))
+
         log.info("search: %r names=%s -> wikidata %d, web %d (%.1fs)", query, names, len(entities),
                  len(web.results), time.perf_counter() - started)
         result["trace"] = [{
@@ -144,6 +163,51 @@ class Nodes:
             "llm": update,
         }]
         return result
+
+    def read_pages(self, state: AgentState) -> dict:
+        """ページを 1 つずつ読み、引用付きで事実を抜き出し、引用を本文と照合する（縦の調査）。"""
+        done = {p["url"] for p in state.get("pages_read", [])}
+        urls = [u for u in state.get("reading_list", []) if u not in done][:PAGES_PER_READ]
+        started = time.perf_counter()
+        with ThreadPoolExecutor(max_workers=2) as pool:   # LLM 側の同時実行数の上限と合わせる
+            results = list(pool.map(lambda u: self._read_one(state, u), urls))
+
+        pages = dict(state.get("pages", {}))
+        verified = list(state.get("verified", []))
+        reads: list[PageRead] = []
+        traces = []
+        for page, facts, dropped in results:
+            if page.ok and page.title:
+                pages.setdefault(page.url, page.title)
+            verified += facts
+            reads.append({"url": page.url, "ok": page.ok, "reason": page.reason,
+                          "extracted": len(facts) + len(dropped), "verified": len(facts)})
+            traces.append({"url": page.url, "ok": page.ok, "reason": page.reason,
+                           "verified": facts, "dropped": dropped})
+        log.info("read_pages: %d pages -> verified %d facts (%.1fs)", len(urls),
+                 sum(r["verified"] for r in reads), time.perf_counter() - started)
+        return {
+            "pages_read": state.get("pages_read", []) + reads,
+            "verified": verified,
+            "pages": pages,
+            "trace": [{"node": "read_pages", "pages": traces}],
+        }
+
+    def _read_one(self, state: AgentState, url: str):
+        page = fetch.fetch_page(url)
+        if not page.ok:
+            return page, [], []
+        text = page.text[:MAX_PAGE_CHARS]
+        out = self.llm.chat_json(prompts.EXTRACT_SYSTEM, prompts.extract_user(state, page.title, text),
+                                 prompts.EXTRACT_SCHEMA)
+        facts, dropped = [], []
+        for f in out.get("facts", []):
+            # 引用が本文に実在するものだけを認める（設計書 M-4）
+            if quote_in_text(f.get("quote", ""), text):
+                facts.append({"text": f["text"], "quote": f["quote"], "source": url})
+            else:
+                dropped.append(f)
+        return page, facts, dropped
 
     def ask_user(self, state: AgentState) -> dict:
         question = state["decision"]["question"]
@@ -197,6 +261,21 @@ class Nodes:
         return {"answer": answer, "trace": [{"node": "respond", "answer": answer}]}
 
 
+# 依頼文によく出る決まり文句（対象を絞り込む根拠にならない）
+_GENERIC_PHRASES = ("について", "に関して", "調べて", "教えて", "知りたい", "ください", "とは", "の情報", "情報")
+
+
+def evidence_ok(evidence: str, request: str, label: str) -> bool:
+    """LLM が示した根拠の語句が、依頼文にあり、対象の名前や決まり文句以外の言葉を含むか。"""
+    e = normalize(evidence)
+    if not e or e not in normalize(request):
+        return False
+    rest = e.replace(normalize(label), "")
+    for phrase in _GENERIC_PHRASES:
+        rest = rest.replace(phrase, "")
+    return len(rest.strip("のをはがにでとや、。")) >= 2
+
+
 def as_candidate(e: wikimedia.Entity) -> Candidate:
     return {"id": e.id, "label": e.label, "description": e.description, "sitelinks": e.sitelinks}
 
@@ -238,7 +317,7 @@ def collect_sources(state: AgentState) -> list[Source]:
     """回答で使う出典を、概要 → わかったことの順に重複なく並べる（出典番号はこの順）。"""
     pages = state.get("pages", {})
     urls = [state["summary_url"]] if state.get("target_summary") and state.get("summary_url") else []
-    urls += [k["source"] for k in state.get("known", []) if k.get("source")]
+    urls += [k["source"] for k in state.get("verified", [])]
     ordered = list(dict.fromkeys(urls))
     return [{"title": pages.get(u, u), "url": u} for u in ordered]
 

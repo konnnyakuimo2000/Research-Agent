@@ -44,7 +44,8 @@ def test_infeasible_request_is_reported_without_searching():
     assert len(llm.calls) == 1                       # 判定の 1 回だけ。検索も回答生成もしない
     assert "公開されている情報からは調べられない" in state["answer"]
     assert "出席者に写真が残っていないか確認する" in state["answer"]
-    assert [t["node"] for t in state["trace"]] == ["check_feasibility", "report_infeasible"]
+    assert [t["node"] for t in state["trace"] if "seconds" not in t] == ["check_feasibility", "report_infeasible"]
+    assert [t["node"] for t in state["trace"] if "seconds" in t] == ["check_feasibility", "report_infeasible"]
 
 
 def test_report_lists_parts_reason_attempts_and_suggestions():

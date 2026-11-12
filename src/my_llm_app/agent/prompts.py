@@ -22,6 +22,7 @@ verdict:
 - マイナー・情報が少なそう、というだけでは no にしない（unsure か yes）。迷ったら unsure にする
 - 実在する人物でも、公人や研究者の公開された経歴・業績は調べられる（yes）。私生活や非公開の情報は no
 - infeasible_parts には、調べられない部分を短く書く（yes / unsure なら空）
+- reason は 60 文字以内で書く
 - suggestions には、利用者が代わりにできることを 1〜3 個書く（例: 「出席者に写真が残っていないか確認する」「手元の資料を渡してもらえれば内容を整理できる」）。yes なら空"""
 
 FEASIBILITY_SCHEMA = {
@@ -48,7 +49,8 @@ DECIDE_SYSTEM = """あなたは調査エージェントの「次の行動」を�
 - names には、どの行動を選んだときも必ず、依頼の対象を表す名前（百科事典で引く短い名前）を 1〜3 個入れる。カタカナ語や外国由来の言葉は原語（英語など）も入れる（例: ["マーキュリー", "Mercury"]）。対象が決まったら、その対象の正式な名前を入れる（例: ["水星"]）
 - 依頼の対象に複数の意味があり、利用者がどれを指しているかわからないときは ask_user する。推測で 1 つに決めない
 - 対象が決まったら、その対象について search して内容を集め、十分なら respond する
-- 同じ検索の言葉を繰り返さない"""
+- 同じ検索の言葉を繰り返さない
+- reason は 30 文字以内で書く"""
 
 DECIDE_SCHEMA = {
     "type": "object",
@@ -65,21 +67,25 @@ DECIDE_SCHEMA = {
 UPDATE_SYSTEM = """あなたは調査エージェントの「状態を更新する」役です。
 依頼・利用者の回答・現在の状態・新しい検索結果を読み、状態を更新して返します。
 
-- known: わかったこと。text に短い文（60 文字以内）、source にその根拠の URL（Web 検索の結果の url、または Wikidata の項目の url）を 1 つ入れる。
+- known: わかったこと。text に短い文（40 文字以内）、source にその根拠の参照（Web 検索の結果の ref「W1」など、
+  または Wikidata の項目の id「Q308」など）を 1 つ入れる。URL は書かない。
   検索結果に書かれていないことは入れない。依頼や利用者の回答の言い換えは入れない
 - unknown: まだわからないこと（例:「利用者がどの意味のマーキュリーを指しているか」）
 - candidate_ids: 依頼の言葉が指しうる対象の候補を、Wikidata の項目の id（Q 番号）で返す。
   入力にある id だけを使い、書き写すときに番号を変えないこと。一般によく知られているもの（天体・元素・神話など）を先に、最大 8 件
 - target_id: 利用者の回答などから対象が 1 つに決まった場合だけ、その候補の id。決まらなければ空文字
+- target_evidence: target_id を決めた根拠となる、依頼文または利用者の回答の語句をそのまま写す
+  （例: 依頼が「太陽系の惑星の水星について」なら「太陽系の惑星」）。対象の名前そのものは根拠にならない。
+  「一般にこの意味が多い」は根拠にならない（その場合は target_id を空文字にする）
 
 推測で target_id を決めないこと。利用者が答えていない段階で、複数の意味があるなら target_id は空文字にする。
 「特定できた対象」がすでにある場合は、その id を target_id に入れる。
-target_id が決まったら、known には target についての事実だけを残す（他の意味の説明は消す）。known は重要なものから最大 8 件。"""
+target_id が決まったら、known には target についての事実だけを残す（他の意味の説明は消す）。known は重要なものから最大 5 件。"""
 
 UPDATE_SCHEMA = {
     "type": "object",
     "properties": {
-        "known": {"type": "array", "maxItems": 8, "items": {
+        "known": {"type": "array", "maxItems": 5, "items": {
             "type": "object",
             "properties": {"text": {"type": "string"}, "source": {"type": "string"}},
             "required": ["text", "source"],
@@ -87,8 +93,9 @@ UPDATE_SCHEMA = {
         "unknown": {"type": "array", "items": {"type": "string"}},
         "candidate_ids": {"type": "array", "maxItems": 8, "items": {"type": "string"}},
         "target_id": {"type": "string"},
+        "target_evidence": {"type": "string"},
     },
-    "required": ["known", "unknown", "candidate_ids", "target_id"],
+    "required": ["known", "unknown", "candidate_ids", "target_id", "target_evidence"],
 }
 
 MATCH_SYSTEM = """あなたは、利用者の回答が選択肢のどれを指しているかを判定する役です。
@@ -111,8 +118,41 @@ def match_user(question: str, answer: str, candidates: list) -> str:
     }, ensure_ascii=False, indent=1)
 
 
+EXTRACT_SYSTEM = """あなたは、1 つのページの本文を読んで、調査に関係する事実を抜き出す役です。
+
+- 依頼と調査対象に関係する事実だけを、重要なものから最大 6 件抜き出す
+- text には事実を短い文（40 文字以内）で書く
+- quote には、その事実の根拠となる本文の一節を、**一字一句そのまま**写す（20〜80 文字程度。長い文は、事実を含む部分だけを連続したまま切り出す）。
+  要約・言い換え・語順の変更・省略をしない。quote が本文にない事実はプログラムが捨てる
+- 本文に書かれていないことは書かない。数値・日付・時刻は、本文の表記（時差の注記など）に注意して正確に写す
+- 調査対象と別のもの（同名の別の対象など）についての記述は抜き出さない
+- 関係する事実がなければ facts は空にする"""
+
+EXTRACT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "facts": {"type": "array", "maxItems": 6, "items": {
+            "type": "object",
+            "properties": {"text": {"type": "string"}, "quote": {"type": "string"}},
+            "required": ["text", "quote"],
+        }},
+    },
+    "required": ["facts"],
+}
+
+
+def extract_user(state: AgentState, title: str, text: str) -> str:
+    target = state.get("target")
+    return json.dumps({
+        "依頼": state.get("request", ""),
+        "調査対象": f"{target['label']}（{target['description']}）" if target else state.get("request", ""),
+        "ページのタイトル": title,
+        "ページの本文": text,
+    }, ensure_ascii=False, indent=1)
+
+
 RESPOND_SYSTEM = """あなたは調査結果を利用者に伝える役です。
-与えられた材料（対象の概要・わかったこと・出典）だけを使って、日本語で答えます。
+与えられた材料（対象の概要・確認できた事実）だけを使って、日本語で答えます。
 
 - 材料にないことは書かない。推測で補わない
 - 材料の各項目の末尾にある出典番号（[1] など）を、その事実を書いた文の後ろにそのまま付ける。番号を変えたり、別の事実に付け替えたりしない
@@ -129,7 +169,7 @@ def _state_view(state: AgentState) -> dict:
     return {
         "依頼": state.get("request", ""),
         "利用者の回答": state.get("clarifications", []),
-        "わかったこと": state.get("known", []),
+        "わかったこと": [k["text"] for k in state.get("known", [])],
         "わからないこと": state.get("unknown", []),
         "候補": state.get("candidates", []),
         "特定できた対象": state.get("target"),
@@ -147,9 +187,9 @@ def update_user(state: AgentState, query: str, entities: list, web: list) -> str
     return json.dumps({
         "現在の状態": _state_view(state),
         "今回の検索の言葉": query,
-        "Wikidata の項目": [{"id": e.id, "label": e.label, "description": e.description, "url": e.url}
-                           for e in entities],
-        "Web 検索の結果": [{"title": w.title, "url": w.url, "snippet": w.snippet[:200]} for w in web],
+        "Wikidata の項目": [{"id": e.id, "label": e.label, "description": e.description} for e in entities],
+        "Web 検索の結果": [{"ref": f"W{i}", "title": w.title, "snippet": w.snippet[:200]}
+                         for i, w in enumerate(web, 1)],
     }, ensure_ascii=False, indent=1)
 
 
@@ -158,8 +198,8 @@ def respond_user(state: AgentState, sources: list[dict]) -> str:
     number = {s["url"]: i for i, s in enumerate(sources, 1)}
     summary = state.get("target_summary", "")
     summary_url = state.get("summary_url", "")
-    facts = [f"{k['text']} [{number[k['source']]}]" if k.get("source") in number else f"{k['text']} [出典なし]"
-             for k in state.get("known", [])]
+    # 回答には、ページ本文で引用を照合できた事実だけを使う（検索結果の要約は使わない。設計書 G-1）
+    facts = [f"{k['text']} [{number[k['source']]}]" for k in state.get("verified", []) if k["source"] in number]
     return json.dumps({
         "依頼": state.get("request", ""),
         "利用者の回答": state.get("clarifications", []),
@@ -167,6 +207,6 @@ def respond_user(state: AgentState, sources: list[dict]) -> str:
         "置いた前提": state.get("assumptions", []),
         "公開情報では調べられない部分": (state.get("feasibility") or {}).get("infeasible_parts", []),
         "対象の概要": f"{summary} [{number[summary_url]}]" if summary and summary_url in number else "",
-        "わかったこと": facts,
+        "確認できた事実": facts,
         "わからないこと": state.get("unknown", []),
     }, ensure_ascii=False, indent=1)
