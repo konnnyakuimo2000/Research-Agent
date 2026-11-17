@@ -1,0 +1,70 @@
+# 情報源の Tier（設計書 6.3）
+#
+# Tier 1: 一次情報・公的機関・学術      → 最初に読む。単独でも有力な出典
+# Tier 2: 編集・審査された二次情報        → Tier 1 の次に読む
+# Tier 3: 専門性のある個人・団体          → Tier 1〜2 で足りないときに読む
+# Tier 4: 一般の二次情報（一覧にないサイトの既定値） → 単独では断定しない
+# Tier 5: 転載・量産・まとめ・商用        → 出典にしない（読まない）
+#
+# 判定の順番:
+#   1. [domains] にあるドメイン（後方一致。最も長く一致したものを使う。例: "wikipedia.org" は ja.wikipedia.org にも一致）
+#   2. [suffixes] のドメインの種類（例: "go.jp" は www.bousai.go.jp に一致）
+#   3. どれにも当たらなければ default
+#
+# 一覧は検証の結果を見て見直す（設計書 U-8）。
+
+default = 4
+
+[suffixes]
+"go.jp" = 1      # 政府・省庁
+"lg.jp" = 1      # 地方自治体
+"ac.jp" = 1      # 大学・研究機関
+"ed.jp" = 1      # 学校
+"gov" = 1
+"edu" = 1
+"int" = 1        # 国際機関（who.int など）
+
+[domains]
+# Tier 1: 研究機関・学術データベース・公的機関（ドメインの種類で判定できないもの）
+"jaxa.jp" = 1
+"nasa.gov" = 1
+"riken.jp" = 1
+"aist.go.jp" = 1
+"nii.ac.jp" = 1
+"jst.go.jp" = 1
+"un.org" = 1
+"europa.eu" = 1
+
+# Tier 2: 百科事典・専門データベース・主要な報道機関・学術出版
+"wikipedia.org" = 2
+"wikimedia.org" = 2
+"wikidata.org" = 2
+"britannica.com" = 2
+"kotobank.jp" = 2
+"researchmap.jp" = 2
+"gbif.org" = 2
+"inaturalist.org" = 2
+"nhk.or.jp" = 2
+"asahi.com" = 2
+"yomiuri.co.jp" = 2
+"mainichi.jp" = 2
+"nikkei.com" = 2
+"jiji.com" = 2
+"kyodonews.jp" = 2
+"reuters.com" = 2
+"bbc.com" = 2
+"bbc.co.uk" = 2
+"nationalgeographic.com" = 2
+"nature.com" = 2
+"science.org" = 2
+"springer.com" = 2
+"sciencedirect.com" = 2
+"arxiv.org" = 1
+
+# Tier 5: 転載・まとめ・機械翻訳の量産サイト・画像の転載
+"pinterest.com" = 5
+"pinterest.jp" = 5
+"pinimg.com" = 5
+"matome.naver.jp" = 5
+"postposmo.com" = 5
+"alegsaonline.com" = 5

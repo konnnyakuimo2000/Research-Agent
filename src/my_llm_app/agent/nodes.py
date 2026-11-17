@@ -20,10 +20,13 @@ from my_llm_app.agent.quotes import normalize, quote_in_text
 from my_llm_app.agent.state import DOMINANCE_RATIO, PAGES_PER_READ, AgentState, Candidate, PageRead, Source
 from my_llm_app.config import Settings
 from my_llm_app.llm import LLM
+from my_llm_app.tiers import by_tier, tier_of
 from my_llm_app.tools import fetch, searxng, wikimedia
 
 # LLM に渡す本文の長さの上限（文字数）。長いページは先頭から
 MAX_PAGE_CHARS = 8000
+# 対象が決まったときに site: で狙って探す Tier 1 のドメイン
+TIER1_SITES = ("go.jp", "ac.jp")
 
 log = logging.getLogger(__name__)
 
@@ -82,6 +85,9 @@ class Nodes:
             web = searxng.web_search(self.settings.searxng_url, query)
         except Exception as e:  # noqa: BLE001
             web, errors = searxng.WebSearchResponse(results=[]), errors + [f"searxng: {e}"]
+            web_failed = f"Web 検索（SearXNG）に接続できなかった（{type(e).__name__}）"
+        else:
+            web_failed = ""
 
         update = self.llm.chat_json(
             prompts.UPDATE_SYSTEM,
@@ -133,6 +139,11 @@ class Nodes:
             "searched": state.get("searched", []) + [query],
             "unresponsive": sorted(set(state.get("unresponsive", []) + web.unresponsive)),
             "pages": pages,
+            # 使えなかった道具は記録して、報告で申告する（調べ尽くしていないのに調べたように見せない。設計書 G-6）
+            "failures": list(dict.fromkeys(state.get("failures", []) + ([web_failed] if web_failed else [])
+                                           + [f"Wikidata の検索に失敗した（{x.split(':')[0]}）"
+                                              for x in errors if x.startswith("wikidata")])),
+            "web_failures_in_row": state.get("web_failures_in_row", 0) + 1 if web_failed else 0,
         }
 
         # 対象が決まったら、Wikipedia の概要を取る（Tier 2）
@@ -151,8 +162,22 @@ class Nodes:
         # 曖昧なまま集めた結果は、別の対象のページが混ざるので使わない
         if not is_ambiguous({**state, **result}):
             first = [result["summary_url"]] if result.get("summary_url") else []
-            urls = first + [w.url for w in web.results if not fetch.is_skipped_domain(w.url)]
-            result["reading_list"] = list(dict.fromkeys(state.get("reading_list", []) + urls))
+            urls = first + [w.url for w in web.results]
+            if not state.get("tier1_searched"):
+                # Tier 1（公的機関・大学）のページを狙って探す。横の展開なのでプログラムが行う（設計書 6.3）
+                name = current["label"] if current else query
+                for site in TIER1_SITES:
+                    try:
+                        found = searxng.web_search(self.settings.searxng_url, f"{name} site:{site}", limit=5)
+                    except Exception as e:  # noqa: BLE001
+                        errors.append(f"searxng({site}): {e}")
+                        continue
+                    urls += [w.url for w in found.results]
+                    pages.update({w.url: w.title for w in found.results if w.url not in pages})
+                    result["unresponsive"] = sorted(set(result["unresponsive"] + found.unresponsive))
+                result["tier1_searched"] = True
+            # 上の Tier から読む。Tier 5（転載・まとめ）は読まない
+            result["reading_list"] = by_tier(state.get("reading_list", []) + urls)
 
         log.info("search: %r names=%s -> wikidata %d, web %d (%.1fs)", query, names, len(entities),
                  len(web.results), time.perf_counter() - started)
@@ -252,11 +277,14 @@ class Nodes:
         sources = collect_sources(state)
         body = self.llm.chat_text(prompts.RESPOND_SYSTEM, prompts.respond_user(state, sources))
         parts = [body.strip()]
+        if state.get("failures"):
+            parts.append("\n※ 調査中に使えなかったもの（その分、調べ尽くせていない可能性があります）:\n"
+                         + "\n".join(f"- {f}" for f in state["failures"]))
         if state.get("unresponsive"):
             parts.append(f"\n※ SearXNG で応答しなかった検索エンジン: {', '.join(state['unresponsive'])}")
         if sources:
             parts.append("\n### 出典\n" + "\n".join(
-                f"[{i}] {s['title']} — {s['url']}" for i, s in enumerate(sources, 1)))
+                f"[{i}] {s['title']} — {s['url']}（Tier {s['tier']}）" for i, s in enumerate(sources, 1)))
         answer = "\n".join(parts)
         return {"answer": answer, "trace": [{"node": "respond", "answer": answer}]}
 
@@ -319,7 +347,7 @@ def collect_sources(state: AgentState) -> list[Source]:
     urls = [state["summary_url"]] if state.get("target_summary") and state.get("summary_url") else []
     urls += [k["source"] for k in state.get("verified", [])]
     ordered = list(dict.fromkeys(urls))
-    return [{"title": pages.get(u, u), "url": u} for u in ordered]
+    return [{"title": pages.get(u, u), "url": u, "tier": tier_of(u)} for u in ordered]
 
 
 def infeasible_report(request: str, f: dict) -> str:

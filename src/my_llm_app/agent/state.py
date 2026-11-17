@@ -13,6 +13,7 @@ MAX_STEPS = 8       # 行動の選択は最大 8 回
 MAX_CANDIDATES = 8  # 同名の候補は最大 8 件（すべて質問の選択肢に出す）
 PAGES_PER_READ = 4  # 1 回の read_pages で読むページ数
 MAX_PAGES = 8       # 1 回の調査で読むページの合計
+MAX_WEB_FAILURES = 2  # Web 検索の失敗がこの回数続いたら、それ以上検索しない
 # 候補の 1 位の sitelinks（記事がある言語版などの数）が 2 位のこの倍数以上なら、
 # 一般にはその意味を指すとみなし、聞き返さずに前提を明示して進める（例: 富士山）
 DOMINANCE_RATIO = 4
@@ -28,6 +29,7 @@ class Candidate(TypedDict):
 class Source(TypedDict):
     title: str
     url: str
+    tier: int          # 情報源の Tier（設計書 6.3）
 
 
 class Fact(TypedDict):
@@ -70,7 +72,8 @@ class AgentState(TypedDict, total=False):
     feasibility: Feasibility          # 公開情報で調べられる依頼かの判定（設計書 4 章 ④）
     clarifications: list[str]         # 質問に対する利用者の回答
     known: list[Fact]                 # わかったこと（検索結果の要約から。次の行動を決める手がかりにだけ使う）
-    reading_list: list[str]           # 深掘りするページの URL（読む順）
+    reading_list: list[str]           # 深掘りするページの URL（Tier の高い順。Tier 5 は入れない）
+    tier1_searched: bool              # Tier 1（公的機関・大学）を狙った検索をしたか
     pages_read: list[PageRead]        # 読んだ（読もうとした）ページ
     verified: list[VerifiedFact]      # ページ本文から抜き出し、引用を照合できた事実（回答はこれだけで書く）
     unknown: list[str]                # わからないこと
@@ -83,6 +86,8 @@ class AgentState(TypedDict, total=False):
     pages: dict[str, str]             # 取得した検索結果の URL → タイトル（出典一覧を作るため）
     searched: list[str]               # 実行した検索の言葉（同じ検索の繰り返し防止）
     unresponsive: list[str]           # 応答しなかった検索エンジン
+    failures: list[str]               # 使えなかった道具（Web 検索・Wikidata など）と理由。報告で申告する
+    web_failures_in_row: int          # Web 検索の失敗が何回続いているか
     questions_asked: int
     steps: int
     decision: Decision                # 直前に選んだ行動

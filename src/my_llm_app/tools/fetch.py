@@ -3,17 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from urllib.parse import urlparse
-
 import httpx
 import trafilatura
 
 from my_llm_app.config import USER_AGENT
+from my_llm_app.tiers import EXCLUDED_TIER, tier_of
 
 MAX_BYTES = 3_000_000
-
-# 出典にしないサイト（設計書 6.3 の Tier 5: 転載・量産・商用）。Tier の一覧ができるまでの暫定
-SKIP_DOMAINS = ("pinterest.", "pinimg.com", "matome.", "naver.jp")
 
 
 @dataclass
@@ -26,8 +22,8 @@ class Page:
 
 
 def is_skipped_domain(url: str) -> bool:
-    host = urlparse(url).hostname or ""
-    return any(d in host for d in SKIP_DOMAINS)
+    """出典にしないサイト（Tier 5: 転載・量産・まとめ）か。"""
+    return tier_of(url) == EXCLUDED_TIER
 
 
 def fetch_page(url: str, timeout: float = 20.0) -> Page:

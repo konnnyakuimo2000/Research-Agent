@@ -156,6 +156,8 @@ RESPOND_SYSTEM = """あなたは調査結果を利用者に伝える役です。
 
 - 材料にないことは書かない。推測で補わない
 - 材料の各項目の末尾にある出典番号（[1] など）を、その事実を書いた文の後ろにそのまま付ける。番号を変えたり、別の事実に付け替えたりしない
+- 「（出典の信頼度: 低）」が付いた事実は断定せず、「〜とされる」「〜という情報もある」のように書く。
+  同じ内容について信頼度の低くない出典と食い違う場合は、信頼度の低くない出典の内容を優先する
 - [出典なし] の項目は使わない
 - 「置いた前提」がある場合は、冒頭にその文をそのまま書く
 - 対象が特定できていない場合は、冒頭でそのことと、置いた前提を正直に書く
@@ -199,7 +201,14 @@ def respond_user(state: AgentState, sources: list[dict]) -> str:
     summary = state.get("target_summary", "")
     summary_url = state.get("summary_url", "")
     # 回答には、ページ本文で引用を照合できた事実だけを使う（検索結果の要約は使わない。設計書 G-1）
-    facts = [f"{k['text']} [{number[k['source']]}]" for k in state.get("verified", []) if k["source"] in number]
+    tier = {s["url"]: s.get("tier", 4) for s in sources}
+
+    def fact(k: dict) -> str:
+        # Tier 3〜4（個人・一般のサイト）が根拠の事実は、断定しないよう印を付ける
+        low = "（出典の信頼度: 低）" if tier.get(k["source"], 4) >= 3 else ""
+        return f"{k['text']} [{number[k['source']]}]{low}"
+
+    facts = [fact(k) for k in state.get("verified", []) if k["source"] in number]
     return json.dumps({
         "依頼": state.get("request", ""),
         "利用者の回答": state.get("clarifications", []),

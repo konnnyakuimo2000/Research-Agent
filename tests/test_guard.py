@@ -81,3 +81,10 @@ def test_second_search_while_ambiguous_becomes_ask_user():
     d = check_decision(ambiguous_state(), {"action": "search", "reason": "", "query": "2004年 スマトラ"})
     assert d["action"] == "ask_user"
     assert "1. 水星" in d["question"]
+
+
+def test_stop_searching_after_repeated_web_failures():
+    state = {"request": "水星について", "searched": ["水星"], "target": CANDIDATES[0], "candidates": [CANDIDATES[0]],
+             "target_summary": "概要", "steps": 3, "web_failures_in_row": 2}
+    d = check_decision(state, {"action": "search", "reason": "", "query": "水星 温度"})
+    assert d["action"] == "respond"

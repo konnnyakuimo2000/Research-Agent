@@ -41,3 +41,25 @@ def test_search_maps_short_refs_back_to_urls():
     assert out["target"]["id"] == "Q308"
     # 対象が決まっているので、検索結果を深掘りするページの候補にする
     assert out["reading_list"] == ["https://example.com/mercury", "https://example.com/temp"]
+
+
+def test_search_failure_is_recorded_for_the_report():
+    import httpx
+    state = {"request": "太陽系の惑星の水星について調べて",
+             "decision": {"action": "search", "query": "水星", "names": ["水星"]}}
+    with patch("my_llm_app.agent.nodes.wikimedia.search_entities", return_value=[PLANET]), \
+         patch("my_llm_app.agent.nodes.wikimedia.get_entities", return_value={"Q308": PLANET}), \
+         patch("my_llm_app.agent.nodes.wikimedia.summary_for_entity", return_value=None), \
+         patch("my_llm_app.agent.nodes.searxng.web_search", side_effect=httpx.ConnectError("refused")):
+        out = Nodes(SETTINGS, FakeLLM()).search(state)
+    assert out["failures"] == ["Web 検索（SearXNG）に接続できなかった（ConnectError）"]
+    assert out["web_failures_in_row"] == 1
+
+
+def test_respond_reports_failures():
+    class TextLLM:
+        def chat_text(self, system, user, temperature=0.5):
+            return "本文"
+    out = Nodes(SETTINGS, TextLLM()).respond({"request": "水星", "failures": ["Web 検索（SearXNG）に接続できなかった"]})
+    assert "調査中に使えなかったもの" in out["answer"]
+    assert "SearXNG）に接続できなかった" in out["answer"]

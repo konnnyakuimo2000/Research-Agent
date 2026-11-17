@@ -6,7 +6,8 @@
 
 from __future__ import annotations
 
-from my_llm_app.agent.state import MAX_CANDIDATES, MAX_PAGES, MAX_QUESTIONS, MAX_STEPS, AgentState, Decision
+from my_llm_app.agent.state import (MAX_CANDIDATES, MAX_PAGES, MAX_QUESTIONS, MAX_STEPS, MAX_WEB_FAILURES,
+                                    AgentState, Decision)
 
 
 def build_question(state: AgentState) -> str:
@@ -70,6 +71,10 @@ def check_decision(state: AgentState, decision: Decision) -> Decision:
             return {**d, "action": "respond", "guard": "質問する内容がないため応答する"}
         if d["question"] == state.get("last_question"):
             return {**d, "action": "respond", "guard": "同じ質問の繰り返しを防ぐため、前提を明示して応答する"}
+
+    if action == "search" and state.get("web_failures_in_row", 0) >= MAX_WEB_FAILURES:
+        # 検索が使えない状態で検索を繰り返しても時間を使うだけ。わかった範囲で答え、使えなかったことを申告する
+        return {**d, "action": "respond", "guard": "Web 検索の失敗が続いたため、わかった範囲で応答する"}
 
     if action == "search":
         if is_ambiguous(state) and asked == 0 and asked < MAX_QUESTIONS:
