@@ -58,6 +58,11 @@ def summarize(node: str, update: dict) -> str:
             lines.append(f"   - {p['url'][:80]}  {status}")
         if update.get("subject_type"):
             lines.insert(0, f"   対象の種類: {update['subject_type']}")
+        followed = update["trace"][0].get("followed", [])
+        if followed:
+            lines.append(f"   参照をたどって追加: {[u[:60] for u in followed]}")
+        if update.get("new_ambiguity"):
+            lines.append(f"   同名の別の対象を発見: {update['new_ambiguity']}")
         lines.append("   網羅表:")
         for r in update.get("coverage", []):
             tier = f"Tier {r['best_tier']}" if r["best_tier"] else "-"

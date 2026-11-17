@@ -43,7 +43,7 @@ def test_check_conflicts_validates_llm_output():
     llm = FakeLLM()
     out = Nodes(None, llm).check_conflicts({"verified": VERIFIED})
     assert len(llm.calls) == 1                               # 比べる観点 1 つにつき 1 回
-    assert out["conflicts_checked"] is True
+    assert out["conflicts_checked_at"] == len(VERIFIED)
     assert [(c["topic"], [f["text"] for f in c["facts"]]) for c in out["conflicts"]] == [
         ("死者・行方不明者数", ["死者・行方不明者は30万人以上", "死者・行方不明者は約23万人"])]
 
@@ -56,7 +56,11 @@ def test_guard_checks_conflicts_once_before_responding():
             "searched": ["地震A"], "steps": 4, "reading_list": ["u1"], "pages_read": [{"url": "u1"}],
             "verified": VERIFIED}
     assert check_decision(base, {"action": "respond", "reason": ""})["action"] == "check_conflicts"
-    assert check_decision({**base, "conflicts_checked": True}, {"action": "respond", "reason": ""})["action"] == "respond"
+    checked = {**base, "conflicts_checked_at": len(VERIFIED)}
+    assert check_decision(checked, {"action": "respond", "reason": ""})["action"] == "respond"
+    # 調べた後で事実が増えたら、調べ直す
+    more = {**checked, "verified": VERIFIED + [fact("新しい事実", C)]}
+    assert check_decision(more, {"action": "respond", "reason": ""})["action"] == "check_conflicts"
 
 
 def test_respond_lists_conflicts():

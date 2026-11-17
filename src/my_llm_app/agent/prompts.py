@@ -147,6 +147,8 @@ EXTRACT_SYSTEM = """あなたは、1 つのページの本文を読んで、調�
 - 調査対象と別のもの（同名の別の対象など）についての記述は抜き出さない
 - aspect には、その事実が当てはまる観点を「調べる観点」から 1 つ選ぶ。どれにも当てはまらなければ「その他」
 - 「調べる観点」のうち、まだ事実がない観点についての記述を優先して抜き出す
+- other_entity: このページが、調査対象とは別の、同じ名前のもの（同名の別人・別の場所など）について書いている場合に、
+  その別のものを 30 文字以内で書く。調査対象について書いているページなら空にする
 - 関係する事実がなければ facts は空にする"""
 
 def extract_schema(aspect_names: list[str]) -> dict:
@@ -159,8 +161,9 @@ def extract_schema(aspect_names: list[str]) -> dict:
                                "aspect": {"type": "string", "enum": aspect_names + ["その他"]}},
                 "required": ["text", "quote", "aspect"],
             }},
+            "other_entity": {"type": "string"},
         },
-        "required": ["facts"],
+        "required": ["facts", "other_entity"],
     }
 
 

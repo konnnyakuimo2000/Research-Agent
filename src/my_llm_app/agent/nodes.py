@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import unquote, urlparse
 
 from langgraph.types import interrupt
 
@@ -19,8 +20,9 @@ from my_llm_app.agent import imaging
 from my_llm_app.agent import prompts
 from my_llm_app.agent.guard import check_decision, is_ambiguous
 from my_llm_app.agent.quotes import normalize, quote_in_text
-from my_llm_app.agent.state import (DOMINANCE_RATIO, MAX_CANDIDATES, MAX_IMAGE_CHECKS, PAGES_PER_READ,
-                                    WANTED_IMAGES, AgentState, Candidate, PageRead, Source)
+from my_llm_app.agent.state import (DOMINANCE_RATIO, MAX_CANDIDATES, MAX_IMAGE_CHECKS, MAX_REF_DEPTH,
+                                    MAX_SECONDS, PAGES_PER_READ, REFS_PER_PAGE, WANTED_IMAGES, AgentState,
+                                    Candidate, PageRead, Source)
 from my_llm_app.config import Settings
 from my_llm_app.llm import LLM
 from my_llm_app.tiers import by_tier, tier_of
@@ -50,6 +52,7 @@ class Nodes:
         }
         log.info("feasibility: %s (%s)", feasibility["verdict"], feasibility["reason"])
         return {"feasibility": feasibility, "wants_images": imaging.wants_images(state["request"]),
+                "deadline": time.time() + MAX_SECONDS,
                 "trace": [{"node": "check_feasibility", "llm": out}]}
 
     def report_infeasible(self, state: AgentState) -> dict:
@@ -148,6 +151,8 @@ class Nodes:
             "assumptions": assumptions,
             "searched": state.get("searched", []) + [query],
             "aspect_searched": state.get("aspect_searched", []) + ([decision["aspect"]] if decision.get("aspect") else []),
+            "conflict_searched": state.get("conflict_searched", [])
+            + ([decision["conflict_topic"]] if decision.get("conflict_topic") else []),
             "unresponsive": sorted(set(state.get("unresponsive", []) + web.unresponsive)),
             "pages": pages,
             # 使えなかった道具は記録して、報告で申告する（調べ尽くしていないのに調べたように見せない。設計書 G-6）
@@ -173,7 +178,7 @@ class Nodes:
         # 曖昧なまま集めた結果は、別の対象のページが混ざるので使わない
         if not is_ambiguous({**state, **result}):
             first = [result["summary_url"]] if result.get("summary_url") else []
-            urls = first + [w.url for w in web.results]
+            urls = first + [w.url for w in web.results if not fetch.is_unreadable(w.url)]
             if not state.get("tier1_searched"):
                 # Tier 1（公的機関・大学）のページを狙って探す。横の展開なのでプログラムが行う（設計書 6.3）
                 name = current["label"] if current else query
@@ -183,12 +188,18 @@ class Nodes:
                     except Exception as e:  # noqa: BLE001
                         errors.append(f"searxng({site}): {e}")
                         continue
-                    urls += [w.url for w in found.results]
+                    urls += [w.url for w in found.results if not fetch.is_unreadable(w.url)]
                     pages.update({w.url: w.title for w in found.results if w.url not in pages})
                     result["unresponsive"] = sorted(set(result["unresponsive"] + found.unresponsive))
                 result["tier1_searched"] = True
             # 上の Tier から読む。Tier 5（転載・まとめ）は読まない
             result["reading_list"] = by_tier(state.get("reading_list", []) + urls)
+            if decision.get("aspect") or decision.get("conflict_topic"):
+                # 観点や食い違いを狙って探したページは、他より先に読む（R-1, R-6）
+                read = {p["url"] for p in state.get("pages_read", [])}
+                result["priority_urls"] = by_tier(state.get("priority_urls", [])
+                                                  + [w.url for w in web.results
+                                                     if w.url not in read and not fetch.is_unreadable(w.url)])
 
         log.info("search: %r names=%s -> wikidata %d, web %d (%.1fs)", query, names, len(entities),
                  len(web.results), time.perf_counter() - started)
@@ -215,7 +226,8 @@ class Nodes:
             state = {**state, **extra}
 
         done = {p["url"] for p in state.get("pages_read", [])}
-        urls = [u for u in state.get("reading_list", []) if u not in done][:PAGES_PER_READ]
+        queue = list(dict.fromkeys(state.get("priority_urls", []) + state.get("reading_list", [])))
+        urls = [u for u in queue if u not in done][:PAGES_PER_READ]
         started = time.perf_counter()
         with ThreadPoolExecutor(max_workers=2) as pool:   # LLM 側の同時実行数の上限と合わせる
             results = list(pool.map(lambda u: self._read_one(state, u), urls))
@@ -223,9 +235,19 @@ class Nodes:
         pages = dict(state.get("pages", {}))
         verified = list(state.get("verified", []))
         page_imgs = list(state.get("page_images", []))
+        depth = dict(state.get("link_depth", {}))
+        new_links: list[str] = []
+        others: list[str] = []
         reads: list[PageRead] = []
         traces = []
-        for page, facts, dropped in results:
+        for page, facts, dropped, other in results:
+            if other:
+                others.append(other)
+            if facts and depth.get(page.url, 0) < MAX_REF_DEPTH:
+                # R-2: 事実が取れたページの出典欄などから、より信頼度の高いページをたどる
+                for link in follow_links(page, self._target_name(state), set(state.get("reading_list", []))):
+                    depth[link] = depth.get(page.url, 0) + 1
+                    new_links.append(link)
             if page.ok and page.title:
                 pages.setdefault(page.url, page.title)
             verified += facts
@@ -237,20 +259,29 @@ class Nodes:
         log.info("read_pages: %d pages -> verified %d facts (%.1fs)", len(urls),
                  sum(r["verified"] for r in reads), time.perf_counter() - started)
         coverage = cov.build_coverage(state["aspects"], verified)
+        gained = len(verified) - len(state.get("verified", []))
+        if (others and not state.get("ambiguity_asked") and state.get("assumptions")
+                and not state.get("clarifications")):
+            # R-5: 聞き返さずに決めた対象なのに、同名の別の対象のページが見つかった → 確認する
+            extra["new_ambiguity"] = others[0]
         return {
             **extra,
+            "reading_list": by_tier(state.get("reading_list", []) + new_links),
+            "link_depth": depth,
+            "stale_reads": 0 if gained else state.get("stale_reads", 0) + 1,
             "pages_read": state.get("pages_read", []) + reads,
             "verified": verified,
             "page_images": page_imgs,
             "coverage": coverage,
             "pages": pages,
-            "trace": [{"node": "read_pages", "pages": traces, "coverage": coverage}],
+            "trace": [{"node": "read_pages", "pages": traces, "coverage": coverage, "followed": new_links,
+                       "other_entities": others}],
         }
 
     def _read_one(self, state: AgentState, url: str):
         page = fetch.fetch_page(url)
         if not page.ok:
-            return page, [], []
+            return page, [], [], ""
         text = page.text[:MAX_PAGE_CHARS]
         names = [a["name"] for a in state.get("aspects", [])]
         out = self.llm.chat_json(prompts.EXTRACT_SYSTEM, prompts.extract_user(state, page.title, text),
@@ -263,7 +294,11 @@ class Nodes:
                 facts.append({"text": f["text"], "quote": f["quote"], "aspect": aspect, "source": url})
             else:
                 dropped.append(f)
-        return page, facts, dropped
+        return page, facts, dropped, out.get("other_entity", "").strip()
+
+    @staticmethod
+    def _target_name(state: AgentState) -> str:
+        return (state.get("target") or {}).get("label") or state.get("request", "")
 
     def check_conflicts(self, state: AgentState) -> dict:
         """観点ごとに、別々のサイトの事実どうしが食い違っていないかを調べる（設計書 7.4 T-3）。"""
@@ -282,7 +317,7 @@ class Nodes:
                     conflicts.append({"aspect": aspect, "topic": c.get("topic", ""), "facts": picked})
         log.info("check_conflicts: %d aspects -> %d conflicts (%.1fs)", len(groups), len(conflicts),
                  time.perf_counter() - started)
-        return {"conflicts": conflicts, "conflicts_checked": True,
+        return {"conflicts": conflicts, "conflicts_checked_at": len(state.get("verified", [])),
                 "trace": [{"node": "check_conflicts", "aspects": list(groups), "llm": outs,
                            "conflicts": conflicts}]}
 
@@ -363,6 +398,9 @@ class Nodes:
         result: dict = {"questions_asked": state.get("questions_asked", 0) + 1}
 
         result["last_question"] = question
+        if state["decision"].get("confirm_target"):
+            return {**result, **confirm_target(state, answer),
+                    "trace": [{"node": "ask_user", "question": question, "answer": answer, "confirm": True}]}
         candidates = state.get("candidates", [])
 
         # 回答を選択肢と照らし合わせて、その場で対象を決める（決めないまま進むと同じ質問を繰り返すため）
@@ -436,6 +474,36 @@ def evidence_ok(evidence: str, request: str, label: str) -> bool:
     for phrase in _GENERIC_PHRASES:
         rest = rest.replace(phrase, "")
     return len(rest.strip("のをはがにでとや、。")) >= 2
+
+
+def follow_links(page: fetch.Page, name: str, known: set[str]) -> list[str]:
+    """R-2: ページからたどる参照を選ぶ（プログラム）。出典欄の中のリンクか、文字や URL に対象の名前がある
+    リンクのうち、別のサイトで Tier 1〜2 のものを、Tier の高い順に最大 REFS_PER_PAGE 件。"""
+    host = urlparse(page.url).hostname
+    picked = []
+    for link in page.links:
+        href = link["href"].split("#")[0]
+        if (href in known or href in picked or urlparse(href).hostname == host or tier_of(href) > 2
+                or fetch.is_unreadable(href)):
+            continue
+        if link["in_refs"] or (name and (name in link["text"] or name in unquote(href))):
+            picked.append(href)
+    return by_tier(picked)[:REFS_PER_PAGE]
+
+
+def confirm_target(state: AgentState, answer: str) -> dict:
+    """R-5 の確認への回答を反映する。「はい」なら前提を確認済みにし、違うなら対象を決め直す。"""
+    yes = answer.strip().translate(str.maketrans("１", "1")) in ("1", "1番", "はい", "はい。", "yes")
+    if yes:
+        t = state["target"]
+        return {"ambiguity_asked": True, "assumptions": [],
+                "clarifications": state.get("clarifications", []) + [f"{t['label']}（{t['description']}）で合っている"]}
+    # 違う対象だった: 集めた事実は別の対象のものなので捨て、対象を決め直す
+    return {"ambiguity_asked": True, "target": None, "assumptions": [], "target_summary": "", "summary_url": "",
+            "clarifications": state.get("clarifications", []) + [answer],
+            "verified": [], "reading_list": [], "priority_urls": [], "pages_read": [], "coverage": [],
+            "aspects": [], "conflicts": [], "conflicts_checked_at": -1, "tier1_searched": False, "stale_reads": 0,
+            "new_ambiguity": ""}
 
 
 def as_candidate(e: wikimedia.Entity) -> Candidate:

@@ -53,7 +53,7 @@ def test_reads_more_pages_while_aspects_are_unfilled():
               verified=[{"text": "t", "quote": "q", "aspect": "日時", "source": GOV, }])
     d = check_decision(s, {"action": "respond", "reason": ""})
     assert d["action"] == "read_pages"
-    assert "埋まっていない観点" in d["guard"]
+    assert "埋まっていない" in d["guard"]
 
 
 def test_searches_for_an_unfilled_aspect_when_no_pages_are_left():
@@ -65,8 +65,8 @@ def test_searches_for_an_unfilled_aspect_when_no_pages_are_left():
 
 
 def test_aspect_search_limit():
-    s = state(reading_list=["u1"], pages_read=[{"url": "u1"}], aspect_searched=["場所", "規模"],
-              conflicts_checked=True,
+    s = state(reading_list=["u1"], pages_read=[{"url": "u1"}], aspect_searched=["場所", "規模", "経緯・原因"],
+              conflicts_checked_at=1,
               verified=[{"text": "t", "quote": "q", "aspect": "日時", "source": GOV}])
     assert check_decision(s, {"action": "respond", "reason": ""})["action"] == "respond"
 

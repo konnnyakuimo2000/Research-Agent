@@ -116,7 +116,7 @@ def test_guard_finds_images_before_responding_only_when_asked():
     target = {"id": "Q1", "label": "富士山", "description": "山", "sitelinks": 146}
     base = {"request": "富士山の写真", "target": target, "target_summary": "概要", "candidates": [target],
             "searched": ["富士山"], "steps": 4, "reading_list": ["u1"], "pages_read": [{"url": "u1"}],
-            "verified": [{"text": "t", "quote": "q", "aspect": "x", "source": "u1"}], "conflicts_checked": True}
+            "verified": [{"text": "t", "quote": "q", "aspect": "x", "source": "u1"}], "conflicts_checked_at": 1}
     assert check_decision({**base, "wants_images": True}, {"action": "respond", "reason": ""})["action"] == "find_images"
     assert check_decision({**base, "wants_images": True, "images_checked": True},
                           {"action": "respond", "reason": ""})["action"] == "respond"
