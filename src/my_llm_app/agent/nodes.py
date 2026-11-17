@@ -253,6 +253,27 @@ class Nodes:
                 dropped.append(f)
         return page, facts, dropped
 
+    def check_conflicts(self, state: AgentState) -> dict:
+        """観点ごとに、別々のサイトの事実どうしが食い違っていないかを調べる（設計書 7.4 T-3）。"""
+        groups = cov.facts_to_compare(state.get("verified", []))
+        started = time.perf_counter()
+        with ThreadPoolExecutor(max_workers=2) as pool:   # 1 回の呼び出しで 1 つの観点だけを扱う（M-1）
+            outs = list(pool.map(lambda item: self.llm.chat_json(
+                prompts.CONFLICT_SYSTEM, prompts.conflict_user(*item), prompts.CONFLICT_SCHEMA), groups.items()))
+
+        conflicts = []
+        for (aspect, facts), out in zip(groups.items(), outs):
+            for c in out.get("conflicts", []):
+                # 番号は実在する事実のものだけを認め、同じサイトどうしの組は除く（プログラムで検査）
+                picked = [facts[i - 1] for i in dict.fromkeys(c.get("fact_ids", [])) if 1 <= i <= len(facts)]
+                if len(picked) >= 2 and cov.different_sites(picked):
+                    conflicts.append({"aspect": aspect, "topic": c.get("topic", ""), "facts": picked})
+        log.info("check_conflicts: %d aspects -> %d conflicts (%.1fs)", len(groups), len(conflicts),
+                 time.perf_counter() - started)
+        return {"conflicts": conflicts, "conflicts_checked": True,
+                "trace": [{"node": "check_conflicts", "aspects": list(groups), "llm": outs,
+                           "conflicts": conflicts}]}
+
     def ask_user(self, state: AgentState) -> dict:
         question = state["decision"]["question"]
         answer = str(interrupt({"question": question})).strip()
@@ -296,7 +317,13 @@ class Nodes:
         sources = collect_sources(state)
         body = self.llm.chat_text(prompts.RESPOND_SYSTEM, prompts.respond_user(state, sources))
         parts = [body.strip()]
-        # 確認できなかった観点は、網羅表からプログラムが書く（LLM に書かせない）
+        # 食い違いと確認できなかった観点は、プログラムが書く（LLM に書かせない）
+        if state.get("conflicts"):
+            number = {s["url"]: i for i, s in enumerate(sources, 1)}
+            lines = [f"- {c['aspect']}・{c['topic']}: "
+                     + " / ".join(f"「{f['text']}」[{number[f['source']]}]" for f in c["facts"] if f["source"] in number)
+                     for c in state["conflicts"]]
+            parts.append("\n### 出典どうしの食い違い\n" + "\n".join(lines))
         if gaps := cov.gaps_text(state.get("coverage", [])):
             parts.append("\n### 確認できなかったこと\n" + gaps)
         if state.get("failures"):

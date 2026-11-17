@@ -5,7 +5,7 @@ from __future__ import annotations
 import operator
 from typing import Annotated, Literal, TypedDict
 
-Action = Literal["search", "ask_user", "read_pages", "respond"]
+Action = Literal["search", "ask_user", "read_pages", "check_conflicts", "respond"]
 
 # 上限（設計書 5.2 Q-4、10.3）
 MAX_QUESTIONS = 2   # 利用者への質問は最大 2 往復
@@ -36,6 +36,12 @@ class Source(TypedDict):
 class Fact(TypedDict):
     text: str
     source: str        # 根拠の URL（取得した検索結果にない URL は空文字にする）
+
+
+class Conflict(TypedDict):
+    aspect: str        # 観点
+    topic: str         # 何について食い違っているか（例:「死者・行方不明者数」）
+    facts: list[dict]  # 食い違っている事実（VerifiedFact。別々のサイトのもの）
 
 
 class VerifiedFact(TypedDict):
@@ -83,6 +89,8 @@ class AgentState(TypedDict, total=False):
     aspects: list[dict]               # 調べる観点（観点チェックリストから展開）
     coverage: list[dict]              # 網羅表（観点ごとの出典数・Tier・状態。プログラムが集計）
     aspect_searched: list[str]        # 埋まっていない観点を狙って検索した観点
+    conflicts: list[Conflict]         # 出典どうしの食い違い（設計書 7.4 T-3）
+    conflicts_checked: bool           # 食い違いを調べたか（応答の前に 1 回だけ）
     unknown: list[str]                # わからないこと
     candidates: list[Candidate]       # 同名の候補
     target: Candidate | None          # 特定できた対象

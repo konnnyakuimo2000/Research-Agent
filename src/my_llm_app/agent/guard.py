@@ -67,6 +67,8 @@ def check_decision(state: AgentState, decision: Decision) -> Decision:
                 if query not in state.get("searched", []):
                     return {**d, "action": "search", "query": query, "names": [name], "aspect": aspect,
                             "guard": f"観点「{aspect}」が埋まっていないため、その観点で検索する"}
+        if state.get("verified") and not state.get("conflicts_checked"):
+            return {**d, "action": "check_conflicts", "guard": "応答の前に、出典どうしの食い違いを調べる"}
 
     if action == "respond" and is_ambiguous(state) and asked < MAX_QUESTIONS:
         # 例 A のパターン 2（適当な対象で答える・全部を平たく述べる）を防ぐ

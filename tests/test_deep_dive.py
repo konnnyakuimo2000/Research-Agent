@@ -67,7 +67,8 @@ def test_respond_before_reading_pages_becomes_read_pages():
 
 
 def test_respond_allowed_after_reading_with_verified_facts():
-    state = researched(pages_read=[{"url": "u1"}], verified=[{"text": "t", "quote": "q", "source": "u1"}])
+    state = researched(pages_read=[{"url": "u1"}], verified=[{"text": "t", "quote": "q", "source": "u1"}],
+                       conflicts_checked=True)
     assert check_decision(state, {"action": "respond", "reason": ""})["action"] == "respond"
 
 

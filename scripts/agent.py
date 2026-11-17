@@ -40,6 +40,11 @@ def summarize(node: str, update: dict) -> str:
         if f["infeasible_parts"]:
             s += f"\n   調べられない部分: {f['infeasible_parts']}"
         return s
+    if node == "check_conflicts":
+        lines = [f"   食い違い: {len(update['conflicts'])} 件"]
+        for c in update["conflicts"]:
+            lines.append(f"     - {c['aspect']}・{c['topic']}: " + " / ".join(f["text"] for f in c["facts"]))
+        return "\n".join(lines)
     if node == "read_pages":
         lines = []
         for p in update["pages_read"][-len(update["trace"][0]["pages"]):]:

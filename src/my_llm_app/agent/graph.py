@@ -4,6 +4,7 @@
                                └─ decide ─┬─ search ───→ decide
                                           ├─ ask_user ─→ decide   （例 A: 聞き返す）
                                           ├─ read_pages → decide  （ページ本文の深掘り）
+                                          ├─ check_conflicts → decide（出典どうしの食い違い）
                                           └─ respond ──→ END
 """
 
@@ -36,14 +37,16 @@ def build_graph(settings: Settings | None = None, llm: LLM | None = None):
     nodes = Nodes(settings, llm or LLM(settings))
 
     g = StateGraph(AgentState)
-    for name in ("check_feasibility", "report_infeasible", "decide", "search", "ask_user", "read_pages", "respond"):
+    for name in ("check_feasibility", "report_infeasible", "decide", "search", "ask_user", "read_pages",
+                 "check_conflicts", "respond"):
         g.add_node(name, timed(name, getattr(nodes, name)))
 
     g.add_edge(START, "check_feasibility")
     g.add_conditional_edges("check_feasibility", route_feasibility, ["report_infeasible", "decide"])
     g.add_edge("report_infeasible", END)
-    g.add_conditional_edges("decide", route, ["search", "ask_user", "read_pages", "respond"])
+    g.add_conditional_edges("decide", route, ["search", "ask_user", "read_pages", "check_conflicts", "respond"])
     g.add_edge("read_pages", "decide")
+    g.add_edge("check_conflicts", "decide")
     g.add_edge("search", "decide")
     g.add_edge("ask_user", "decide")
     g.add_edge("respond", END)

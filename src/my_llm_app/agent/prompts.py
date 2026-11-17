@@ -176,6 +176,37 @@ def extract_user(state: AgentState, title: str, text: str) -> str:
     }, ensure_ascii=False, indent=1)
 
 
+CONFLICT_SYSTEM = """あなたは、同じ観点について別々のページから集めた事実を読み、内容が食い違っている組を見つける役です。
+
+- 同じこと（同じ数量・日時・場所・人数・名前など）について、値や内容が違う事実の組を conflicts に入れる
+  例:「死者・行方不明者は30万人以上」と「死者・行方不明者は約23万人」
+- fact_ids には食い違っている事実の番号を 2 つ以上入れる。topic には何について食い違っているかを短く書く（20 文字以内）
+- 別のことについての事実（例: 死者数と負傷者数）は食い違いではない
+- 表現の違いだけで同じ内容（例:「M9.1」と「マグニチュード9.1」）は食い違いではない
+- 数値の範囲が重なる場合（例:「M9.0」と「M9.1-9.3」）や、時点・定義が明らかに違う場合も、念のため食い違いとして挙げてよい
+- 食い違いがなければ conflicts は空にする"""
+
+CONFLICT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "conflicts": {"type": "array", "maxItems": 5, "items": {
+            "type": "object",
+            "properties": {"topic": {"type": "string"},
+                           "fact_ids": {"type": "array", "items": {"type": "integer"}, "minItems": 2}},
+            "required": ["topic", "fact_ids"],
+        }},
+    },
+    "required": ["conflicts"],
+}
+
+
+def conflict_user(aspect: str, facts: list[dict]) -> str:
+    return json.dumps({
+        "観点": aspect,
+        "事実": [{"番号": i, "内容": f["text"], "根拠の引用": f["quote"]} for i, f in enumerate(facts, 1)],
+    }, ensure_ascii=False, indent=1)
+
+
 RESPOND_SYSTEM = """あなたは調査結果を利用者に伝える役です。
 与えられた材料（対象の概要・確認できた事実）だけを使って、日本語で答えます。
 
@@ -189,6 +220,8 @@ RESPOND_SYSTEM = """あなたは調査結果を利用者に伝える役です。
 - 対象が特定できている場合は、その対象についてだけ書く。同名の別の意味の説明は書かない
 - 「公開情報では調べられない部分」がある場合は、最後に「調べられなかったこと」としてその部分と理由を書く
 - 確認できた事実は観点ごとに整理し、観点の名前を小見出しにする（事実のない観点は書かない）
+- 「出典どうしの食い違い」にある内容は、どちらか一方だけを書かず、両方の値を出典番号付きで併記し、
+  「出典によって〜と〜で食い違っている」と書く（食い違いの一覧はプログラムも付ける）
 - 確認できなかった観点の一覧はプログラムが付けるので、「わからなかったこと」は書かない
 - 出典一覧そのものは書かない（プログラムが付ける）"""
 
@@ -248,5 +281,9 @@ def respond_user(state: AgentState, sources: list[dict]) -> str:
         "公開情報では調べられない部分": (state.get("feasibility") or {}).get("infeasible_parts", []),
         "対象の概要": f"{summary} [{number[summary_url]}]" if summary and summary_url in number else "",
         "確認できた事実（観点ごと）": facts,
+        "出典どうしの食い違い": [
+            f"{c['topic']}: " + " / ".join(f"{f['text']} [{number[f['source']]}]" for f in c["facts"]
+                                         if f["source"] in number)
+            for c in state.get("conflicts", [])],
         "わからないこと": state.get("unknown", []),
     }, ensure_ascii=False, indent=1)

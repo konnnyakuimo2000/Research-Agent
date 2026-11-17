@@ -66,6 +66,7 @@ def test_searches_for_an_unfilled_aspect_when_no_pages_are_left():
 
 def test_aspect_search_limit():
     s = state(reading_list=["u1"], pages_read=[{"url": "u1"}], aspect_searched=["場所", "規模"],
+              conflicts_checked=True,
               verified=[{"text": "t", "quote": "q", "aspect": "日時", "source": GOV}])
     assert check_decision(s, {"action": "respond", "reason": ""})["action"] == "respond"
 

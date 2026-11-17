@@ -94,6 +94,18 @@ def build_coverage(aspects: list[Aspect], verified: list[dict]) -> list[Coverage
     return rows
 
 
+def facts_to_compare(verified: list[dict]) -> dict[str, list[dict]]:
+    """食い違いを調べる観点と、その事実。別々のサイトの事実が 2 つ以上ある観点だけを選ぶ（横の絞り込み）。"""
+    by_aspect: dict[str, list[dict]] = {}
+    for f in verified:
+        by_aspect.setdefault(f.get("aspect") or OTHER_ASPECT, []).append(f)
+    return {a: fs for a, fs in by_aspect.items() if len({_host(f["source"]) for f in fs}) >= 2}
+
+
+def different_sites(facts: list[dict]) -> bool:
+    return len({_host(f["source"]) for f in facts}) >= 2
+
+
 def unfilled(coverage: list[CoverageRow]) -> list[CoverageRow]:
     return [r for r in coverage if r["status"] != CONFIRMED]
 
