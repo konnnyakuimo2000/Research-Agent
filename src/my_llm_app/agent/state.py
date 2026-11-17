@@ -21,7 +21,8 @@ MAX_CONFLICT_SEARCHES = 2  # 食い違いを確かめ直す検索の上限（R-6
 MAX_STALE_READS = 2      # 新しい事実が出ない読み込みがこの回数続いたら、それ以上読まない（収束。10.3 S-4）
 MAX_REF_DEPTH = 2        # 参照（出典欄のリンク）をたどる深さ（R-2。10.3 S-3）
 REFS_PER_PAGE = 3        # 1 ページからたどる参照の数
-MAX_SECONDS = 900        # 1 回の調査の時間の上限（15 分。10.3 S-5）
+MAX_SECONDS = 900        # 1 回の調査の時間の上限（15 分。10.3 S-5）。利用者の答えを待つ時間は数えない
+RESERVE_SECONDS = 240    # 報告をまとめる時間（読み込み 1 回 + 応答）。残りがこれを切ったら調査をやめる
 MAX_IMAGE_CHECKS = 6     # 1 回の調査で確かめる画像候補の上限（1 枚ごとに LLM を呼ぶため）
 WANTED_IMAGES = 2        # 確認済みの画像がこの枚数そろったら、それ以上確かめない
 # 候補の 1 位の sitelinks（記事がある言語版などの数）が 2 位のこの倍数以上なら、
@@ -108,7 +109,6 @@ class AgentState(TypedDict, total=False):
     link_depth: dict[str, int]        # 参照をたどって見つけたページの深さ（R-2）
     new_ambiguity: str                # 調査の途中で見つかった同名の別の対象（R-5）
     ambiguity_asked: bool             # それについて利用者に確認したか
-    deadline: float                   # 調査の時間の上限（UNIX 時刻）
     wants_images: bool                # 依頼が画像を求めているか
     page_images: list[dict]           # 読んだページに載っていた画像（L4 の候補）
     images_checked: bool              # 画像を探したか（応答の前に 1 回だけ）

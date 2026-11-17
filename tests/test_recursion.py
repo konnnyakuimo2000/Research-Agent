@@ -1,4 +1,3 @@
-import time
 
 from my_llm_app.agent import coverage as cov
 from my_llm_app.agent.guard import check_decision
@@ -56,9 +55,12 @@ def test_converged_reading_stops():
 
 
 def test_time_limit_forces_respond():
-    s = state(reading_list=["u1", "u2"], priority_urls=["u2"], deadline=time.time() - 1)
+    # 処理にかかった時間の合計で数える。報告をまとめる時間（RESERVE_SECONDS）を残して打ち切る
+    s = state(reading_list=["u1", "u2"], priority_urls=["u2"], trace=[{"node": "read_pages", "seconds": 700}])
     assert decide(s)["action"] == "respond"
     assert check_decision(s, {"action": "search", "reason": "", "query": "x"})["action"] == "respond"
+    s = state(reading_list=["u1", "u2"], priority_urls=["u2"], trace=[{"node": "read_pages", "seconds": 600}])
+    assert decide(s)["action"] == "read_pages"   # まだ時間がある
 
 
 def test_new_ambiguity_asks_for_confirmation():
@@ -124,3 +126,16 @@ def test_priority_pages_get_extra_budget_and_searches_stop_without_budget():
     conflict = {"aspect": "被害・影響", "topic": "死者数", "facts": []}
     s = state(reading_list=[p["url"] for p in used_up], pages_read=used_up, conflicts=[conflict])
     assert decide(s)["action"] == "respond"                           # 読めないなら確かめ直す検索はしない
+
+
+def test_program_sections_removed_from_body():
+    from my_llm_app.agent.nodes import strip_program_sections
+    body = "\n".join([
+        "**規模**", "M9.1 [1]。出典によって9.0と9.1で食い違っている [1] [2]。", "",
+        "**出典どうしの食い違い**", "- 規模: 9.0 [1] / 9.1 [2]", "",
+        "### 被害", "死者は約23万人 [2]。", "",
+        "### 出典", "[1] ...",
+    ])
+    out = strip_program_sections(body)
+    assert "食い違っている" in out and "被害" in out and "死者は約23万人" in out
+    assert "**出典どうしの食い違い**" not in out and "- 規模: 9.0" not in out and "[1] ..." not in out

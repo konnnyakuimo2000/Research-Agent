@@ -84,3 +84,13 @@ def test_exact_name_matches_are_added_to_candidates():
          patch("my_llm_app.agent.nodes.searxng.web_search", return_value=WEB):
         out = Nodes(SETTINGS, LLMPicksOnlyFord()).search(state)
     assert [c["id"] for c in out["candidates"]] == ["Q308", "Q613883"]     # 有名な順。前方一致だけのものは入れない
+
+
+def test_zero_results_with_unresponsive_engines_count_as_failure():
+    state = {"request": "太陽系の惑星の水星について調べて",
+             "decision": {"action": "search", "query": "水星", "names": ["水星"]}}
+    blocked = WebSearchResponse(results=[], unresponsive=["brave", "duckduckgo"])
+    with patch("my_llm_app.agent.nodes.wikimedia.search_entities", return_value=[PLANET]),          patch("my_llm_app.agent.nodes.wikimedia.get_entities", return_value={"Q308": PLANET}),          patch("my_llm_app.agent.nodes.wikimedia.summary_for_entity", return_value=None),          patch("my_llm_app.agent.nodes.searxng.web_search", return_value=blocked):
+        out = Nodes(SETTINGS, FakeLLM()).search(state)
+    assert out["web_failures_in_row"] == 1
+    assert "結果が 0 件" in out["failures"][0] and "brave, duckduckgo" in out["failures"][0]

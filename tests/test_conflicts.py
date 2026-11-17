@@ -33,9 +33,11 @@ class FakeLLM:
     def chat_json(self, system, user, schema, temperature=0.2):
         self.calls.append(user)
         return {"conflicts": [
-            {"topic": "死者・行方不明者数", "fact_ids": [1, 2]},   # 別サイト → 認める
-            {"topic": "邦人の死者数", "fact_ids": [3, 4]},         # 同じサイト → 除く
-            {"topic": "存在しない番号", "fact_ids": [1, 9]},       # 実在しない番号 → 除く
+            {"topic": "死者・行方不明者数", "kind": "値が大きく違う", "fact_ids": [1, 2]},  # 別サイト → 認める
+            {"topic": "邦人の死者数", "kind": "値が大きく違う", "fact_ids": [3, 4]},        # 同じサイト → 除く
+            {"topic": "存在しない番号", "kind": "値が大きく違う", "fact_ids": [1, 9]},      # 実在しない番号 → 除く
+            {"topic": "丸めの違い", "kind": "丸め・概数の違い", "fact_ids": [1, 2]},        # 丸めの違い → 除く
+            {"topic": "別の時点", "kind": "別の事柄・時点", "fact_ids": [1, 2]},            # 別の事柄 → 除く
         ]}
 
 
@@ -73,3 +75,14 @@ def test_respond_lists_conflicts():
     answer = Nodes(None, TextLLM()).respond(state)["answer"]
     assert "### 出典どうしの食い違い" in answer
     assert "- 被害・影響・死者・行方不明者数: 「死者・行方不明者は30万人以上」[1] / 「死者・行方不明者は約23万人」[2]" in answer
+
+
+def test_same_topic_conflicts_are_merged():
+    a, b, c = ({"text": t, "source": f"https://s{i}.example/"} for i, t in enumerate(["約23万人", "30万人以上", "22万人超"]))
+    merged = cov.merge_conflicts([
+        {"aspect": "被害・影響", "topic": "死者数", "facts": [a, b]},
+        {"aspect": "被害・影響", "topic": "死者数", "facts": [b, c]},
+        {"aspect": "規模", "topic": "死者数", "facts": [a, c]},
+    ])
+    assert [(m["aspect"], [f["text"] for f in m["facts"]]) for m in merged] == [
+        ("被害・影響", ["約23万人", "30万人以上", "22万人超"]), ("規模", ["約23万人", "22万人超"])]

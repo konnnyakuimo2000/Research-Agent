@@ -120,3 +120,16 @@ def gaps_text(coverage: list[CoverageRow]) -> str:
             lines.append(f"- {r['aspect']}: 出典が {len({_host(u) for u in r['sources']})} サイト"
                          f"（最も信頼度の高いもので Tier {r['best_tier']}）のみで、十分に確認できていない")
     return "\n".join(lines)
+
+
+def merge_conflicts(conflicts: list[dict]) -> list[dict]:
+    """同じ観点・同じ事柄の食い違いを 1 つにまとめる（同じ事柄が何行も出ないように）。"""
+    merged: dict[tuple[str, str], dict] = {}
+    for c in conflicts:
+        key = (c["aspect"], c["topic"])
+        if key not in merged:
+            merged[key] = {**c, "facts": list(c["facts"])}
+            continue
+        have = merged[key]["facts"]
+        have += [f for f in c["facts"] if f not in have]
+    return list(merged.values())

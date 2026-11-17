@@ -21,7 +21,7 @@ from my_llm_app.agent import prompts
 from my_llm_app.agent.guard import check_decision, is_ambiguous
 from my_llm_app.agent.quotes import normalize, quote_in_text
 from my_llm_app.agent.state import (DOMINANCE_RATIO, MAX_CANDIDATES, MAX_IMAGE_CHECKS, MAX_REF_DEPTH,
-                                    MAX_SECONDS, PAGES_PER_READ, REFS_PER_PAGE, WANTED_IMAGES, AgentState,
+                                    PAGES_PER_READ, REFS_PER_PAGE, WANTED_IMAGES, AgentState,
                                     Candidate, PageRead, Source)
 from my_llm_app.config import Settings
 from my_llm_app.llm import LLM
@@ -52,7 +52,6 @@ class Nodes:
         }
         log.info("feasibility: %s (%s)", feasibility["verdict"], feasibility["reason"])
         return {"feasibility": feasibility, "wants_images": imaging.wants_images(state["request"]),
-                "deadline": time.time() + MAX_SECONDS,
                 "trace": [{"node": "check_feasibility", "llm": out}]}
 
     def report_infeasible(self, state: AgentState) -> dict:
@@ -94,7 +93,11 @@ class Nodes:
             web, errors = searxng.WebSearchResponse(results=[]), errors + [f"searxng: {e}"]
             web_failed = f"Web 検索（SearXNG）に接続できなかった（{type(e).__name__}）"
         else:
-            web_failed = ""
+            # 接続はできても、検索エンジンがアクセスの多さで一時的に止めていると結果が 0 件になる。
+            # これも失敗として数える（同じ状態で検索を繰り返さず、報告で申告する）
+            web_failed = "" if web.results or not web.unresponsive else (
+                f"Web 検索の結果が 0 件だった（応答しない検索エンジン: {', '.join(web.unresponsive)}。"
+                "アクセスが多すぎて一時的に止められている可能性がある）")
 
         update = self.llm.chat_json(
             prompts.UPDATE_SYSTEM,
@@ -311,10 +314,13 @@ class Nodes:
         conflicts = []
         for (aspect, facts), out in zip(groups.items(), outs):
             for c in out.get("conflicts", []):
+                if c.get("kind") != prompts.REAL_CONFLICT:
+                    continue   # 丸め・概数の違いや、別の事柄・時点の組は食い違いとしない
                 # 番号は実在する事実のものだけを認め、同じサイトどうしの組は除く（プログラムで検査）
                 picked = [facts[i - 1] for i in dict.fromkeys(c.get("fact_ids", [])) if 1 <= i <= len(facts)]
                 if len(picked) >= 2 and cov.different_sites(picked):
                     conflicts.append({"aspect": aspect, "topic": c.get("topic", ""), "facts": picked})
+        conflicts = cov.merge_conflicts(conflicts)
         log.info("check_conflicts: %d aspects -> %d conflicts (%.1fs)", len(groups), len(conflicts),
                  time.perf_counter() - started)
         return {"conflicts": conflicts, "conflicts_checked_at": len(state.get("verified", [])),
@@ -437,7 +443,7 @@ class Nodes:
     def respond(self, state: AgentState) -> dict:
         sources = collect_sources(state)
         body = self.llm.chat_text(prompts.RESPOND_SYSTEM, prompts.respond_user(state, sources))
-        parts = [body.strip()]
+        parts = [strip_program_sections(body).strip()]
         # 食い違いと確認できなかった観点は、プログラムが書く（LLM に書かせない）
         if state.get("conflicts"):
             number = {s["url"]: i for i, s in enumerate(sources, 1)}
@@ -459,6 +465,32 @@ class Nodes:
                 f"[{i}] {s['title']} — {s['url']}（Tier {s['tier']}）" for i, s in enumerate(sources, 1)))
         answer = "\n".join(parts)
         return {"answer": answer, "trace": [{"node": "respond", "answer": answer}]}
+
+
+# プログラムが付ける節の見出し。LLM が本文に同じ節を書いたら取り除く（同じ内容が二重に出ないように）
+_PROGRAM_SECTIONS = ("食い違い", "確認できなかった", "わからなかった", "出典", "参考", "画像")
+
+
+def _heading_text(line: str) -> str | None:
+    """見出しの行（「### 〜」または行全体が太字の「**〜**」）なら、その文字を返す。"""
+    s = line.strip()
+    if s.startswith("#"):
+        return s.lstrip("#").strip()
+    if len(s) > 4 and s.startswith("**") and s.endswith("**") and s.count("**") == 2:
+        return s[2:-2].strip()
+    return None
+
+
+def strip_program_sections(body: str) -> str:
+    """LLM の本文から、プログラムが付ける節（食い違い・確認できなかったこと・出典・画像）を取り除く。"""
+    out, skipping = [], False
+    for line in body.splitlines():
+        heading = _heading_text(line)
+        if heading is not None:
+            skipping = any(w in heading for w in _PROGRAM_SECTIONS)
+        if not skipping:
+            out.append(line)
+    return "\n".join(out)
 
 
 # 依頼文によく出る決まり文句（対象を絞り込む根拠にならない）

@@ -7,12 +7,10 @@
 
 from __future__ import annotations
 
-import time
-
 from my_llm_app.agent.coverage import MISSING, WEAK
 from my_llm_app.agent.state import (EXTRA_PAGES, MAX_ASPECT_SEARCHES, MAX_CANDIDATES, MAX_CONFLICT_SEARCHES,
-                                    MAX_PAGE_ATTEMPTS, MAX_PAGES, MAX_QUESTIONS, MAX_STALE_READS, MAX_STEPS,
-                                    MAX_WEB_FAILURES, AgentState, Decision)
+                                    MAX_PAGE_ATTEMPTS, MAX_PAGES, MAX_QUESTIONS, MAX_SECONDS, MAX_STALE_READS,
+                                    MAX_STEPS, MAX_WEB_FAILURES, RESERVE_SECONDS, AgentState, Decision)
 
 
 def build_question(state: AgentState) -> str:
@@ -40,8 +38,14 @@ def is_ambiguous(state: AgentState) -> bool:
     return not state.get("target") and len(state.get("candidates", [])) >= 2
 
 
+def elapsed(state: AgentState) -> float:
+    """ここまでに処理にかかった秒数。各ノードの時間の合計なので、利用者の答えを待つ時間は入らない。"""
+    return sum(t.get("seconds", 0) for t in state.get("trace", []))
+
+
 def time_over(state: AgentState) -> bool:
-    return bool(state.get("deadline")) and time.time() > state["deadline"]
+    """報告をまとめる時間を残すと、もう調査を続けられないか。"""
+    return elapsed(state) >= MAX_SECONDS - RESERVE_SECONDS
 
 
 def _name(state: AgentState) -> str:
@@ -127,7 +131,7 @@ def check_decision(state: AgentState, decision: Decision) -> Decision:
     if state.get("steps", 0) >= MAX_STEPS and action != "respond":
         return {**d, "action": "respond", "guard": "行動の上限に達したため、わかった範囲で応答する"}
     if time_over(state) and action != "respond":
-        return {**d, "action": "respond", "guard": "時間の上限に達したため、わかった範囲で応答する"}
+        return {**d, "action": "respond", "guard": "時間の上限が近いため、わかった範囲で応答する"}
 
     target = state.get("target")
     if action == "respond" and target and target.get("id") and not state.get("target_summary"):
