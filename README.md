@@ -4,7 +4,8 @@
 
 - **Open WebUI**: チャット画面
 - **SearXNG**: Web 検索
-- どちらも Docker で動かし、`docker compose up -d` で起動する
+- **調査エージェント**（LangGraph）: Open WebUI のモデル `research-agent` として使える。出典を確かめながら調べて報告する
+- すべて Docker で動かし、`docker compose up -d` で起動する
 
 ## はじめかた
 

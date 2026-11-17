@@ -72,6 +72,10 @@ class LLM:
                 last_error = e
         raise ValueError(f"LLM の出力が JSON になりませんでした: {last_error}")
 
+    def chat_messages(self, messages: list[dict], temperature: float = 0.5) -> str:
+        """会話の履歴をそのまま送る（Open WebUI のタイトル生成などの裏処理を中継するため）。"""
+        return self._create(messages, temperature=temperature)
+
     def chat_text(self, system: str, user: str, temperature: float = 0.5) -> str:
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         return self._create(messages, temperature=temperature)

@@ -1,4 +1,4 @@
-# Open WebUI + SearXNG
+# Open WebUI + SearXNG + 調査エージェント
 # 使い方: docker compose up -d   (停止: docker compose down)
 # 接続先などの値は .env から読み込む（.env.example 参照）
 
@@ -10,13 +10,34 @@ services:
     volumes:
       - open-webui:/app/backend/data
     environment:
-      OPENAI_API_BASE_URL: ${VL_BASE_URL:?.env に VL_BASE_URL を設定してください}
-      OPENAI_API_KEY: ${VL_API_KEY:-dummy}
+      # 接続先は 2 つ: LLM サーバー（普通の会話）と、調査エージェント（モデル名 research-agent）
+      # ※ Open WebUI は初回起動時だけこの値を使い、その後は管理画面（設定 → 接続）の値を使う
+      OPENAI_API_BASE_URLS: "${VL_BASE_URL:?.env に VL_BASE_URL を設定してください};http://agent:8000/v1"
+      OPENAI_API_KEYS: "${VL_API_KEY:-dummy};${AGENT_API_KEY:-dummy}"
+      # 調査は数分かかるので、応答待ちで切らない（秒）
+      AIOHTTP_CLIENT_TIMEOUT: "1800"
+      # タイトル生成などの裏処理は、エージェントではなく LLM に直接させる
+      TASK_MODEL_EXTERNAL: ${VL_MODEL:-qwen3.8-27b}
       ENABLE_OLLAMA_API: "false"
       ENABLE_WEB_SEARCH: "true"
       WEB_SEARCH_ENGINE: searxng
       SEARXNG_QUERY_URL: http://searxng:8080/search?q=<query>
       WEB_SEARCH_RESULT_COUNT: "5"
+    depends_on:
+      - searxng
+      - agent
+    restart: unless-stopped
+
+  agent:
+    build: .
+    ports:
+      - "127.0.0.1:8100:8000"   # 開発用: この PC から API を直接試す
+    environment:
+      VL_BASE_URL: ${VL_BASE_URL:?.env に VL_BASE_URL を設定してください}
+      VL_MODEL: ${VL_MODEL:-qwen3.8-27b}
+      VL_API_KEY: ${VL_API_KEY:-dummy}
+      AGENT_API_KEY: ${AGENT_API_KEY:-}
+      SEARXNG_URL: http://searxng:8080
     depends_on:
       - searxng
     restart: unless-stopped
