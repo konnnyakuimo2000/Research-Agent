@@ -164,7 +164,7 @@ def test_small_images_do_not_use_up_checks():
 
 def test_page_images_skip_icons_with_session_ids():
     html = ('<img src="/img/icn_08.gif;jsessionid=81"><img src="/img/btn_head01.jpg">'
-            '<img src="/photo/prof.jpg" alt="教授">')
+            '<img src="/assets/lazyload-e60e.png"><img src="/photo/prof.jpg" alt="教授">')
     assert [i["src"] for i in images.page_images(html, "https://u.ac.jp/")] == ["https://u.ac.jp/photo/prof.jpg"]
 
 

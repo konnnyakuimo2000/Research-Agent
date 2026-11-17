@@ -33,6 +33,9 @@ def judge(page_tier: int, fetched_ok: bool, context: str, visual: str) -> str:
         return REJECTED
     if context == "high" and page_tier <= 2:
         return CONFIRMED
+    if visual == "unknown" and page_tier >= 3:
+        # 一般のサイトで、写っているものが対象と合うか判断できない（読み込み中の白い仮画像など）→ 採らない
+        return REJECTED
     if (context == "high" and page_tier <= 4) or (context == "mid" and page_tier <= 2):
         return PROBABLE
     return REJECTED

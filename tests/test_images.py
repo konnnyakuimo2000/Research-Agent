@@ -25,6 +25,7 @@ def test_judge_table():
     assert j(2, True, "high", "consistent") == imaging.CONFIRMED
     assert j(1, True, "high", "unknown") == imaging.CONFIRMED
     assert j(4, True, "high", "consistent") == imaging.PROBABLE      # 文脈は確かだが掲載元が一般サイト
+    assert j(4, True, "high", "unknown") == imaging.REJECTED         # 一般サイトで、写っているものが確かめられない
     assert j(2, True, "mid", "consistent") == imaging.PROBABLE       # 掲載元は確かだが文脈が弱い
     assert j(4, True, "mid", "consistent") == imaging.REJECTED
     assert j(1, True, "high", "contradict") == imaging.REJECTED      # 見た目が事実と矛盾

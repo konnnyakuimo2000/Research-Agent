@@ -25,7 +25,7 @@ MIN_SIDE = 100            # これより小さい画像はアイコンとみな�
 MAX_BYTES = 8_000_000
 VLM_MAX_SIDE = 768        # LLM に渡すときに縮小する大きさ（入力トークンを抑える）
 _SKIP_WORDS = ("icon", "icn", "logo", "sprite", "banner", "bnr", "button", "btn", "spacer", "blank", "avatar",
-               "emoji", "arrow")
+               "emoji", "arrow", "lazyload", "placeholder", "loading", "noimage", "no_image", "dummy")
 
 
 @dataclass
