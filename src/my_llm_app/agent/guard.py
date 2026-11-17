@@ -7,10 +7,16 @@
 
 from __future__ import annotations
 
+import re
+
 from my_llm_app.agent.coverage import MISSING, WEAK
 from my_llm_app.agent.state import (EXTRA_PAGES, MAX_ASPECT_SEARCHES, MAX_CANDIDATES, MAX_CONFLICT_SEARCHES,
-                                    MAX_PAGE_ATTEMPTS, MAX_PAGES, MAX_QUESTIONS, MAX_SECONDS, MAX_STALE_READS,
-                                    MAX_STEPS, MAX_WEB_FAILURES, RESERVE_SECONDS, AgentState, Decision)
+                                    MAX_FREE_SEARCHES, MAX_PAGE_ATTEMPTS, MAX_PAGES, MAX_QUESTIONS, MAX_SECONDS,
+                                    MAX_STALE_READS, MAX_STEPS, MAX_WEB_FAILURES, RESERVE_SECONDS, AgentState,
+                                    Decision)
+
+# 画像を探すための検索の言葉（画像はプログラムが find_images で探すので、LLM の検索ではしない）
+_IMAGE_QUERY = re.compile(r"画像|写真|photo|image|picture|jpe?g|png|commons|file:", re.IGNORECASE)
 
 
 def build_question(state: AgentState) -> str:
@@ -52,6 +58,16 @@ def _name(state: AgentState) -> str:
     return (state.get("target") or {}).get("label") or state.get("request", "")
 
 
+def free_searches(state: AgentState) -> int:
+    """LLM が自分で選んだ検索の回数（観点・食い違いを狙ってプログラムが決めた検索は除く）。"""
+    return (len(state.get("searched", [])) - len(state.get("aspect_searched", []))
+            - len(state.get("conflict_searched", [])))
+
+
+def wants_more_images(state: AgentState) -> bool:
+    return bool(state.get("wants_images")) and not state.get("images_checked")
+
+
 def research_step(state: AgentState, d: Decision) -> Decision | None:
     """応答の前にやるべき調査を、優先順に 1 つ返す。なければ None（応答してよい）。
 
@@ -79,15 +95,21 @@ def research_step(state: AgentState, d: Decision) -> Decision | None:
         return {**d, "action": "ask_user", "question": build_confirm_question(state), "confirm_target": True,
                 "guard": "調査の途中で同名の別の対象が見つかったため、対象を確認する"}
 
-    # 1. ページを読む（まだ読んでいない、事実がない、埋まらない・弱い観点がある、狙って探したページがある）
-    if not converged and ((priority_unread and can_read_extra) or (
-            unread and can_read and (not read or not verified or missing or weak))):
-        reason = ("応答の前に、ページ本文を読んで事実を確かめる" if not read or not verified
-                  else "狙って探したページを読む" if priority_unread
+    # 1. まずページを読んで事実を確かめる（まだ読んでいない、事実がない）
+    if not converged and unread and can_read and (not read or not verified):
+        return {**d, "action": "read_pages", "guard": "応答の前に、ページ本文を読んで事実を確かめる"}
+
+    # 2. 画像。求められていれば、調べ直し（時間がかかる）より先に探す。画像を出さずに時間切れにならないように
+    if wants_more_images(state):
+        return {**d, "action": "find_images", "guard": "画像を求められているので、応答の前に画像を探して確かめる"}
+
+    # 3. さらにページを読む（埋まらない・弱い観点がある、狙って探したページがある）
+    if not converged and ((priority_unread and can_read_extra) or (unread and can_read and (missing or weak))):
+        reason = ("狙って探したページを読む" if priority_unread
                   else "網羅表に埋まっていない・弱い観点があるため、さらにページを読む")
         return {**d, "action": "read_pages", "guard": reason}
 
-    # 2. 観点を狙って検索し直す。未発見の観点（R-1）を先に、出典が弱い観点（R-6）を後に。
+    # 4. 観点を狙って検索し直す。未発見の観点（R-1）を先に、出典が弱い観点（R-6）を後に。
     #    見つけたページを読む枠が残っていなければ、検索しても無駄なのでしない
     if web_ok and can_read_extra:
         searched = state.get("aspect_searched", [])
@@ -101,11 +123,11 @@ def research_step(state: AgentState, d: Decision) -> Decision | None:
                 return {**d, "action": "search", "query": query, "names": [_name(state)], "aspect": aspect,
                         "guard": f"観点「{aspect}」の出典が{kind}ため、その観点で検索し直す"}
 
-    # 3. 食い違いを調べる。前に調べた後で事実が増えていれば調べ直す
+    # 5. 食い違いを調べる。前に調べた後で事実が増えていれば調べ直す
     if verified and state.get("conflicts_checked_at", -1) < len(verified):
         return {**d, "action": "check_conflicts", "guard": "応答の前に、出典どうしの食い違いを調べる"}
 
-    # 4. 食い違いがあれば、その事柄を狙って検索し直す（R-6: より信頼度の高い出典を探す）
+    # 6. 食い違いがあれば、その事柄を狙って検索し直す（R-6: より信頼度の高い出典を探す）
     if web_ok and can_read_extra:
         done = state.get("conflict_searched", [])
         todo = [c["topic"] for c in state.get("conflicts", []) if c["topic"] not in done]
@@ -114,10 +136,6 @@ def research_step(state: AgentState, d: Decision) -> Decision | None:
             if query not in state.get("searched", []):
                 return {**d, "action": "search", "query": query, "names": [_name(state)],
                         "conflict_topic": todo[0], "guard": f"「{todo[0]}」が出典によって食い違うため、確かめ直す"}
-
-    # 5. 画像
-    if state.get("wants_images") and not state.get("images_checked"):
-        return {**d, "action": "find_images", "guard": "画像を求められているので、応答の前に画像を探して確かめる"}
     return None
 
 
@@ -130,8 +148,20 @@ def check_decision(state: AgentState, decision: Decision) -> Decision:
     # 上限: 行動の回数・時間を使い切ったら、わかった範囲で答える（設計書 10.3 S-2, S-5）
     if state.get("steps", 0) >= MAX_STEPS and action != "respond":
         return {**d, "action": "respond", "guard": "行動の上限に達したため、わかった範囲で応答する"}
-    if time_over(state) and action != "respond":
-        return {**d, "action": "respond", "guard": "時間の上限が近いため、わかった範囲で応答する"}
+    if time_over(state):
+        if wants_more_images(state):
+            return {**d, "action": "find_images", "guard": "時間の上限が近いため、画像を探してから応答する"}
+        if action != "respond":
+            return {**d, "action": "respond", "guard": "時間の上限が近いため、わかった範囲で応答する"}
+
+    if action == "search" and state.get("searched") and not is_ambiguous(state):
+        query = d.get("query") or ""
+        why = ("画像はプログラムが別に探すため、画像のための検索はしない" if _IMAGE_QUERY.search(query)
+               else "自由な検索の上限に達したため、プログラムが決める調査に移る"
+               if free_searches(state) >= MAX_FREE_SEARCHES else "")
+        if why:
+            # 応答に切り替える。応答の前に必要な調査（ページを読む・画像・調べ直し）は下の research_step が決める
+            d, action = {**d, "action": "respond", "guard": why}, "respond"
 
     target = state.get("target")
     if action == "respond" and target and target.get("id") and not state.get("target_summary"):

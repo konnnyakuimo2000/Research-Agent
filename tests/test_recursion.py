@@ -56,10 +56,10 @@ def test_converged_reading_stops():
 
 def test_time_limit_forces_respond():
     # 処理にかかった時間の合計で数える。報告をまとめる時間（RESERVE_SECONDS）を残して打ち切る
-    s = state(reading_list=["u1", "u2"], priority_urls=["u2"], trace=[{"node": "read_pages", "seconds": 700}])
+    s = state(reading_list=["u1", "u2"], priority_urls=["u2"], trace=[{"node": "read_pages", "seconds": 650}])
     assert decide(s)["action"] == "respond"
     assert check_decision(s, {"action": "search", "reason": "", "query": "x"})["action"] == "respond"
-    s = state(reading_list=["u1", "u2"], priority_urls=["u2"], trace=[{"node": "read_pages", "seconds": 600}])
+    s = state(reading_list=["u1", "u2"], priority_urls=["u2"], trace=[{"node": "read_pages", "seconds": 500}])
     assert decide(s)["action"] == "read_pages"   # まだ時間がある
 
 

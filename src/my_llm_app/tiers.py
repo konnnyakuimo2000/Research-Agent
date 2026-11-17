@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import tomllib
 from functools import lru_cache
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from my_llm_app.config import REPO_ROOT
 
@@ -34,7 +34,18 @@ def tier_of(url: str) -> int:
     return conf.get("default", 4)
 
 
+def canonical(url: str) -> str:
+    """同じページを指す URL の表記ゆれ（%C3%BC と %c3%bc、#以降）をそろえた形。重複の判定に使う。"""
+    return unquote(url.split("#", 1)[0])
+
+
 def by_tier(urls: list[str]) -> list[str]:
-    """Tier 5 を除き、Tier の高い順に並べる（同じ Tier の中では元の順を保つ）。"""
-    kept = [u for u in dict.fromkeys(urls) if tier_of(u) != EXCLUDED_TIER]
+    """Tier 5 と、表記が違うだけの重複を除き、Tier の高い順に並べる（同じ Tier の中では元の順を保つ）。"""
+    seen: set[str] = set()
+    unique = []
+    for u in urls:
+        if (key := canonical(u)) not in seen:
+            seen.add(key)
+            unique.append(u)
+    kept = [u for u in unique if tier_of(u) != EXCLUDED_TIER]
     return sorted(kept, key=tier_of)

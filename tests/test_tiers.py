@@ -36,9 +36,11 @@ class FakeLLM:
 
 def fake_search(base_url, query, limit=8):
     if "site:go.jp" in query:
-        return WebSearchResponse([WebResult("国立天文台", "https://www.nao.go.jp/mercury", "", [])])
+        return WebSearchResponse([WebResult("国立天文台: 水星", "https://www.nao.go.jp/mercury", "", []),
+                                  # 対象の名前が題名・抜粋にない Tier 1 のページは読まない
+                                  WebResult("防衛省の装備品", "https://www.mod.go.jp/equipment", "", [])])
     if "site:ac.jp" in query:
-        return WebSearchResponse([WebResult("大学", "https://www.example.ac.jp/mercury", "", [])])
+        return WebSearchResponse([WebResult("大学", "https://www.example.ac.jp/mercury", "水星の観測", [])])
     return WebSearchResponse([WebResult("ブログ", "https://blog.example.com/m", "", []),
                               WebResult("まとめ", "https://ja.postposmo.com/m", "", [])])
 

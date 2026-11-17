@@ -24,7 +24,8 @@ _HEADERS = {"User-Agent": USER_AGENT}
 MIN_SIDE = 200            # これより小さい画像はアイコン・サムネイルとみなして使わない（V-5）
 MAX_BYTES = 8_000_000
 VLM_MAX_SIDE = 768        # LLM に渡すときに縮小する大きさ（入力トークンを抑える）
-_SKIP_WORDS = ("icon", "logo", "sprite", "banner", "button", "spacer", "blank", "avatar", "emoji")
+_SKIP_WORDS = ("icon", "icn", "logo", "sprite", "banner", "bnr", "button", "btn", "spacer", "blank", "avatar",
+               "emoji", "arrow")
 
 
 @dataclass
@@ -88,7 +89,8 @@ def page_images(html: str, base_url: str, limit: int = 10) -> list[dict]:
             continue
         src = urljoin(base_url, src)
         lower = src.lower()
-        if lower.endswith((".svg", ".gif")) or any(w in lower for w in _SKIP_WORDS):
+        path = urlparse(lower).path.split(";", 1)[0]   # 「.gif;jsessionid=...」のような後ろの付け足しを除く
+        if path.endswith((".svg", ".gif")) or any(w in path.rsplit("/", 1)[-1] for w in _SKIP_WORDS):
             continue
         try:
             w, h = int(img.get("width") or 0), int(img.get("height") or 0)

@@ -50,6 +50,7 @@ DECIDE_SYSTEM = """あなたは調査エージェントの「次の行動」を�
 - 依頼の対象に複数の意味があり、利用者がどれを指しているかわからないときは ask_user する。推測で 1 つに決めない
 - 対象が決まったら、その対象について search して内容を集め、十分なら respond する
 - 同じ検索の言葉を繰り返さない
+- 画像・写真はプログラムが別に探して確かめる。画像や写真の URL・ファイルを探すための search はしない
 - reason は 30 文字以内で書く"""
 
 DECIDE_SCHEMA = {
@@ -70,13 +71,18 @@ UPDATE_SYSTEM = """あなたは調査エージェントの「状態を更新す�
 - known: わかったこと。text に短い文（40 文字以内）、source にその根拠の参照（Web 検索の結果の ref「W1」など、
   または Wikidata の項目の id「Q308」など）を 1 つ入れる。URL は書かない。
   検索結果に書かれていないことは入れない。依頼や利用者の回答の言い換えは入れない
-- unknown: まだわからないこと（例:「利用者がどの意味のマーキュリーを指しているか」）
+- unknown: まだわからないこと（例:「利用者がどの意味のマーキュリーを指しているか」）。画像・写真のことは入れない（プログラムが別に探す）
 - candidate_ids: 依頼の言葉が指しうる対象の候補を、Wikidata の項目の id（Q 番号）で返す。
   入力にある id だけを使い、書き写すときに番号を変えないこと。一般によく知られているもの（天体・元素・神話など）を先に、最大 8 件
 - target_id: 利用者の回答などから対象が 1 つに決まった場合だけ、その候補の id。決まらなければ空文字
 - target_evidence: target_id を決めた根拠となる、依頼文または利用者の回答の語句をそのまま写す
   （例: 依頼が「太陽系の惑星の水星について」なら「太陽系の惑星」）。対象の名前そのものは根拠にならない。
   「一般にこの意味が多い」は根拠にならない（その場合は target_id を空文字にする）
+
+- specific_subject: 依頼文に対象を 1 つに絞る条件（所属・型番・地域など）が書かれていて、Web 検索の結果に
+  その条件に合う対象が 1 つだけ見つかった場合に、その対象の名前（検索結果にある表記）。Wikidata に項目がなくてもよい。
+  条件が書かれていない（例:「マーキュリーについて」）、または条件に合う対象が見つからない・複数ある場合は空文字
+- specific_evidence: specific_subject を絞り込んだ、依頼文の語句をそのまま写す（例:「〇〇大学の△△学科の」「カメラの」）
 
 推測で target_id を決めないこと。利用者が答えていない段階で、複数の意味があるなら target_id は空文字にする。
 「特定できた対象」がすでにある場合は、その id を target_id に入れる。
@@ -94,8 +100,11 @@ UPDATE_SCHEMA = {
         "candidate_ids": {"type": "array", "maxItems": 8, "items": {"type": "string"}},
         "target_id": {"type": "string"},
         "target_evidence": {"type": "string"},
+        "specific_subject": {"type": "string"},
+        "specific_evidence": {"type": "string"},
     },
-    "required": ["known", "unknown", "candidate_ids", "target_id", "target_evidence"],
+    "required": ["known", "unknown", "candidate_ids", "target_id", "target_evidence", "specific_subject",
+                 "specific_evidence"],
 }
 
 MATCH_SYSTEM = """あなたは、利用者の回答が選択肢のどれを指しているかを判定する役です。
@@ -145,11 +154,18 @@ EXTRACT_SYSTEM = """あなたは、1 つのページの本文を読んで、調�
   要約・言い換え・語順の変更・省略をしない。quote が本文にない事実はプログラムが捨てる
 - 本文に書かれていないことは書かない。数値・日付・時刻は、本文の表記（時差の注記など）に注意して正確に写す
 - 調査対象と別のもの（同名の別の対象など）についての記述は抜き出さない
+- about: その事実が調査対象そのものについてか。型番・世代・版が違うもの（例: iPhone 13 を調べているときの
+  iPhone 13 mini や iPhone 12）、シリーズや組織の全体、同じ研究室の別の人などについての記述は「別のもの」。
+  対象が主語で、別のものとの違いを述べる記述（例:「iPhone 13 は iPhone 12 より電池が長持ち」）は「対象そのもの」。
+  ページが対象とその仲間をまとめて説明しているときは、どれについての記述かを確かめる
 - aspect には、その事実が当てはまる観点を「調べる観点」から 1 つ選ぶ。どれにも当てはまらなければ「その他」
 - 「調べる観点」のうち、まだ事実がない観点についての記述を優先して抜き出す
 - other_entity: このページが、調査対象とは別の、同じ名前のもの（同名の別人・別の場所など）について書いている場合に、
   その別のものを 30 文字以内で書く。調査対象について書いているページなら空にする
 - 関係する事実がなければ facts は空にする"""
+
+ABOUT_TARGET = "対象そのもの"   # 事実の主語が調査対象そのものか（型番違い・シリーズ全体などは除く）
+
 
 def extract_schema(aspect_names: list[str]) -> dict:
     return {
@@ -158,8 +174,9 @@ def extract_schema(aspect_names: list[str]) -> dict:
             "facts": {"type": "array", "maxItems": 6, "items": {
                 "type": "object",
                 "properties": {"text": {"type": "string"}, "quote": {"type": "string"},
-                               "aspect": {"type": "string", "enum": aspect_names + ["その他"]}},
-                "required": ["text", "quote", "aspect"],
+                               "aspect": {"type": "string", "enum": aspect_names + ["その他"]},
+                               "about": {"type": "string", "enum": [ABOUT_TARGET, "別のもの"]}},
+                "required": ["text", "quote", "aspect", "about"],
             }},
             "other_entity": {"type": "string"},
         },
@@ -269,7 +286,9 @@ RESPOND_SYSTEM = """あなたは調査結果を利用者に伝える役です。
 - 「置いた前提」がある場合は、冒頭にその文をそのまま書く
 - 対象が特定できていない場合は、冒頭でそのことと、置いた前提を正直に書く
 - 対象が特定できている場合は、その対象についてだけ書く。同名の別の意味の説明は書かない
-- 「公開情報では調べられない部分」がある場合は、最後に「調べられなかったこと」としてその部分と理由を書く
+- 人名・製品名・型番・組織名は、材料（特定できた対象・確認できた事実・出典のタイトル）にある表記のまま書く。
+  読み方から別の表記（英語名・ミドルネームなど）を作らない
+- 「調べられなかったこと」「わからなかったこと」の節は書かない（プログラムが付ける）
 - 確認できた事実は観点ごとに整理し、観点の名前を小見出しにする（事実のない観点は書かない）
 - 「出典どうしの食い違い」にある内容は、どちらか一方だけを書かず、両方の値を出典番号付きで併記し、
   「出典によって〜と〜で食い違っている」と書く。食い違いだけをまとめた節は作らない（プログラムが付ける）
@@ -337,5 +356,5 @@ def respond_user(state: AgentState, sources: list[dict]) -> str:
             f"{c['topic']}: " + " / ".join(f"{f['text']} [{number[f['source']]}]" for f in c["facts"]
                                          if f["source"] in number)
             for c in state.get("conflicts", [])],
-        "わからないこと": state.get("unknown", []),
+        "出典のタイトル": [s["title"] for s in sources],
     }, ensure_ascii=False, indent=1)

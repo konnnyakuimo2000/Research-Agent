@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import unquote, urlparse
@@ -20,12 +21,13 @@ from my_llm_app.agent import imaging
 from my_llm_app.agent import prompts
 from my_llm_app.agent.guard import check_decision, is_ambiguous
 from my_llm_app.agent.quotes import normalize, quote_in_text
-from my_llm_app.agent.state import (DOMINANCE_RATIO, MAX_CANDIDATES, MAX_IMAGE_CHECKS, MAX_REF_DEPTH,
+from my_llm_app.agent.state import (DOMINANCE_RATIO, MAX_CANDIDATES, MAX_IMAGE_CHECKS, MAX_IMAGE_FETCHES,
+                                    MAX_REF_DEPTH,
                                     PAGES_PER_READ, REFS_PER_PAGE, WANTED_IMAGES, AgentState,
                                     Candidate, PageRead, Source)
 from my_llm_app.config import Settings
 from my_llm_app.llm import LLM
-from my_llm_app.tiers import by_tier, tier_of
+from my_llm_app.tiers import by_tier, canonical, tier_of
 from my_llm_app.tools import fetch, images, searxng, wikimedia
 
 # LLM に渡す本文の長さの上限（文字数）。長いページは先頭から
@@ -130,10 +132,18 @@ class Nodes:
             # 利用者が答えていないのに LLM が対象を決めた。依頼文に根拠となる語句がなければ認めない（推測を防ぐ）
             errors.append(f"target rejected: evidence={update.get('target_evidence', '')!r}")
             target = None
+        subject = update.get("specific_subject", "").strip()
+        if (not target and not state.get("target") and not state.get("clarifications") and subject
+                and evidence_ok(update.get("specific_evidence", ""), state["request"], subject)):
+            # 依頼文の条件（所属・型番など）で、検索結果の対象が 1 つに決まった。同名の別の意味は聞き返さない
+            same = [c for c in candidates if normalize(c["label"]) == normalize(subject)]
+            target = same[0] if same else {"id": "", "label": subject,
+                                           "description": update["specific_evidence"].strip(), "sitelinks": 0}
+            candidates = [target]
         assumptions = state.get("assumptions", [])
         if not target and (primary := dominant(candidates)):
             target = primary
-        if target and not state.get("target") and not state.get("clarifications"):
+        if target and not state.get("target") and not state.get("clarifications") and not subject:
             # 利用者に確かめずに対象を決めた場合は、その判断を前提として報告に書く
             assumptions = assumptions + [assumption_text(target, candidates,
                                                          by_dominance=target == dominant(candidates))]
@@ -185,14 +195,17 @@ class Nodes:
             if not state.get("tier1_searched"):
                 # Tier 1（公的機関・大学）のページを狙って探す。横の展開なのでプログラムが行う（設計書 6.3）
                 name = current["label"] if current else query
+                names_for_match = [name] + list(names)
                 for site in TIER1_SITES:
                     try:
                         found = searxng.web_search(self.settings.searxng_url, f"{name} site:{site}", limit=5)
                     except Exception as e:  # noqa: BLE001
                         errors.append(f"searxng({site}): {e}")
                         continue
-                    urls += [w.url for w in found.results if not fetch.is_unreadable(w.url)]
-                    pages.update({w.url: w.title for w in found.results if w.url not in pages})
+                    # site: 検索は対象と関係ないページも返すので、題名・抜粋に対象の名前があるものだけを読む
+                    hits = [w for w in found.results if mentions(f"{w.title} {w.snippet}", names_for_match)]
+                    urls += [w.url for w in hits if not fetch.is_unreadable(w.url)]
+                    pages.update({w.url: w.title for w in hits if w.url not in pages})
                     result["unresponsive"] = sorted(set(result["unresponsive"] + found.unresponsive))
                 result["tier1_searched"] = True
             # 上の Tier から読む。Tier 5（転載・まとめ）は読まない
@@ -228,9 +241,13 @@ class Nodes:
             log.info("subject_type: %s -> aspects %s", subject_type, [a["name"] for a in aspects])
             state = {**state, **extra}
 
-        done = {p["url"] for p in state.get("pages_read", [])}
-        queue = list(dict.fromkeys(state.get("priority_urls", []) + state.get("reading_list", [])))
-        urls = [u for u in queue if u not in done][:PAGES_PER_READ]
+        done = {canonical(p["url"]) for p in state.get("pages_read", [])}
+        queue = by_tier(state.get("priority_urls", [])) + state.get("reading_list", [])
+        urls = []
+        for u in queue:
+            if canonical(u) not in done and canonical(u) not in {canonical(x) for x in urls}:
+                urls.append(u)
+        urls = urls[:PAGES_PER_READ]
         started = time.perf_counter()
         with ThreadPoolExecutor(max_workers=2) as pool:   # LLM 側の同時実行数の上限と合わせる
             results = list(pool.map(lambda u: self._read_one(state, u), urls))
@@ -292,7 +309,9 @@ class Nodes:
         facts, dropped = [], []
         for f in out.get("facts", []):
             # 引用が本文に実在するものだけを認める（設計書 M-4）
-            if quote_in_text(f.get("quote", ""), text):
+            if f.get("about", prompts.ABOUT_TARGET) != prompts.ABOUT_TARGET:
+                dropped.append({**f, "dropped": "対象そのものについての記述ではない"})
+            elif quote_in_text(f.get("quote", ""), text):
                 aspect = f.get("aspect") if f.get("aspect") in names else cov.OTHER_ASPECT
                 facts.append({"text": f["text"], "quote": f["quote"], "aspect": aspect, "source": url})
             else:
@@ -357,10 +376,19 @@ class Nodes:
         ranked = imaging.rank(candidates, [name])
         log_rows: list[dict] = []
         accepted: list[dict] = []
+        # 先に画像を取りに行き（プログラム。速い）、使える大きさのものだけを LLM で確かめる（遅い）。
+        # 取れない・小さすぎる候補で、確かめる回数（MAX_IMAGE_CHECKS）を使い切らないように
+        usable: list[tuple[images.ImageCandidate, images.FetchedImage]] = []
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for c, fetched in zip(ranked[:MAX_IMAGE_FETCHES], pool.map(lambda c: images.fetch_image(c.src), ranked[:MAX_IMAGE_FETCHES])):
+                if fetched.ok:
+                    usable.append((c, fetched))
+                else:
+                    log_rows.append({**self._image_row(c), "level": imaging.REJECTED, "reason": fetched.reason})
         with ThreadPoolExecutor(max_workers=2) as pool:
-            for start in range(0, min(len(ranked), MAX_IMAGE_CHECKS), 2):
-                batch = ranked[start:min(start + 2, MAX_IMAGE_CHECKS)]
-                for row in pool.map(lambda c: self._check_image(state, c), batch):
+            for start in range(0, min(len(usable), MAX_IMAGE_CHECKS), 2):
+                batch = usable[start:min(start + 2, MAX_IMAGE_CHECKS)]
+                for row in pool.map(lambda cf: self._check_image(state, *cf), batch):
                     log_rows.append(row)
                     if row["level"] != imaging.REJECTED:
                         accepted.append(row)
@@ -380,17 +408,18 @@ class Nodes:
             "trace": [{"node": "find_images", "counts": counts, "checked": log_rows}],
         }
 
-    def _check_image(self, state: AgentState, c: images.ImageCandidate) -> dict:
-        row = {"src": c.src, "page_url": c.page_url, "stage": c.stage, "title": c.title,
-               "license": c.license, "tier": tier_of(c.page_url)}
+    @staticmethod
+    def _image_row(c: images.ImageCandidate) -> dict:
+        return {"src": c.src, "page_url": c.page_url, "stage": c.stage, "title": c.title,
+                "license": c.license, "tier": tier_of(c.page_url)}
+
+    def _check_image(self, state: AgentState, c: images.ImageCandidate, fetched: images.FetchedImage) -> dict:
+        row = self._image_row(c)
         if not row["license"] and images.is_wikimedia_file(c.src):
             try:
                 row["license"] = images.commons_license(c.src)   # Wikimedia の画像なら利用条件を取りに行く
             except Exception:  # noqa: BLE001 - 取れなければ「不明」と書く
                 pass
-        fetched = images.fetch_image(c.src)
-        if not fetched.ok:
-            return {**row, "level": imaging.REJECTED, "reason": fetched.reason}
         out = self.llm.chat_json(prompts.IMAGE_SYSTEM, prompts.image_user(state, c.title, c.caption, c.page_url),
                                  prompts.IMAGE_SCHEMA, image_data_url=fetched.data_url)
         level = imaging.judge(row["tier"], True, out.get("context", "low"), out.get("visual", "unknown"))
@@ -442,8 +471,20 @@ class Nodes:
 
     def respond(self, state: AgentState) -> dict:
         sources = collect_sources(state)
-        body = self.llm.chat_text(prompts.RESPOND_SYSTEM, prompts.respond_user(state, sources))
-        parts = [strip_program_sections(body).strip()]
+        materials = prompts.respond_user(state, sources)
+        body = strip_program_sections(self.llm.chat_text(prompts.RESPOND_SYSTEM, materials))
+        if bad := unsupported_names(body, materials):
+            # 材料にない名前（読みから作った英語名など）を書いた → 1 回だけ書き直させ、それでも残る文は除く
+            log.info("respond: unsupported names %s -> retry", bad)
+            retry = materials + ("\n\n注意: 前の回答に、材料にない名前・表記（" + "、".join(bad)
+                                 + "）がありました。材料にある表記だけを使って書き直してください。")
+            body = strip_program_sections(self.llm.chat_text(prompts.RESPOND_SYSTEM, retry))
+            if bad := unsupported_names(body, materials):
+                body = drop_sentences_with(body, bad)
+        parts = [body.strip()]
+        if infeasible := (state.get("feasibility") or {}).get("infeasible_parts"):
+            parts.append("\n### 調べられなかったこと（公開情報では調べられないため）\n"
+                         + "\n".join(f"- {x}" for x in infeasible))
         # 食い違いと確認できなかった観点は、プログラムが書く（LLM に書かせない）
         if state.get("conflicts"):
             number = {s["url"]: i for i, s in enumerate(sources, 1)}
@@ -468,7 +509,7 @@ class Nodes:
 
 
 # プログラムが付ける節の見出し。LLM が本文に同じ節を書いたら取り除く（同じ内容が二重に出ないように）
-_PROGRAM_SECTIONS = ("食い違い", "確認できなかった", "わからなかった", "出典", "参考", "画像")
+_PROGRAM_SECTIONS = ("食い違い", "確認できなかった", "調べられなかった", "わからなかった", "出典", "参考", "画像")
 
 
 def _heading_text(line: str) -> str | None:
@@ -491,6 +532,37 @@ def strip_program_sections(body: str) -> str:
         if not skipping:
             out.append(line)
     return "\n".join(out)
+
+
+# 名前らしい表記: 大文字で始まる英字の語、「・」でつないだカタカナ（人名など）
+_LATIN_NAME = re.compile(r"[A-Z][A-Za-zÀ-ÿ]{2,}")
+_KATAKANA_NAME = re.compile(r"[ァ-ヴー]+(?:・[ァ-ヴー]+)+")
+
+
+def unsupported_names(body: str, materials: str) -> list[str]:
+    # 本文にある名前らしい表記のうち、材料（LLM に渡したもの）にないもの。読みから作った英語名などを見つける
+    m = normalize(materials).lower()
+    found = set(_LATIN_NAME.findall(body)) | set(_KATAKANA_NAME.findall(body))
+    return sorted(t for t in found if normalize(t).lower() not in m)
+
+
+def drop_sentences_with(body: str, words: list[str]) -> str:
+    # 指定の表記を含む文を除く（見出しは残す）
+    pieces = re.split(r"(?<=[。\n])", body)
+    return "".join(p for p in pieces if p.lstrip().startswith("#") or not any(w in p for w in words))
+
+
+def mentions(text: str, names: list[str]) -> bool:
+    # 文に対象の名前が出てくるか。型番のように数字を含む語は、その語だけで一致とみなす
+    t = normalize(text).lower()
+    for name in names:
+        n = normalize(name).lower()
+        if len(n) >= 2 and n in t:
+            return True
+        words = [normalize(w).lower() for w in re.split(r"[\s・]+", name)]
+        if any(len(w) >= 3 and re.search(r"\d", w) and w in t for w in words):
+            return True
+    return False
 
 
 # 依頼文によく出る決まり文句（対象を絞り込む根拠にならない）
