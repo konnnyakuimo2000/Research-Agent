@@ -15,14 +15,16 @@ from concurrent.futures import ThreadPoolExecutor
 from langgraph.types import interrupt
 
 from my_llm_app.agent import coverage as cov
+from my_llm_app.agent import imaging
 from my_llm_app.agent import prompts
 from my_llm_app.agent.guard import check_decision, is_ambiguous
 from my_llm_app.agent.quotes import normalize, quote_in_text
-from my_llm_app.agent.state import DOMINANCE_RATIO, PAGES_PER_READ, AgentState, Candidate, PageRead, Source
+from my_llm_app.agent.state import (DOMINANCE_RATIO, MAX_CANDIDATES, MAX_IMAGE_CHECKS, PAGES_PER_READ,
+                                    WANTED_IMAGES, AgentState, Candidate, PageRead, Source)
 from my_llm_app.config import Settings
 from my_llm_app.llm import LLM
 from my_llm_app.tiers import by_tier, tier_of
-from my_llm_app.tools import fetch, searxng, wikimedia
+from my_llm_app.tools import fetch, images, searxng, wikimedia
 
 # LLM に渡す本文の長さの上限（文字数）。長いページは先頭から
 MAX_PAGE_CHARS = 8000
@@ -47,7 +49,8 @@ class Nodes:
             "suggestions": out.get("suggestions", []),
         }
         log.info("feasibility: %s (%s)", feasibility["verdict"], feasibility["reason"])
-        return {"feasibility": feasibility, "trace": [{"node": "check_feasibility", "llm": out}]}
+        return {"feasibility": feasibility, "wants_images": imaging.wants_images(state["request"]),
+                "trace": [{"node": "check_feasibility", "llm": out}]}
 
     def report_infeasible(self, state: AgentState) -> dict:
         """調べられない依頼を、探し回らずに正直に申告する（設計書 9.2 の形）。文面はプログラムが作る。"""
@@ -100,6 +103,11 @@ class Nodes:
         # 名前と説明は Wikidata の実データで埋める（LLM の書き写し間違い・作り話の防止）
         valid_ids = list(dict.fromkeys([e.id for e in entities] + [c["id"] for c in state.get("candidates", [])]))
         chosen = [i for i in update.get("candidate_ids", []) if i in valid_ids]
+        if not state.get("target"):
+            # 名前が完全に一致した項目は、LLM が選ばなくても同名の候補に入れる（横の網羅はプログラム）。
+            # LLM は「マーキュリー」と表記された項目だけを選び、英語名 Mercury で一致する水星を落とすことがある
+            exact = {normalize(n).lower() for n in names}
+            chosen = list(dict.fromkeys(chosen + [e.id for e in entities if normalize(e.matched).lower() in exact]))
         target_id = update.get("target_id", "")
         target_id = target_id if target_id in valid_ids else ""
         try:
@@ -107,7 +115,8 @@ class Nodes:
         except Exception as e:  # noqa: BLE001
             errors.append(f"wikidata(get): {e}")
             info = {e.id: e for e in entities}
-        candidates = rank([as_candidate(info[i]) for i in chosen if i in info]) or state.get("candidates", [])
+        candidates = rank([as_candidate(info[i]) for i in chosen if i in info])[:MAX_CANDIDATES] \
+            or state.get("candidates", [])
         target = state.get("target") or (as_candidate(info[target_id]) if target_id in info else None)
         if (target and not state.get("target") and not state.get("clarifications") and len(candidates) >= 2
                 and target != dominant(candidates)
@@ -213,12 +222,14 @@ class Nodes:
 
         pages = dict(state.get("pages", {}))
         verified = list(state.get("verified", []))
+        page_imgs = list(state.get("page_images", []))
         reads: list[PageRead] = []
         traces = []
         for page, facts, dropped in results:
             if page.ok and page.title:
                 pages.setdefault(page.url, page.title)
             verified += facts
+            page_imgs += [{**im, "page_url": page.url, "title": page.title} for im in page.images]
             reads.append({"url": page.url, "ok": page.ok, "reason": page.reason,
                           "extracted": len(facts) + len(dropped), "verified": len(facts)})
             traces.append({"url": page.url, "ok": page.ok, "reason": page.reason,
@@ -230,6 +241,7 @@ class Nodes:
             **extra,
             "pages_read": state.get("pages_read", []) + reads,
             "verified": verified,
+            "page_images": page_imgs,
             "coverage": coverage,
             "pages": pages,
             "trace": [{"node": "read_pages", "pages": traces, "coverage": coverage}],
@@ -273,6 +285,77 @@ class Nodes:
         return {"conflicts": conflicts, "conflicts_checked": True,
                 "trace": [{"node": "check_conflicts", "aspects": list(groups), "llm": outs,
                            "conflicts": conflicts}]}
+
+    def find_images(self, state: AgentState) -> dict:
+        """画像の候補を複数の方法で集め（横・プログラム）、1 枚ずつ確かめる（縦・LLM）。設計書 8 章。"""
+        target = state.get("target") or {}
+        name = target.get("label") or state.get("request", "")
+        started = time.perf_counter()
+        candidates: list[images.ImageCandidate] = []
+        counts: dict[str, int] = {}
+        failures: list[str] = []
+
+        def gather(stage: str, fn):
+            try:
+                found = fn()
+            except Exception as e:  # noqa: BLE001 - 1 つの方法が使えなくても他の方法で続ける
+                found = []
+                failures.append(f"画像の候補集め（{stage}）に失敗した（{type(e).__name__}）")
+            counts[stage] = len(found)
+            candidates.extend(found)
+
+        if target.get("id"):
+            gather("L2-Wikidata", lambda: images.wikidata_image(target["id"], name))
+        gather("L2-Commons", lambda: images.commons_search(name))
+        gather("L1-画像検索", lambda: images.searxng_images(self.settings.searxng_url, name))
+        gather("L4-ページ内", lambda: [
+            images.ImageCandidate(src=im["src"], page_url=im["page_url"], stage="L4-ページ内",
+                                  title=im.get("title", ""), caption=f"{im.get('alt', '')} {im.get('caption', '')}".strip())
+            for im in state.get("page_images", [])])
+
+        ranked = imaging.rank(candidates, [name])
+        log_rows: list[dict] = []
+        accepted: list[dict] = []
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            for start in range(0, min(len(ranked), MAX_IMAGE_CHECKS), 2):
+                batch = ranked[start:min(start + 2, MAX_IMAGE_CHECKS)]
+                for row in pool.map(lambda c: self._check_image(state, c), batch):
+                    log_rows.append(row)
+                    if row["level"] != imaging.REJECTED:
+                        accepted.append(row)
+                if sum(r["level"] == imaging.CONFIRMED for r in accepted) >= WANTED_IMAGES:
+                    break
+
+        order = {imaging.CONFIRMED: 0, imaging.PROBABLE: 1}
+        accepted.sort(key=lambda r: order[r["level"]])
+        log.info("find_images: %d candidates %s -> checked %d, accepted %d (%.1fs)", len(ranked), counts,
+                 len(log_rows), len(accepted), time.perf_counter() - started)
+        return {
+            "images_checked": True,
+            "images": accepted[:3],
+            "image_log": log_rows,
+            "image_counts": counts,
+            "failures": list(dict.fromkeys(state.get("failures", []) + failures)),
+            "trace": [{"node": "find_images", "counts": counts, "checked": log_rows}],
+        }
+
+    def _check_image(self, state: AgentState, c: images.ImageCandidate) -> dict:
+        row = {"src": c.src, "page_url": c.page_url, "stage": c.stage, "title": c.title,
+               "license": c.license, "tier": tier_of(c.page_url)}
+        if not row["license"] and images.is_wikimedia_file(c.src):
+            try:
+                row["license"] = images.commons_license(c.src)   # Wikimedia の画像なら利用条件を取りに行く
+            except Exception:  # noqa: BLE001 - 取れなければ「不明」と書く
+                pass
+        fetched = images.fetch_image(c.src)
+        if not fetched.ok:
+            return {**row, "level": imaging.REJECTED, "reason": fetched.reason}
+        out = self.llm.chat_json(prompts.IMAGE_SYSTEM, prompts.image_user(state, c.title, c.caption, c.page_url),
+                                 prompts.IMAGE_SCHEMA, image_data_url=fetched.data_url)
+        level = imaging.judge(row["tier"], True, out.get("context", "low"), out.get("visual", "unknown"))
+        return {**row, "level": level, "context": out.get("context"), "visual": out.get("visual"),
+                "description": out.get("description", ""), "reason": out.get("reason", ""),
+                "size": f"{fetched.width}×{fetched.height}"}
 
     def ask_user(self, state: AgentState) -> dict:
         question = state["decision"]["question"]
@@ -326,6 +409,8 @@ class Nodes:
             parts.append("\n### 出典どうしの食い違い\n" + "\n".join(lines))
         if gaps := cov.gaps_text(state.get("coverage", [])):
             parts.append("\n### 確認できなかったこと\n" + gaps)
+        if state.get("images_checked"):
+            parts.append("\n" + images_section(state))
         if state.get("failures"):
             parts.append("\n※ 調査中に使えなかったもの（その分、調べ尽くせていない可能性があります）:\n"
                          + "\n".join(f"- {f}" for f in state["failures"]))
@@ -388,6 +473,28 @@ def pick_candidate(answer: str, candidates: list[Candidate]) -> Candidate | None
     if digits.isdigit() and 1 <= int(digits) <= len(candidates):
         return candidates[int(digits) - 1]
     return None
+
+
+def images_section(state: AgentState) -> str:
+    """報告の「画像」（設計書 9.1, 9.2）。採用した画像と、見つからなかった場合の申告をプログラムが書く。"""
+    lines = ["### 画像"]
+    for img in state.get("images", []):
+        note = "" if img["level"] == imaging.CONFIRMED else "（確認しきれていません）"
+        lines += [f"![{img.get('description', '')}]({img['src']})",
+                  f"- 確信度: {img['level']}{note}",
+                  f"- 写っているもの: {img.get('description', '')}",
+                  f"- 出典: {img.get('title') or img['page_url']} — {img['page_url']}（Tier {img['tier']}）",
+                  f"- ライセンス: {img.get('license') or '不明（掲載ページで確認してください）'}", ""]
+    if not state.get("images"):
+        counts = state.get("image_counts", {})
+        checked = state.get("image_log", [])
+        reasons = list(dict.fromkeys(r.get("reason", "") for r in checked if r.get("reason")))[:3]
+        lines += ["対象の画像として確認できるものは見つかりませんでした。",
+                  "- 試したこと: " + "、".join(f"{k} {v} 件" for k, v in counts.items())
+                  + f" の候補から {len(checked)} 件を確かめ、採用 0 件",
+                  "- 主な不採用の理由: " + ("／".join(reasons) if reasons else "候補がなかった"),
+                  "- 次にできること: 対象の公式サイトや所蔵機関に問い合わせる。お持ちの画像があれば、それが対象かを確認できます"]
+    return "\n".join(lines).rstrip()
 
 
 def collect_sources(state: AgentState) -> list[Source]:

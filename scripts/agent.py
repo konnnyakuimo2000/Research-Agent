@@ -16,7 +16,6 @@ import logging
 import sys
 import time
 import uuid
-from pathlib import Path
 
 from langgraph.types import Command
 
@@ -40,6 +39,13 @@ def summarize(node: str, update: dict) -> str:
         if f["infeasible_parts"]:
             s += f"\n   調べられない部分: {f['infeasible_parts']}"
         return s
+    if node == "find_images":
+        lines = [f"   候補: {update['image_counts']}"]
+        for r in update["image_log"]:
+            detail = f"{r.get('context', '-')}/{r.get('visual', '-')} {r.get('description', '')}"
+            lines.append(f"     {r['level']:<7} T{r['tier']} {r['stage']:<10} {detail} | {r.get('reason', '')}"
+                         f" | {r['src'][:70]}")
+        return "\n".join(lines)
     if node == "check_conflicts":
         lines = [f"   食い違い: {len(update['conflicts'])} 件"]
         for c in update["conflicts"]:

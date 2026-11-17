@@ -63,3 +63,24 @@ def test_respond_reports_failures():
     out = Nodes(SETTINGS, TextLLM()).respond({"request": "水星", "failures": ["Web 検索（SearXNG）に接続できなかった"]})
     assert "調査中に使えなかったもの" in out["answer"]
     assert "SearXNG）に接続できなかった" in out["answer"]
+
+
+def test_exact_name_matches_are_added_to_candidates():
+    # LLM が「マーキュリー」表記の項目だけを選んでも、英語名 Mercury で一致した水星などは候補に入れる
+    ford = Entity("Q613883", "マーキュリー", "自動車ブランド", 60, matched="Mercury")
+    planet = Entity("Q308", "水星", "太陽系第一惑星", 274, matched="Mercury")
+    prefix = Entity("Q165745", "マーキュリー・レコード", "レーベル", 40, matched="Mercury Records")
+
+    class LLMPicksOnlyFord:
+        def chat_json(self, system, user, schema, temperature=0.2):
+            return {"known": [], "unknown": [], "candidate_ids": ["Q613883"], "target_id": "", "target_evidence": ""}
+
+    state = {"request": "マーキュリーについて調べて",
+             "decision": {"action": "search", "query": "マーキュリー", "names": ["マーキュリー", "Mercury"]}}
+    info = {e.id: e for e in (ford, planet, prefix)}
+    with patch("my_llm_app.agent.nodes.wikimedia.search_entities", return_value=[ford, planet, prefix]), \
+         patch("my_llm_app.agent.nodes.wikimedia.get_entities",
+               side_effect=lambda ids: {i: info[i] for i in ids}), \
+         patch("my_llm_app.agent.nodes.searxng.web_search", return_value=WEB):
+        out = Nodes(SETTINGS, LLMPicksOnlyFord()).search(state)
+    assert [c["id"] for c in out["candidates"]] == ["Q308", "Q613883"]     # 有名な順。前方一致だけのものは入れない

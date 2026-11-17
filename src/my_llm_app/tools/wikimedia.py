@@ -19,6 +19,7 @@ class Entity:
     label: str
     description: str
     sitelinks: int = 0   # 記事がある Wikipedia などの数（どれだけ一般的に知られているかの目安）
+    matched: str = ""    # 検索で一致した名前（ラベルまたは別名。例: 水星は英語名「Mercury」で一致する）
 
     @property
     def url(self) -> str:
@@ -55,6 +56,7 @@ def search_entities(query: str, languages: tuple[str, ...] = ("ja", "en"), limit
                     id=item["id"],
                     label=item.get("label", ""),
                     description=item.get("description", ""),
+                    matched=item.get("match", {}).get("text", ""),
                 )
     return list(seen.values())
 

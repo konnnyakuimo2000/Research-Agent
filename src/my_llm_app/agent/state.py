@@ -5,7 +5,7 @@ from __future__ import annotations
 import operator
 from typing import Annotated, Literal, TypedDict
 
-Action = Literal["search", "ask_user", "read_pages", "check_conflicts", "respond"]
+Action = Literal["search", "ask_user", "read_pages", "check_conflicts", "find_images", "respond"]
 
 # 上限（設計書 5.2 Q-4、10.3）
 MAX_QUESTIONS = 2   # 利用者への質問は最大 2 往復
@@ -15,6 +15,8 @@ PAGES_PER_READ = 4  # 1 回の read_pages で読むページ数
 MAX_PAGES = 12      # 1 回の調査で読むページの合計
 MAX_WEB_FAILURES = 2  # Web 検索の失敗がこの回数続いたら、それ以上検索しない
 MAX_ASPECT_SEARCHES = 2  # 埋まっていない観点を狙った検索の上限（設計書 10.1 R-1）
+MAX_IMAGE_CHECKS = 6     # 1 回の調査で確かめる画像候補の上限（1 枚ごとに LLM を呼ぶため）
+WANTED_IMAGES = 2        # 確認済みの画像がこの枚数そろったら、それ以上確かめない
 # 候補の 1 位の sitelinks（記事がある言語版などの数）が 2 位のこの倍数以上なら、
 # 一般にはその意味を指すとみなし、聞き返さずに前提を明示して進める（例: 富士山）
 DOMINANCE_RATIO = 4
@@ -91,6 +93,12 @@ class AgentState(TypedDict, total=False):
     aspect_searched: list[str]        # 埋まっていない観点を狙って検索した観点
     conflicts: list[Conflict]         # 出典どうしの食い違い（設計書 7.4 T-3）
     conflicts_checked: bool           # 食い違いを調べたか（応答の前に 1 回だけ）
+    wants_images: bool                # 依頼が画像を求めているか
+    page_images: list[dict]           # 読んだページに載っていた画像（L4 の候補）
+    images_checked: bool              # 画像を探したか（応答の前に 1 回だけ）
+    images: list[dict]                # 採用した画像（確認済み・おそらく正しい）
+    image_log: list[dict]             # 確かめた候補と判定（不採用の理由も残す。申告に使う）
+    image_counts: dict[str, int]      # 段階ごとの候補数（申告に使う）
     unknown: list[str]                # わからないこと
     candidates: list[Candidate]       # 同名の候補
     target: Candidate | None          # 特定できた対象

@@ -55,9 +55,13 @@ class LLM:
             return r.choices[0].message.content or ""
         raise RuntimeError("unreachable")
 
-    def chat_json(self, system: str, user: str, schema: dict, temperature: float = 0.2) -> dict:
-        """JSON スキーマに沿った出力を返す。壊れた JSON なら 1 回だけやり直す。"""
-        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    def chat_json(self, system: str, user: str, schema: dict, temperature: float = 0.2,
+                  image_data_url: str | None = None) -> dict:
+        """JSON スキーマに沿った出力を返す。壊れた JSON なら 1 回だけやり直す。画像を 1 枚添えられる。"""
+        content: str | list = user
+        if image_data_url:
+            content = [{"type": "text", "text": user}, {"type": "image_url", "image_url": {"url": image_data_url}}]
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": content}]
         response_format = {"type": "json_schema", "json_schema": {"name": "output", "schema": schema}}
         last_error: Exception | None = None
         for _ in range(2):

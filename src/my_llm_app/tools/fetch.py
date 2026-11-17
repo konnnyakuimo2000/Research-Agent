@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
 import httpx
 import trafilatura
 
 from my_llm_app.config import USER_AGENT
 from my_llm_app.tiers import EXCLUDED_TIER, tier_of
+from my_llm_app.tools.images import page_images
 
 MAX_BYTES = 3_000_000
 
@@ -19,6 +21,7 @@ class Page:
     text: str = ""
     ok: bool = False
     reason: str = ""     # 取得できなかった理由（申告と実行記録のため）
+    images: list[dict] = field(default_factory=list)   # ページ内の画像（src・alt・キャプション。L4）
 
 
 def is_skipped_domain(url: str) -> bool:
@@ -47,4 +50,4 @@ def fetch_page(url: str, timeout: float = 20.0) -> Page:
     title = (meta.title if meta and meta.title else "") or url
     if len(text) < 100:
         return Page(url, title=title, reason="本文が取り出せない")
-    return Page(url, title=title, text=text, ok=True)
+    return Page(url, title=title, text=text, ok=True, images=page_images(r.text, str(r.url)))

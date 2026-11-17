@@ -207,6 +207,45 @@ def conflict_user(aspect: str, facts: list[dict]) -> str:
     }, ensure_ascii=False, indent=1)
 
 
+IMAGE_SYSTEM = """あなたは、1 枚の画像が調査対象を写したものかを確かめる役です。
+画像と、その画像が載っているページの情報（タイトル・キャプション・alt）、対象についてわかっている事実を見て判定する。
+
+- context: 掲載ページの情報が、この画像が対象そのものを写したものだと示しているか
+  - high: タイトル・キャプション・alt に対象の名前があり、対象そのものの画像だと明確に読める
+  - mid: 対象に関係するページだが、この画像が対象そのものかは文脈だけでは確実でない
+  - low: 文脈が対象と関係ない、または別のもの（同名の別の対象・関連する別の物）を示している
+- visual: 画像の内容が、対象の説明・事実と合うか
+  - consistent: 合う（矛盾がない）  - contradict: 明らかに合わない（別の種類の物が写っている等）  - unknown: 判断できない
+- 画像だけで対象を特定しようとしない。マイナーな対象は見た目だけでは区別できないので、文脈（context）を重視する
+- 地図・図表・関係のない人物写真などは、対象そのものの画像ではない（context は low か mid）
+- ロゴは、対象が組織・会社・ブランド・製品のときは対象を表す画像として認めてよい。それ以外の対象では対象そのものの画像ではない
+- description には画像に写っているものを 40 文字以内で書く。reason は 40 文字以内"""
+
+IMAGE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "context": {"type": "string", "enum": ["high", "mid", "low"]},
+        "visual": {"type": "string", "enum": ["consistent", "contradict", "unknown"]},
+        "description": {"type": "string"},
+        "reason": {"type": "string"},
+    },
+    "required": ["context", "visual", "description", "reason"],
+}
+
+
+def image_user(state: AgentState, title: str, caption: str, page_url: str) -> str:
+    target = state.get("target")
+    facts = [f["text"] for f in state.get("verified", [])][:6]
+    return json.dumps({
+        "調査対象": f"{target['label']}（{target['description']}）" if target else state.get("request", ""),
+        "対象の種類": state.get("subject_type", ""),
+        "対象についての事実": facts,
+        "掲載ページ": page_url,
+        "タイトル": title,
+        "キャプション・alt・説明": caption,
+    }, ensure_ascii=False, indent=1)
+
+
 RESPOND_SYSTEM = """あなたは調査結果を利用者に伝える役です。
 与えられた材料（対象の概要・確認できた事実）だけを使って、日本語で答えます。
 
@@ -223,7 +262,8 @@ RESPOND_SYSTEM = """あなたは調査結果を利用者に伝える役です。
 - 「出典どうしの食い違い」にある内容は、どちらか一方だけを書かず、両方の値を出典番号付きで併記し、
   「出典によって〜と〜で食い違っている」と書く（食い違いの一覧はプログラムも付ける）
 - 確認できなかった観点の一覧はプログラムが付けるので、「わからなかったこと」は書かない
-- 出典一覧そのものは書かない（プログラムが付ける）"""
+- 出典一覧そのものは書かない（プログラムが付ける）
+- 画像についてはプログラムが別に書くので、本文では触れない"""
 
 
 def _state_view(state: AgentState) -> dict:
