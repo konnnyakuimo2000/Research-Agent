@@ -11,3 +11,9 @@ search:
   formats:
     - html
     - json                # Open WebUI からの検索に必須（ないと 403）
+
+# 既定の一般検索（brave / duckduckgo / google cse）は、アクセスが続くと一時的に止められる
+# （too many requests・CAPTCHA）。負荷を分けるため bing も使う
+engines:
+  - name: bing
+    disabled: false
