@@ -45,6 +45,12 @@ def summarize(node: str, update: dict) -> str:
         for p in update["pages_read"][-len(update["trace"][0]["pages"]):]:
             status = f"事実 {p['verified']}/{p['extracted']} 件を照合" if p["ok"] else p["reason"]
             lines.append(f"   - {p['url'][:80]}  {status}")
+        if update.get("subject_type"):
+            lines.insert(0, f"   対象の種類: {update['subject_type']}")
+        lines.append("   網羅表:")
+        for r in update.get("coverage", []):
+            tier = f"Tier {r['best_tier']}" if r["best_tier"] else "-"
+            lines.append(f"     {r['status']:<5} {r['aspect']}（事実 {r['facts']} 件, 出典 {len(r['sources'])}, {tier}）")
         return "\n".join(lines)
     if node == "search":
         lines = ["   わかったこと:"]

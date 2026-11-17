@@ -1,0 +1,111 @@
+# 観点チェックリスト（設計書 6.1）
+#
+# 対象の種類ごとに「何を調べれば調べたことになるか」を決めておく。
+# LLM には対象の種類だけを選ばせ、観点はプログラムがここから展開する（観点の抜け・ぶれを防ぐ）。
+#
+# description: 対象の種類の説明（LLM が種類を選ぶときに見る）
+# name:  観点の名前（網羅表の行になる）
+# words: その観点を探すときに検索に付け足す言葉
+
+[[types]]
+name = "人物"
+description = "実在または歴史上の個人（研究者・政治家・芸術家など）"
+aspects = [
+  { name = "氏名・別名", words = "プロフィール" },
+  { name = "生年・出身", words = "生年 出身" },
+  { name = "所属・役職", words = "所属 役職" },
+  { name = "経歴", words = "経歴" },
+  { name = "業績", words = "業績 研究" },
+]
+
+[[types]]
+name = "場所・建造物"
+description = "人が作った・人が名付けた場所や建物（都市・学校・寺社・橋・塔・遺跡など）"
+aspects = [
+  { name = "名称・別名", words = "名称 由来" },
+  { name = "所在地", words = "所在地" },
+  { name = "建設・成立", words = "建設 歴史" },
+  { name = "主な出来事", words = "沿革" },
+  { name = "現状", words = "現在" },
+  { name = "外観・特徴", words = "特徴" },
+]
+
+[[types]]
+name = "自然物"
+description = "ずっと存在し続ける自然のもの（天体・山・川・湖・海・地形など）。地震・噴火・台風などの「起きたこと」は含まない"
+aspects = [
+  { name = "名称・由来", words = "名前 由来" },
+  { name = "位置・分布", words = "位置" },
+  { name = "大きさ・規模", words = "大きさ 規模" },
+  { name = "特徴・性質", words = "特徴" },
+  { name = "成り立ち", words = "成因 形成" },
+  { name = "調査・観測", words = "観測 調査" },
+]
+
+[[types]]
+name = "生物"
+description = "動物・植物・菌類などの種や分類群"
+aspects = [
+  { name = "名称・学名", words = "学名" },
+  { name = "分類", words = "分類" },
+  { name = "分布・生息地", words = "分布 生息地" },
+  { name = "形態の特徴", words = "特徴 形態" },
+  { name = "生態", words = "生態" },
+  { name = "似た種との違い", words = "見分け方" },
+]
+
+[[types]]
+name = "製品・機械"
+description = "メーカーが作った製品・機械・乗り物（カメラ・車種・家電・ゲーム機など）"
+aspects = [
+  { name = "正式名・型番", words = "型番" },
+  { name = "メーカー", words = "メーカー" },
+  { name = "発売年", words = "発売" },
+  { name = "仕様", words = "仕様 スペック" },
+  { name = "兄弟機種との違い", words = "違い" },
+  { name = "外観の特徴", words = "外観" },
+]
+
+[[types]]
+name = "出来事"
+description = "ある日時に起きたこと（地震・噴火・台風などの災害、事件、事故、戦争、大会、選挙など）"
+aspects = [
+  { name = "日時", words = "日時" },
+  { name = "場所", words = "場所" },
+  { name = "規模", words = "規模" },
+  { name = "経緯・原因", words = "原因 経緯" },
+  { name = "被害・影響", words = "被害 影響" },
+  { name = "その後の対応", words = "対応 支援" },
+]
+
+[[types]]
+name = "組織"
+description = "会社・大学・団体・政府機関・チームなど"
+aspects = [
+  { name = "名称・旧称", words = "旧称" },
+  { name = "設立", words = "設立" },
+  { name = "所在地", words = "所在地" },
+  { name = "活動内容", words = "事業 活動" },
+  { name = "沿革", words = "沿革" },
+]
+
+[[types]]
+name = "技術・概念"
+description = "プログラミング言語・ソフトウェア・理論・手法・学問分野など、形のない知識や技術"
+aspects = [
+  { name = "定義・概要", words = "とは" },
+  { name = "起源・開発者", words = "開発 歴史" },
+  { name = "仕組み・特徴", words = "特徴 仕組み" },
+  { name = "用途・応用", words = "用途" },
+  { name = "歴史・版", words = "バージョン 歴史" },
+]
+
+[[types]]
+name = "その他"
+description = "上のどれにも当てはまらないもの"
+aspects = [
+  { name = "概要", words = "概要" },
+  { name = "歴史", words = "歴史" },
+  { name = "特徴", words = "特徴" },
+  { name = "現状", words = "現在" },
+]

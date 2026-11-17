@@ -9,11 +9,12 @@ Action = Literal["search", "ask_user", "read_pages", "respond"]
 
 # 上限（設計書 5.2 Q-4、10.3）
 MAX_QUESTIONS = 2   # 利用者への質問は最大 2 往復
-MAX_STEPS = 8       # 行動の選択は最大 8 回
+MAX_STEPS = 12      # 行動の選択は最大 12 回
 MAX_CANDIDATES = 8  # 同名の候補は最大 8 件（すべて質問の選択肢に出す）
 PAGES_PER_READ = 4  # 1 回の read_pages で読むページ数
-MAX_PAGES = 8       # 1 回の調査で読むページの合計
+MAX_PAGES = 12      # 1 回の調査で読むページの合計
 MAX_WEB_FAILURES = 2  # Web 検索の失敗がこの回数続いたら、それ以上検索しない
+MAX_ASPECT_SEARCHES = 2  # 埋まっていない観点を狙った検索の上限（設計書 10.1 R-1）
 # 候補の 1 位の sitelinks（記事がある言語版などの数）が 2 位のこの倍数以上なら、
 # 一般にはその意味を指すとみなし、聞き返さずに前提を明示して進める（例: 富士山）
 DOMINANCE_RATIO = 4
@@ -39,6 +40,7 @@ class Fact(TypedDict):
 
 class VerifiedFact(TypedDict):
     text: str          # 事実（短い文）
+    aspect: str        # 観点（観点チェックリストの名前。どれにも当たらなければ「その他」）
     quote: str         # 根拠となる本文の一節（本文に実在することをプログラムで確認済み）
     source: str        # ページの URL
 
@@ -57,6 +59,7 @@ class Decision(TypedDict, total=False):
     query: str         # search のとき: Web 検索の言葉
     names: list[str]   # search のとき: Wikidata で引く名前（原語・別名を含む）
     question: str      # ask_user のとき
+    aspect: str        # search のとき: 埋まっていない観点を狙った検索なら、その観点
     guard: str         # プログラムが LLM の選択を変えた場合の理由
 
 
@@ -76,6 +79,10 @@ class AgentState(TypedDict, total=False):
     tier1_searched: bool              # Tier 1（公的機関・大学）を狙った検索をしたか
     pages_read: list[PageRead]        # 読んだ（読もうとした）ページ
     verified: list[VerifiedFact]      # ページ本文から抜き出し、引用を照合できた事実（回答はこれだけで書く）
+    subject_type: str                 # 対象の種類（観点チェックリストを選ぶため）
+    aspects: list[dict]               # 調べる観点（観点チェックリストから展開）
+    coverage: list[dict]              # 網羅表（観点ごとの出典数・Tier・状態。プログラムが集計）
+    aspect_searched: list[str]        # 埋まっていない観点を狙って検索した観点
     unknown: list[str]                # わからないこと
     candidates: list[Candidate]       # 同名の候補
     target: Candidate | None          # 特定できた対象

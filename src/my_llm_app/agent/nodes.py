@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from langgraph.types import interrupt
 
+from my_llm_app.agent import coverage as cov
 from my_llm_app.agent import prompts
 from my_llm_app.agent.guard import check_decision, is_ambiguous
 from my_llm_app.agent.quotes import normalize, quote_in_text
@@ -137,6 +138,7 @@ class Nodes:
             "target": target,
             "assumptions": assumptions,
             "searched": state.get("searched", []) + [query],
+            "aspect_searched": state.get("aspect_searched", []) + ([decision["aspect"]] if decision.get("aspect") else []),
             "unresponsive": sorted(set(state.get("unresponsive", []) + web.unresponsive)),
             "pages": pages,
             # 使えなかった道具は記録して、報告で申告する（調べ尽くしていないのに調べたように見せない。設計書 G-6）
@@ -191,6 +193,18 @@ class Nodes:
 
     def read_pages(self, state: AgentState) -> dict:
         """ページを 1 つずつ読み、引用付きで事実を抜き出し、引用を本文と照合する（縦の調査）。"""
+        extra: dict = {}
+        if not state.get("aspects"):
+            # 対象の種類だけを LLM に選ばせ、調べる観点はプログラムがチェックリストから展開する（設計書 6.1）
+            out = self.llm.chat_json(prompts.CLASSIFY_SYSTEM, prompts.classify_user(state, cov.type_descriptions()),
+                                     prompts.classify_schema(cov.type_names()))
+            subject_type = out.get("subject_type", cov.OTHER_TYPE)
+            aspects = cov.aspects_for(subject_type)
+            extra = {"subject_type": subject_type, "aspects": aspects,
+                     "coverage": cov.build_coverage(aspects, state.get("verified", []))}
+            log.info("subject_type: %s -> aspects %s", subject_type, [a["name"] for a in aspects])
+            state = {**state, **extra}
+
         done = {p["url"] for p in state.get("pages_read", [])}
         urls = [u for u in state.get("reading_list", []) if u not in done][:PAGES_PER_READ]
         started = time.perf_counter()
@@ -211,11 +225,14 @@ class Nodes:
                            "verified": facts, "dropped": dropped})
         log.info("read_pages: %d pages -> verified %d facts (%.1fs)", len(urls),
                  sum(r["verified"] for r in reads), time.perf_counter() - started)
+        coverage = cov.build_coverage(state["aspects"], verified)
         return {
+            **extra,
             "pages_read": state.get("pages_read", []) + reads,
             "verified": verified,
+            "coverage": coverage,
             "pages": pages,
-            "trace": [{"node": "read_pages", "pages": traces}],
+            "trace": [{"node": "read_pages", "pages": traces, "coverage": coverage}],
         }
 
     def _read_one(self, state: AgentState, url: str):
@@ -223,13 +240,15 @@ class Nodes:
         if not page.ok:
             return page, [], []
         text = page.text[:MAX_PAGE_CHARS]
+        names = [a["name"] for a in state.get("aspects", [])]
         out = self.llm.chat_json(prompts.EXTRACT_SYSTEM, prompts.extract_user(state, page.title, text),
-                                 prompts.EXTRACT_SCHEMA)
+                                 prompts.extract_schema(names))
         facts, dropped = [], []
         for f in out.get("facts", []):
             # 引用が本文に実在するものだけを認める（設計書 M-4）
             if quote_in_text(f.get("quote", ""), text):
-                facts.append({"text": f["text"], "quote": f["quote"], "source": url})
+                aspect = f.get("aspect") if f.get("aspect") in names else cov.OTHER_ASPECT
+                facts.append({"text": f["text"], "quote": f["quote"], "aspect": aspect, "source": url})
             else:
                 dropped.append(f)
         return page, facts, dropped
@@ -277,6 +296,9 @@ class Nodes:
         sources = collect_sources(state)
         body = self.llm.chat_text(prompts.RESPOND_SYSTEM, prompts.respond_user(state, sources))
         parts = [body.strip()]
+        # 確認できなかった観点は、網羅表からプログラムが書く（LLM に書かせない）
+        if gaps := cov.gaps_text(state.get("coverage", [])):
+            parts.append("\n### 確認できなかったこと\n" + gaps)
         if state.get("failures"):
             parts.append("\n※ 調査中に使えなかったもの（その分、調べ尽くせていない可能性があります）:\n"
                          + "\n".join(f"- {f}" for f in state["failures"]))

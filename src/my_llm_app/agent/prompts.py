@@ -118,6 +118,25 @@ def match_user(question: str, answer: str, candidates: list) -> str:
     }, ensure_ascii=False, indent=1)
 
 
+CLASSIFY_SYSTEM = """調査対象の種類を、選択肢から 1 つ選ぶ役です。
+対象の名前・説明・概要と、各種類の説明を見て判断する。どれにも当てはまらなければ「その他」を選ぶ。"""
+
+
+def classify_schema(type_names: list[str]) -> dict:
+    return {"type": "object", "properties": {"subject_type": {"type": "string", "enum": type_names}},
+            "required": ["subject_type"]}
+
+
+def classify_user(state: AgentState, type_descriptions: dict[str, str]) -> str:
+    target = state.get("target")
+    return json.dumps({
+        "種類の選択肢": type_descriptions,
+        "依頼": state.get("request", ""),
+        "調査対象": f"{target['label']}（{target['description']}）" if target else state.get("request", ""),
+        "概要": state.get("target_summary", "")[:300],
+    }, ensure_ascii=False, indent=1)
+
+
 EXTRACT_SYSTEM = """あなたは、1 つのページの本文を読んで、調査に関係する事実を抜き出す役です。
 
 - 依頼と調査対象に関係する事実だけを、重要なものから最大 6 件抜き出す
@@ -126,19 +145,23 @@ EXTRACT_SYSTEM = """あなたは、1 つのページの本文を読んで、調�
   要約・言い換え・語順の変更・省略をしない。quote が本文にない事実はプログラムが捨てる
 - 本文に書かれていないことは書かない。数値・日付・時刻は、本文の表記（時差の注記など）に注意して正確に写す
 - 調査対象と別のもの（同名の別の対象など）についての記述は抜き出さない
+- aspect には、その事実が当てはまる観点を「調べる観点」から 1 つ選ぶ。どれにも当てはまらなければ「その他」
+- 「調べる観点」のうち、まだ事実がない観点についての記述を優先して抜き出す
 - 関係する事実がなければ facts は空にする"""
 
-EXTRACT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "facts": {"type": "array", "maxItems": 6, "items": {
-            "type": "object",
-            "properties": {"text": {"type": "string"}, "quote": {"type": "string"}},
-            "required": ["text", "quote"],
-        }},
-    },
-    "required": ["facts"],
-}
+def extract_schema(aspect_names: list[str]) -> dict:
+    return {
+        "type": "object",
+        "properties": {
+            "facts": {"type": "array", "maxItems": 6, "items": {
+                "type": "object",
+                "properties": {"text": {"type": "string"}, "quote": {"type": "string"},
+                               "aspect": {"type": "string", "enum": aspect_names + ["その他"]}},
+                "required": ["text", "quote", "aspect"],
+            }},
+        },
+        "required": ["facts"],
+    }
 
 
 def extract_user(state: AgentState, title: str, text: str) -> str:
@@ -146,6 +169,8 @@ def extract_user(state: AgentState, title: str, text: str) -> str:
     return json.dumps({
         "依頼": state.get("request", ""),
         "調査対象": f"{target['label']}（{target['description']}）" if target else state.get("request", ""),
+        "調べる観点": [a["name"] for a in state.get("aspects", [])],
+        "まだ事実がない観点": [r["aspect"] for r in state.get("coverage", []) if r["facts"] == 0],
         "ページのタイトル": title,
         "ページの本文": text,
     }, ensure_ascii=False, indent=1)
@@ -163,7 +188,8 @@ RESPOND_SYSTEM = """あなたは調査結果を利用者に伝える役です。
 - 対象が特定できていない場合は、冒頭でそのことと、置いた前提を正直に書く
 - 対象が特定できている場合は、その対象についてだけ書く。同名の別の意味の説明は書かない
 - 「公開情報では調べられない部分」がある場合は、最後に「調べられなかったこと」としてその部分と理由を書く
-- わからなかったことがあれば、最後に「わからなかったこと」として書く
+- 確認できた事実は観点ごとに整理し、観点の名前を小見出しにする（事実のない観点は書かない）
+- 確認できなかった観点の一覧はプログラムが付けるので、「わからなかったこと」は書かない
 - 出典一覧そのものは書かない（プログラムが付ける）"""
 
 
@@ -208,7 +234,12 @@ def respond_user(state: AgentState, sources: list[dict]) -> str:
         low = "（出典の信頼度: 低）" if tier.get(k["source"], 4) >= 3 else ""
         return f"{k['text']} [{number[k['source']]}]{low}"
 
-    facts = [fact(k) for k in state.get("verified", []) if k["source"] in number]
+    # 観点ごとにまとめて渡す（観点チェックリストの順。どれにも当たらない事実は「その他」）
+    order = [a["name"] for a in state.get("aspects", [])] + ["その他"]
+    facts: dict[str, list[str]] = {}
+    for k in sorted((k for k in state.get("verified", []) if k["source"] in number),
+                    key=lambda k: order.index(k.get("aspect")) if k.get("aspect") in order else len(order)):
+        facts.setdefault(k.get("aspect") or "その他", []).append(fact(k))
     return json.dumps({
         "依頼": state.get("request", ""),
         "利用者の回答": state.get("clarifications", []),
@@ -216,6 +247,6 @@ def respond_user(state: AgentState, sources: list[dict]) -> str:
         "置いた前提": state.get("assumptions", []),
         "公開情報では調べられない部分": (state.get("feasibility") or {}).get("infeasible_parts", []),
         "対象の概要": f"{summary} [{number[summary_url]}]" if summary and summary_url in number else "",
-        "確認できた事実": facts,
+        "確認できた事実（観点ごと）": facts,
         "わからないこと": state.get("unknown", []),
     }, ensure_ascii=False, indent=1)

@@ -6,8 +6,9 @@
 
 from __future__ import annotations
 
-from my_llm_app.agent.state import (MAX_CANDIDATES, MAX_PAGES, MAX_QUESTIONS, MAX_STEPS, MAX_WEB_FAILURES,
-                                    AgentState, Decision)
+from my_llm_app.agent.coverage import unfilled
+from my_llm_app.agent.state import (MAX_ASPECT_SEARCHES, MAX_CANDIDATES, MAX_PAGES, MAX_QUESTIONS, MAX_STEPS,
+                                    MAX_WEB_FAILURES, AgentState, Decision)
 
 
 def build_question(state: AgentState) -> str:
@@ -49,8 +50,23 @@ def check_decision(state: AgentState, decision: Decision) -> Decision:
         # 応答の前に、ページ本文を読んで事実を確かめる（検索結果の要約だけでは答えない。設計書 G-1）
         read = [p["url"] for p in state.get("pages_read", [])]
         unread = [u for u in state.get("reading_list", []) if u not in read]
-        if unread and len(read) < MAX_PAGES and (not read or not state.get("verified")):
-            return {**d, "action": "read_pages", "guard": "応答の前に、ページ本文を読んで事実を確かめる"}
+        missing = unfilled(state.get("coverage", []))
+        if unread and len(read) < MAX_PAGES and (not read or not state.get("verified") or missing):
+            reason = ("網羅表に埋まっていない観点があるため、さらにページを読む" if read and missing
+                      else "応答の前に、ページ本文を読んで事実を確かめる")
+            return {**d, "action": "read_pages", "guard": reason}
+        if missing and not unread and state.get("web_failures_in_row", 0) < MAX_WEB_FAILURES:
+            # 読むページが尽きても埋まらない観点は、その観点の言葉で検索し直す（横の再帰 R-1。プログラムが決める）
+            searched = state.get("aspect_searched", [])
+            todo = [r["aspect"] for r in missing if r["aspect"] not in searched]
+            if todo and len(searched) < MAX_ASPECT_SEARCHES:
+                aspect = todo[0]
+                words = next((a["words"] for a in state.get("aspects", []) if a["name"] == aspect), aspect)
+                name = (state.get("target") or {}).get("label") or state.get("request", "")
+                query = f"{name} {words}"
+                if query not in state.get("searched", []):
+                    return {**d, "action": "search", "query": query, "names": [name], "aspect": aspect,
+                            "guard": f"観点「{aspect}」が埋まっていないため、その観点で検索する"}
 
     if action == "respond" and is_ambiguous(state) and asked < MAX_QUESTIONS:
         # 例 A のパターン 2（適当な対象で答える・全部を平たく述べる）を防ぐ

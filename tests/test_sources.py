@@ -29,10 +29,11 @@ def test_collect_sources_orders_summary_first_without_duplicates():
 def test_respond_input_uses_only_verified_facts_with_their_own_numbers():
     data = json.loads(respond_user(STATE, collect_sources(STATE)))
     assert data["対象の概要"].endswith("[1]")
+    # 観点が付いていない事実は「その他」にまとまる。
     # example.com は Tier 4（一般のサイト）なので「信頼度: 低」の印が付く。Wikipedia（Tier 2）には付かない
-    assert data["確認できた事実"] == [
+    assert data["確認できた事実（観点ごと）"] == {"その他": [
         "直径は約 4,880 km [2]（出典の信頼度: 低）",
         "公転周期は 88 日 [1]",
         "表面はクレーターに覆われている [2]（出典の信頼度: 低）",
-    ]
+    ]}
     assert "要約だけの記述" not in json.dumps(data, ensure_ascii=False)
