@@ -221,3 +221,30 @@ def test_by_tier_merges_url_spelling_variants():
     urls = ["https://www.sw.it.aoyama.ac.jp/D%C3%BCrst/", "https://www.sw.it.aoyama.ac.jp/D%c3%bcrst/",
             "https://www.sw.it.aoyama.ac.jp/D%C3%BCrst/#top"]
     assert by_tier(urls) == ["https://www.sw.it.aoyama.ac.jp/D%C3%BCrst/"]
+
+
+def test_image_rank_matches_names_across_spellings():
+    other = ImageCandidate("https://up/ee2.jpg", "https://ja.wikipedia.org/wiki/x", "L4-ページ内", caption="ペン EE-2")
+    mine = ImageCandidate("https://up/Olympus_pen_ee3.jpg", "https://commons.wikimedia.org/wiki/File:Olympus_pen_ee3.jpg",
+                          "L2-Commons", title="File:Olympus pen ee3.jpg")
+    assert imaging.rank([other, mine], ["Olympus PEN EE-3"])[0] is mine
+
+
+def test_unrelated_results_are_not_read_once_target_is_known():
+    web = WebSearchResponse([WebResult("Martin J. Dürst の研究室", "https://www.sw.it.aoyama.ac.jp/D%C3%BCrst/", "", []),
+                             WebResult("洋服の青山 公式通販", "https://www.y-aoyama.jp/ec/shop/", "スーツ", [])])
+    target = {"id": "", "label": "Martin J. Dürst", "description": "教授", "sitelinks": 0}
+    state = {"request": "青山学院大学のマーティン先生", "target": target, "candidates": [target], "tier1_searched": True,
+             "decision": {"action": "search", "query": "マーティン 経歴", "names": ["Martin J. Dürst"],
+                          "aspect": "経歴"}}
+
+    class LLM:
+        def chat_json(self, system, user, schema, temperature=0.2):
+            return {"known": [], "unknown": [], "candidate_ids": [], "target_id": "", "target_evidence": "",
+                    "specific_subject": "", "specific_evidence": ""}
+    with patch("my_llm_app.agent.nodes.wikimedia.search_entities", return_value=[]), \
+         patch("my_llm_app.agent.nodes.wikimedia.get_entities", return_value={}), \
+         patch("my_llm_app.agent.nodes.searxng.web_search", return_value=web):
+        out = Nodes(SETTINGS, LLM()).search(state)
+    assert out["reading_list"] == ["https://www.sw.it.aoyama.ac.jp/D%C3%BCrst/"]
+    assert out["priority_urls"] == ["https://www.sw.it.aoyama.ac.jp/D%C3%BCrst/"]

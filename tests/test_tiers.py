@@ -41,7 +41,7 @@ def fake_search(base_url, query, limit=8):
                                   WebResult("防衛省の装備品", "https://www.mod.go.jp/equipment", "", [])])
     if "site:ac.jp" in query:
         return WebSearchResponse([WebResult("大学", "https://www.example.ac.jp/mercury", "水星の観測", [])])
-    return WebSearchResponse([WebResult("ブログ", "https://blog.example.com/m", "", []),
+    return WebSearchResponse([WebResult("ブログ: 水星の話", "https://blog.example.com/m", "", []),
                               WebResult("まとめ", "https://ja.postposmo.com/m", "", [])])
 
 

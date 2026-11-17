@@ -21,7 +21,7 @@ COMMONS_API = "https://commons.wikimedia.org/w/api.php"
 WIKIDATA_API = "https://www.wikidata.org/w/api.php"
 _HEADERS = {"User-Agent": USER_AGENT}
 
-MIN_SIDE = 200            # これより小さい画像はアイコン・サムネイルとみなして使わない（V-5）
+MIN_SIDE = 100            # これより小さい画像はアイコンとみなして使わない（V-5）。研究者の顔写真は 120 px 程度のことがある
 MAX_BYTES = 8_000_000
 VLM_MAX_SIDE = 768        # LLM に渡すときに縮小する大きさ（入力トークンを抑える）
 _SKIP_WORDS = ("icon", "icn", "logo", "sprite", "banner", "bnr", "button", "btn", "spacer", "blank", "avatar",

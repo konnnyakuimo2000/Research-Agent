@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+import unicodedata
+
 from my_llm_app.tiers import EXCLUDED_TIER, tier_of
 from my_llm_app.tools.images import ImageCandidate, image_key
 
@@ -35,6 +38,11 @@ def judge(page_tier: int, fetched_ok: bool, context: str, visual: str) -> str:
     return REJECTED
 
 
+def _squash(text: str) -> str:
+    # 大文字小文字・全角半角・記号・空白の違いを無視して比べるための形
+    return re.sub(r"[\W_]+", "", unicodedata.normalize("NFKC", text)).lower()
+
+
 def rank(candidates: list[ImageCandidate], names: list[str]) -> list[ImageCandidate]:
     """確かめる順番を決める（横の仕事）。Tier 5 と重複を除き、
     Wikidata の代表画像 → 掲載ページの Tier が高い順 → 説明に対象の名前がある順 → 段階の順。"""
@@ -47,9 +55,12 @@ def rank(candidates: list[ImageCandidate], names: list[str]) -> list[ImageCandid
         seen.add(key)
         kept.append(c)
 
+    squashed = [_squash(n) for n in names if _squash(n)]
+
     def key(c: ImageCandidate):
-        text = f"{c.title} {c.caption}"
-        named = any(n and n in text for n in names)
+        # 「File:Olympus pen ee3.jpg」と「Olympus PEN EE-3」のような表記の違いは無視して、名前があるかを見る
+        text = _squash(f"{c.title} {c.caption} {c.src.rsplit('/', 1)[-1]}")
+        named = any(n in text for n in squashed)
         return (c.stage != "L2-Wikidata", tier_of(c.page_url), not named, _STAGE_ORDER.get(c.stage, 9))
 
     return sorted(kept, key=key)

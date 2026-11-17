@@ -191,11 +191,15 @@ class Nodes:
         # 曖昧なまま集めた結果は、別の対象のページが混ざるので使わない
         if not is_ambiguous({**state, **result}):
             first = [result["summary_url"]] if result.get("summary_url") else []
-            urls = first + [w.url for w in web.results if not fetch.is_unreadable(w.url)]
+            # 対象が決まっていれば、題名・抜粋に対象の名前がある結果だけを読む（観点の言葉で無関係なページが混ざるため）
+            names_for_match = [current["label"]] + list(names) if current else []
+            relevant = [w for w in web.results
+                        if not current or mentions(f"{w.title} {w.snippet}", names_for_match)]
+            urls = first + [w.url for w in relevant if not fetch.is_unreadable(w.url)]
             if not state.get("tier1_searched"):
                 # Tier 1（公的機関・大学）のページを狙って探す。横の展開なのでプログラムが行う（設計書 6.3）
                 name = current["label"] if current else query
-                names_for_match = [name] + list(names)
+                names_for_match = names_for_match or [name] + list(names)
                 for site in TIER1_SITES:
                     try:
                         found = searxng.web_search(self.settings.searxng_url, f"{name} site:{site}", limit=5)
@@ -214,7 +218,7 @@ class Nodes:
                 # 観点や食い違いを狙って探したページは、他より先に読む（R-1, R-6）
                 read = {p["url"] for p in state.get("pages_read", [])}
                 result["priority_urls"] = by_tier(state.get("priority_urls", [])
-                                                  + [w.url for w in web.results
+                                                  + [w.url for w in relevant
                                                      if w.url not in read and not fetch.is_unreadable(w.url)])
 
         log.info("search: %r names=%s -> wikidata %d, web %d (%.1fs)", query, names, len(entities),
