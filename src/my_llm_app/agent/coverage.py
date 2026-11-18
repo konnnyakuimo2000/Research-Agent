@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
 from functools import lru_cache
 from typing import TypedDict
@@ -53,10 +54,53 @@ def type_descriptions() -> dict[str, str]:
         return {t["name"]: t.get("description", "") for t in tomllib.load(f)["types"]}
 
 
+def type_guides() -> dict[str, dict]:
+    """種類の名前 → 説明とお手本の観点（LLM が観点を作るときに見せる）。"""
+    return {name: {"説明": desc, "お手本の観点": [a["name"] for a in _types()[name]]}
+            for name, desc in type_descriptions().items()}
+
+
 def aspects_for(subject_type: str) -> list[Aspect]:
     """対象の種類の観点。知らない種類なら「その他」の観点を使う。"""
     types = _types()
     return list(types.get(subject_type) or types[OTHER_TYPE])
+
+
+MIN_ASPECTS = 3
+MAX_ASPECTS = 8
+MAX_NAME_LEN = 20
+MAX_WORDS_LEN = 30
+
+
+MAX_WORDS = 3
+
+
+def _clean_words(words: str) -> str:
+    """検索に付け足す言葉を整える。数字を含む語（年・数値の推測）は捨て、3 語までにする。"""
+    tokens = [w for w in re.split(r"[,、，\s]+", words) if w and not re.search(r"\d", w)]
+    return " ".join(tokens[:MAX_WORDS])[:MAX_WORDS_LEN]
+
+
+def make_aspects(raw: list[dict] | None, subject_type: str) -> tuple[list[Aspect], str]:
+    """LLM が作った観点を確かめて網羅表の行にする。使えなければ種類のチェックリストに戻す。
+
+    戻り値は (観点, 出どころ)。出どころは "LLM" か "チェックリスト"。
+    名前が空・長すぎる・重複・「その他」のものは捨てる。残りが MIN_ASPECTS 未満ならチェックリストを使う。
+    """
+    aspects: list[Aspect] = []
+    seen: set[str] = set()
+    for a in raw or []:
+        if not isinstance(a, dict):
+            continue
+        name = str(a.get("name", "")).strip()
+        words = _clean_words(str(a.get("words", ""))) or name
+        if not name or len(name) > MAX_NAME_LEN or name == OTHER_ASPECT or name in seen:
+            continue
+        seen.add(name)
+        aspects.append({"name": name, "words": words})
+    if len(aspects) < MIN_ASPECTS:
+        return aspects_for(subject_type), "チェックリスト"
+    return aspects[:MAX_ASPECTS], "LLM"
 
 
 def _host(url: str) -> str:

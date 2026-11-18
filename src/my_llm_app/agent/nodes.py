@@ -235,14 +235,17 @@ class Nodes:
         """ページを 1 つずつ読み、引用付きで事実を抜き出し、引用を本文と照合する（縦の調査）。"""
         extra: dict = {}
         if not state.get("aspects"):
-            # 対象の種類だけを LLM に選ばせ、調べる観点はプログラムがチェックリストから展開する（設計書 6.1）
-            out = self.llm.chat_json(prompts.CLASSIFY_SYSTEM, prompts.classify_user(state, cov.type_descriptions()),
+            # 観点は LLM が依頼に合わせて作る（種類のチェックリストがお手本）。
+            # 確かめるのはプログラム。使えない出力ならチェックリストに戻す（設計書 6.1）
+            out = self.llm.chat_json(prompts.CLASSIFY_SYSTEM, prompts.classify_user(state, cov.type_guides()),
                                      prompts.classify_schema(cov.type_names()))
-            subject_type = out.get("subject_type", cov.OTHER_TYPE)
-            aspects = cov.aspects_for(subject_type)
-            extra = {"subject_type": subject_type, "aspects": aspects,
+            subject_type = out.get("subject_type")
+            if subject_type not in cov.type_names():
+                subject_type = cov.OTHER_TYPE
+            aspects, origin = cov.make_aspects(out.get("aspects"), subject_type)
+            extra = {"subject_type": subject_type, "aspects": aspects, "aspects_origin": origin,
                      "coverage": cov.build_coverage(aspects, state.get("verified", []))}
-            log.info("subject_type: %s -> aspects %s", subject_type, [a["name"] for a in aspects])
+            log.info("subject_type: %s -> aspects (%s) %s", subject_type, origin, [a["name"] for a in aspects])
             state = {**state, **extra}
 
         done = {canonical(p["url"]) for p in state.get("pages_read", [])}

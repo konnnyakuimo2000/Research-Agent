@@ -129,20 +129,34 @@ def match_user(question: str, answer: str, candidates: list) -> str:
     }, ensure_ascii=False, indent=1)
 
 
-CLASSIFY_SYSTEM = """調査対象の種類を、選択肢から 1 つ選ぶ役です。
-対象の名前・説明・概要と、各種類の説明を見て判断する。どれにも当てはまらなければ「その他」を選ぶ。"""
+CLASSIFY_SYSTEM = """調査対象の種類を選び、この依頼で調べる観点（網羅表の行）を作る役です。
+
+1. subject_type: 対象の名前・説明・概要と、各種類の説明を見て 1 つ選ぶ。どれにも当てはまらなければ「その他」。
+2. aspects: この対象・この依頼について「何を調べれば調べたことになるか」を 3〜8 個挙げる。
+   - 選んだ種類の「お手本の観点」を土台にする。この対象に意味のない観点は外し、依頼で特に聞かれていることや、
+     この対象ならではの大事な観点があれば足す（例: 依頼が「外観の写真付きで」なら外観の観点を入れる）。
+   - name: 観点の名前。短く（20 字以内）。観点どうしが重ならないようにする。「その他」は使わない。
+   - words: その観点のページを探すとき、検索語に付け足す言葉（1〜3 語、空白区切り）。
+     「経歴」「仕様」「建設費」のような一般的な言葉だけにする。年・数値・機種名・人名など、
+     まだ確かめていない事実の推測は入れない（推測が外れると検索結果がゆがむ）。
+   - 画像そのものは観点にしない（画像は別の仕組みで探す）。"""
 
 
 def classify_schema(type_names: list[str]) -> dict:
-    return {"type": "object", "properties": {"subject_type": {"type": "string", "enum": type_names}},
-            "required": ["subject_type"]}
+    aspect = {"type": "object", "properties": {"name": {"type": "string"}, "words": {"type": "string"}},
+              "required": ["name", "words"]}
+    return {"type": "object", "properties": {
+        "subject_type": {"type": "string", "enum": type_names},
+        "aspects": {"type": "array", "items": aspect},
+    }, "required": ["subject_type", "aspects"]}
 
 
-def classify_user(state: AgentState, type_descriptions: dict[str, str]) -> str:
+def classify_user(state: AgentState, types: dict[str, dict]) -> str:
     target = state.get("target")
     return json.dumps({
-        "種類の選択肢": type_descriptions,
+        "種類の選択肢とお手本の観点": types,
         "依頼": state.get("request", ""),
+        "利用者の補足": state.get("clarifications", []),
         "調査対象": f"{target['label']}（{target['description']}）" if target else state.get("request", ""),
         "概要": state.get("target_summary", "")[:300],
     }, ensure_ascii=False, indent=1)

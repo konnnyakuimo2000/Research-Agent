@@ -49,7 +49,9 @@ def describe(node: str, update: dict) -> str:
         facts = sum(p["verified"] for p in ok)
         lines = [f"  - {len(pages)} ページ中 {len(ok)} ページを読み、本文と照合できた事実 {facts} 件"]
         if update.get("subject_type"):
-            lines.insert(0, f"  - 対象の種類: {update['subject_type']}")
+            names = "、".join(a["name"] for a in update.get("aspects", []))
+            origin = update.get("aspects_origin", "チェックリスト")
+            lines.insert(0, f"  - 対象の種類: {update['subject_type']}。調べる観点（{origin}が作成）: {names}")
         followed = update["trace"][0].get("followed", [])
         if followed:
             lines.append(f"  - 参考文献のリンクを {len(followed)} 件たどる")
