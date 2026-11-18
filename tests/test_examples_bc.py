@@ -203,6 +203,25 @@ def test_specific_request_sets_target_without_asking():
         != "ask_user"
 
 
+def test_specific_subject_must_be_written_in_results():
+    # 検索結果にない表記（LLM が作ったカタカナの読み）では対象を決めない
+    request = "青山学院大学の情報テクノロジー学科のマーティン先生について"
+    out = run_search(SpecificLLM("マーティン・ヤーコプ・デュルスト", "青山学院大学の情報テクノロジー学科の"), request)
+    assert out["target"] is None                                    # 書き直しても検索結果にない → 決めない
+    assert any("specific_subject rejected" in e for e in out["trace"][0]["errors"])
+
+
+def test_specific_subject_is_rewritten_from_results():
+    class FixLLM(SpecificLLM):
+        def chat_json(self, system, user, schema, temperature=0.2):
+            if "specific_subject" in schema["properties"] and len(schema["properties"]) == 1:
+                return {"specific_subject": "Martin J. Dürst"}        # 検索結果の題名から写した
+            return super().chat_json(system, user, schema, temperature)
+    request = "青山学院大学の情報テクノロジー学科のマーティン先生について"
+    out = run_search(FixLLM("マーティン・ヤーコプ・デュルスト", "青山学院大学の情報テクノロジー学科の"), request)
+    assert out["target"]["label"] == "Martin J. Dürst"
+
+
 def test_unspecific_request_still_asks():
     # 依頼文に絞り込む条件がない（根拠の語句が決まり文句だけ）→ 対象を決めない
     out = run_search(SpecificLLM("マーティン", "について"), "マーティンについて調べて")
@@ -215,6 +234,14 @@ def test_mentions_matches_names_and_model_numbers():
     assert mentions("OLYMPUS PEN EE-3 の使い方", ["オリンパス ペン EE-3"])
     assert mentions("Martin J. Dürst - 研究室", ["マーティン", "Martin J. Dürst"])
     assert not mentions("陸上自衛隊の装備品", ["オリンパス ペン EE-3"])
+
+
+def test_mentions_matches_reordered_latin_names_but_not_siblings():
+    # 大学の表記「DÜRST, Martin Jakob」と、授業ページの「Martin J. Dürst」
+    assert mentions("アルゴリズムとデータ構造 第1回 Martin J. Dürst", ["DÜRST, Martin Jakob"])
+    assert not mentions("Martin Luther King の生涯", ["DÜRST, Martin Jakob"])       # 1 語だけ
+    assert not mentions("Martinez Dürstenfeld", ["DÜRST, Martin Jakob"])            # 語の一部
+    assert not mentions("OLYMPUS PEN EE-2 の使い方", ["OLYMPUS PEN EE-3"])          # 兄弟機種
 
 
 def test_by_tier_merges_url_spelling_variants():

@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import unquote, urlparse
 
@@ -133,6 +134,16 @@ class Nodes:
             errors.append(f"target rejected: evidence={update.get('target_evidence', '')!r}")
             target = None
         subject = update.get("specific_subject", "").strip()
+        found_text = " ".join(f"{w.title} {w.snippet}" for w in web.results) + " " + " ".join(e.label for e in entities)
+        if subject and not mentions(found_text, [subject]):
+            # 名前は検索結果にある表記に限る。LLM が作った読み方・訳し方（例: 実在しないカタカナ表記）で
+            # 対象を決めると、その名前で検索し、その名前で読むページを絞ってしまう。1 回だけ書き直させる
+            errors.append(f"specific_subject not in results: {subject!r}")
+            fixed = self.llm.chat_json(prompts.SUBJECT_FIX_SYSTEM, prompts.subject_fix_user(subject, web.results),
+                                       prompts.SUBJECT_FIX_SCHEMA).get("specific_subject", "").strip()
+            subject = fixed if fixed and mentions(found_text, [fixed]) else ""
+            if not subject:
+                errors.append(f"specific_subject rejected: {fixed!r}")
         if (not target and not state.get("target") and not state.get("clarifications") and subject
                 and evidence_ok(update.get("specific_evidence", ""), state["request"], subject)):
             # 依頼文の条件（所属・型番など）で、検索結果の対象が 1 つに決まった。同名の別の意味は聞き返さない
@@ -566,8 +577,19 @@ def mentions(text: str, names: list[str]) -> bool:
         n = normalize(name).lower()
         if len(n) >= 2 and n in t:
             return True
-        words = [normalize(w).lower() for w in re.split(r"[\s・]+", name)]
-        if any(len(w) >= 3 and re.search(r"\d", w) and w in t for w in words):
+        words = [normalize(w).lower() for w in re.split(r"[\s・,，.]+", name)]
+        words = [w for w in words if len(w) >= 2]
+        model = [w for w in words if len(w) >= 3 and re.search(r"\d", w)]
+        if model:
+            if any(w in t for w in model):
+                return True
+            continue                          # 型番のある名前は型番で見る（兄弟機種を通さない）
+        # 「DÜRST, Martin Jakob」と「Martin J. Dürst」のように、語順や略し方が違う名前。
+        # 名前の語のうち 2 つ以上が出てくれば一致とみなす（ラテン文字の語だけ。語の境目で見る）
+        latin = [w for w in words if re.fullmatch(r"[a-zà-öø-ÿ]+", w)]
+        tl = unicodedata.normalize("NFKC", text).lower()
+        if len(latin) >= 2 and sum(bool(re.search(rf"(?<![a-zà-öø-ÿ]){w}(?![a-zà-öø-ÿ])", tl))
+                                   for w in latin) >= 2:
             return True
     return False
 

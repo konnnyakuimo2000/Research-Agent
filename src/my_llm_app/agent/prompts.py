@@ -129,6 +129,21 @@ def match_user(question: str, answer: str, candidates: list) -> str:
     }, ensure_ascii=False, indent=1)
 
 
+SUBJECT_FIX_SYSTEM = """調査対象の名前を、検索結果にある表記に直す役です。
+前に答えた名前は、検索結果のどこにも書かれていなかった。同じ対象を指す名前を、検索結果の題名か抜粋から
+1 文字も変えずにそのまま写す（読み方・訳し方・並べ替えをしない）。見つからなければ空文字にする。"""
+
+SUBJECT_FIX_SCHEMA = {"type": "object", "properties": {"specific_subject": {"type": "string"}},
+                      "required": ["specific_subject"]}
+
+
+def subject_fix_user(subject: str, results: list) -> str:
+    return json.dumps({
+        "前に答えた名前": subject,
+        "検索結果": [{"題名": w.title, "抜粋": w.snippet[:200]} for w in results],
+    }, ensure_ascii=False, indent=1)
+
+
 CLASSIFY_SYSTEM = """調査対象の種類を選び、この依頼で調べる観点（網羅表の行）を作る役です。
 
 1. subject_type: 対象の名前・説明・概要と、各種類の説明を見て 1 つ選ぶ。どれにも当てはまらなければ「その他」。
