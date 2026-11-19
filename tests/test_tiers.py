@@ -29,6 +29,19 @@ SETTINGS = Settings(llm_base_url="http://unused/v1", llm_model="m", llm_api_key=
 PLANET = Entity("Q308", "水星", "太陽系第一惑星", 274)
 
 
+def test_canonical_drops_tracking_parameters_and_session_ids():
+    from my_llm_app.tiers import UrlNumbers, by_tier, canonical
+    a = "https://one-scene.com/products/135?srsltid=AYCX9vLkou"
+    b = "https://one-scene.com/products/135?srsltid=AYCX9vJap6&utm_source=x"
+    assert canonical(a) == canonical(b) == canonical("https://one-scene.com/products/135")
+    assert canonical("https://x.jp/a?id=1&utm_medium=y") == "https://x.jp/a?id=1"         # 中身を変える引数は残す
+    assert canonical("https://x.jp/a?id=1") != canonical("https://x.jp/a?id=2")
+    assert canonical("https://r.ac.jp/KgApp/k03/resid/S1;jsessionid=ABC") == "https://r.ac.jp/KgApp/k03/resid/S1"
+    assert by_tier([a, b]) == [a]
+    n = UrlNumbers(["https://one-scene.com/products/135", "https://x.jp/a"])
+    assert n[b] == 1 and b in n and "https://other.jp/" not in n
+
+
 class FakeLLM:
     def chat_json(self, system, user, schema, temperature=0.2):
         return {"known": [], "unknown": [], "candidate_ids": ["Q308"], "target_id": "Q308", "target_evidence": ""}

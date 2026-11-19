@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from my_llm_app.agent.state import AgentState
+from my_llm_app.tiers import UrlNumbers
 
 FEASIBILITY_SYSTEM = """あなたは、調査の依頼が「公開されている情報（Web・百科事典・公的機関・論文など）」で調べられるかを、
 調査を始める前に判定する役です。
@@ -362,7 +363,7 @@ def update_user(state: AgentState, query: str, entities: list, web: list) -> str
 
 def respond_user(state: AgentState, sources: list[dict]) -> str:
     """sources は出典番号の順。わかったことには、プログラムが出典番号を付けて渡す。"""
-    number = {s["url"]: i for i, s in enumerate(sources, 1)}
+    number = UrlNumbers([s["url"] for s in sources])   # 表記が違うだけの同じページは同じ番号
     summary = state.get("target_summary", "")
     summary_url = state.get("summary_url", "")
     # 回答には、ページ本文で引用を照合できた事実だけを使う（検索結果の要約は使わない。設計書 G-1）

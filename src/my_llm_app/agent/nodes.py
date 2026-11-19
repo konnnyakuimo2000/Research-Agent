@@ -29,7 +29,7 @@ from my_llm_app.agent.state import (DOMINANCE_RATIO, MAX_CANDIDATES, MAX_IMAGE_C
                                     Candidate, PageRead, Source)
 from my_llm_app.config import Settings
 from my_llm_app.llm import LLM
-from my_llm_app.tiers import by_tier, canonical, tier_of
+from my_llm_app.tiers import UrlNumbers, by_tier, canonical, tier_of
 from my_llm_app.tools import fetch, images, searxng, wikimedia
 
 # LLM に渡す本文の長さの上限（文字数）。長いページは先頭から
@@ -526,7 +526,7 @@ class Nodes:
                          + "\n".join(f"- {x}" for x in infeasible))
         # 食い違いと確認できなかった観点は、プログラムが書く（LLM に書かせない）
         if state.get("conflicts"):
-            number = {s["url"]: i for i, s in enumerate(sources, 1)}
+            number = UrlNumbers([s["url"] for s in sources])
             lines = [f"- {c['aspect']}・{c['topic']}: "
                      + " / ".join(f"「{f['text']}」[{number[f['source']]}]" for f in c["facts"] if f["source"] in number)
                      for c in state["conflicts"]]
@@ -706,7 +706,11 @@ def collect_sources(state: AgentState) -> list[Source]:
     pages = state.get("pages", {})
     urls = [state["summary_url"]] if state.get("target_summary") and state.get("summary_url") else []
     urls += [k["source"] for k in state.get("verified", [])]
-    ordered = list(dict.fromkeys(urls))
+    # 表記が違うだけの同じページ（追跡用パラメータの違いなど）は 1 つの出典にする
+    by_key: dict[str, str] = {}
+    for u in urls:
+        by_key.setdefault(canonical(u), u)
+    ordered = list(by_key.values())
     return [{"title": pages.get(u, u), "url": u, "tier": tier_of(u)} for u in ordered]
 
 
