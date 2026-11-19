@@ -214,14 +214,20 @@ FUNCTIONS = {"orcid": orcid, "cinii": cinii, "inaturalist": inaturalist, "japan_
              "ndl": ndl, "ndl_creator": ndl_creator}
 
 
-def lookup(subject_type: str, name: str) -> tuple[list[Record], list[str]]:
-    """その種類のデータベースを順に引く。戻り値は (見つかった Record, 使えなかったデータベースと理由)。"""
+def lookup(subject_type: str, name: str) -> tuple[list[Record], list[str], list[str]]:
+    """その種類のデータベースを順に引く。
+
+    戻り値は (見つかった Record, 使えなかったデータベースと理由, 問い合わせたデータベースの名前)。
+    問い合わせた名前には、続けて引いたもの（iNaturalist の学名で引く GBIF）も入れる（報告で申告するため）。
+    """
     records: list[Record] = []
     failures: list[str] = []
+    used: list[str] = []
     for db in databases_for(subject_type):
         fn = FUNCTIONS.get(db["function"])
         if not fn:
             continue
+        used.append(db["name"])
         try:
             found = fn(name)
         except Exception as e:  # noqa: BLE001 - 1 つ使えなくても他を引く。使えなかったことは申告する
@@ -232,8 +238,9 @@ def lookup(subject_type: str, name: str) -> tuple[list[Record], list[str]]:
             # GBIF は学名で引く（和名では引けない）
             sci = next((ln.removeprefix("学名: ") for ln in found[0].text.splitlines() if ln.startswith("学名: ")), "")
             if sci:
+                used.append("GBIF")
                 try:
                     records += gbif(sci)
                 except Exception as e:  # noqa: BLE001
                     failures.append(f"GBIF（{type(e).__name__}）")
-    return records, failures
+    return records, failures, used

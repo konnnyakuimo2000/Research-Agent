@@ -24,6 +24,29 @@ _STAGE_ORDER = {"L2-Wikidata": 0, "L2-Commonsカテゴリ": 1, "L3-分野別デ�
 NO_IMAGE = re.compile(r"(画像|写真)(は|も)?(いら|不要|要らない|なし|無し|なくて|無くて)")
 
 
+# 権利者の許可なしには使えない利用条件（iNaturalist の「all rights reserved」、ジャパンサーチの「著作権あり」など）
+_NEEDS_PERMISSION = re.compile(r"all rights reserved|著作権あり|無断転載", re.IGNORECASE)
+
+
+def needs_permission(license_: str) -> bool:
+    """利用に権利者の許可が必要な画像か（利用条件が不明なものは含めない）。"""
+    return bool(_NEEDS_PERMISSION.search(license_ or ""))
+
+
+def choose_shown(accepted: list[dict], limit: int = 3) -> list[dict]:
+    """報告に載せる画像。自由に使える対象の画像があれば、許可が必要な画像は載せない。
+
+    自由に使える画像がなければ、許可が必要な画像も（そのことを書いて）載せる。載せなかった画像には withheld を付ける。
+    """
+    free = [r for r in accepted if not needs_permission(r.get("license", ""))]
+    if not any(r["level"] != REFERENCE for r in free):
+        return accepted[:limit]
+    for r in accepted:
+        if r not in free:
+            r["withheld"] = "利用に権利者の許可が必要なため、自由に使える画像を優先した"
+    return free[:limit]
+
+
 def asks_for_images(request: str) -> bool:
     """依頼がはっきり画像を求めているか（報告の書き方を変えるため）。"""
     return any(w in request for w in IMAGE_WORDS) and not NO_IMAGE.search(request)

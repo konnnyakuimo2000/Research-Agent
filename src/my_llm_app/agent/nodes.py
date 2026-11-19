@@ -377,9 +377,9 @@ class Nodes:
         name = state["target"]["label"]
         started = time.perf_counter()
         try:
-            records, failed = databases.lookup(state["subject_type"], name)
+            records, failed, used = databases.lookup(state["subject_type"], name)
         except Exception as e:  # noqa: BLE001
-            records, failed = [], [f"分野別データベース（{type(e).__name__}）"]
+            records, failed, used = [], [f"分野別データベース（{type(e).__name__}）"], []
         db_records = dict(state.get("db_records", {}))
         db_images = list(state.get("db_images", []))
         for r in records:
@@ -392,7 +392,7 @@ class Nodes:
             "databases_checked": True,
             "db_records": db_records,
             "db_images": db_images,
-            "databases_used": [d["name"] for d in databases.databases_for(state["subject_type"])],
+            "databases_used": used,
             # 記録は信頼度の高い一次情報なので、他より先に読む
             "priority_urls": by_tier(state.get("priority_urls", []) + [r.url for r in records]),
             "pages": {**state.get("pages", {}), **{r.url: r.title for r in records}},
@@ -538,7 +538,7 @@ class Nodes:
                  len(log_rows), len(accepted), time.perf_counter() - started)
         return {
             "images_checked": True,
-            "images": accepted[:3],
+            "images": imaging.choose_shown(accepted),
             "image_log": log_rows,
             "image_counts": counts,
             "failures": list(dict.fromkeys(state.get("failures", []) + failures)),
@@ -818,8 +818,11 @@ def _image_lines(img: dict, name: str) -> list[str]:
         lines.append(f"- 写っているもの: {img.get('description', '')}")
     if img.get("features_seen"):
         lines.append(f"- 画像で確かめた特徴: {'、'.join(img['features_seen'])}")
+    license_ = img.get("license") or "不明（掲載ページで確認してください）"
+    if imaging.needs_permission(license_):
+        license_ += "（利用には権利者の許可が必要です。ここでは確認のために表示しています）"
     lines += [f"- 出典: {img.get('title') or img['page_url']} — {img['page_url']}（Tier {img['tier']}）",
-              f"- ライセンス: {img.get('license') or '不明（掲載ページで確認してください）'}"]
+              f"- ライセンス: {license_}"]
     if img.get("also_on"):
         # V-4: 同じ画像が別のサイトにも載っている（複数の出典での一致）
         lines.append(f"- 同じ画像が載っている別のページ: {len(img['also_on'])} 件（{img['also_on'][0]} など）")

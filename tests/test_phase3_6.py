@@ -153,8 +153,9 @@ def test_japan_search_drops_sibling_models_and_keeps_rights():
 def test_lookup_reports_databases_that_failed():
     with patch.dict(databases.FUNCTIONS, {"orcid": MagicMock(side_effect=httpx.ConnectError("x")),
                                           "ndl_creator": MagicMock(return_value=[])}):
-        recs, failed = real_lookup("人物", "山田太郎")
+        recs, failed, used = real_lookup("人物", "山田太郎")
     assert recs == [] and failed == ["ORCID（ConnectError）"]
+    assert used == ["ORCID", "国立国会図書館サーチ（著者）"]
     assert "researchmap.jp" in databases.sites_for("人物")               # API が使えないものは site: で狙う
     assert all(d["name"] != "researchmap" for d in databases.databases_for("人物"))
 
@@ -181,7 +182,8 @@ def test_read_pages_reads_database_records_first_without_fetching():
                            "ORCID の研究者情報\n氏名: Martin J. Dürst\n所属機関: Aoyama Gakuin University", "ORCID")
     state = {"request": "Dürst 先生", "target": {"id": "", "label": "Martin J. Dürst", "description": "教授"},
              "reading_list": ["https://www.example.ac.jp/durst"]}
-    with patch("my_llm_app.agent.nodes.databases.lookup", return_value=([rec], ["国立国会図書館サーチ（著者）（ReadTimeout）"])), \
+    with patch("my_llm_app.agent.nodes.databases.lookup", return_value=([rec], ["国立国会図書館サーチ（著者）（ReadTimeout）"],
+                                                                         ["ORCID", "国立国会図書館サーチ（著者）"])), \
          patch("my_llm_app.agent.nodes.fetch.fetch_page", side_effect=lambda u: unreadable(u)) as fetch_page:
         out = Nodes(SETTINGS, RecordLLM()).read_pages(state)
     assert [c.args[0] for c in fetch_page.call_args_list] == ["https://www.example.ac.jp/durst"]   # 記録は取りに行かない
@@ -232,3 +234,25 @@ def test_image_prompt_gets_distinguishing_features():
     from my_llm_app.agent import prompts
     state = {"target": {"label": "EE-3", "description": "カメラ"}, "features": [{"text": "赤いマーク", "source": "u"}]}
     assert "赤いマーク" in prompts.image_user(state, "t", "c", "https://p")
+
+
+def test_images_needing_permission_are_shown_only_without_free_ones():
+    free = {"src": "https://up/a.jpg", "level": imaging.CONFIRMED, "license": "CC BY 2.0"}
+    locked = {"src": "https://static.inat/1.jpg", "level": imaging.CONFIRMED, "license": "ALL RIGHTS RESERVED"}
+    assert imaging.choose_shown([free, locked]) == [free]                  # 自由に使える画像があれば載せない
+    assert "withheld" in locked
+    only = {"src": "https://static.inat/2.jpg", "level": imaging.CONFIRMED, "license": "all rights reserved"}
+    assert imaging.choose_shown([only]) == [only]                          # ほかになければ載せる
+    text = images_section({"request": "写真", "target": {"label": "x"}, "images_checked": True, "images": [
+        {**only, "page_url": "https://www.inaturalist.org/taxa/1", "tier": 2, "title": "iNaturalist"}]})
+    assert "利用には権利者の許可が必要です" in text
+    assert not imaging.needs_permission("") and imaging.needs_permission("著作権あり（教育目的の利用可）")
+
+
+def test_report_lists_gbif_when_it_was_looked_up_after_inaturalist():
+    inat = databases.Record("https://www.inaturalist.org/taxa/1", "iNaturalist: x", "学名: Capricornis crispus\n和名: x",
+                            "iNaturalist")
+    with patch.dict(databases.FUNCTIONS, {"inaturalist": MagicMock(return_value=[inat])}), \
+         patch.object(databases, "gbif", return_value=[]):
+        _, _, used = real_lookup("生物", "x")
+    assert used == ["iNaturalist", "GBIF"]
