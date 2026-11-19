@@ -207,10 +207,11 @@ class Nodes:
         # 曖昧なまま集めた結果は、別の対象のページが混ざるので使わない
         if not is_ambiguous({**state, **result}):
             first = [result["summary_url"]] if result.get("summary_url") else []
-            # 対象が決まっていれば、題名・抜粋に対象の名前がある結果だけを読む（観点の言葉で無関係なページが混ざるため）
-            names_for_match = [current["label"]] + list(names) if current else []
+            # 題名・抜粋に対象の名前がある結果だけを読む（観点の言葉で無関係なページが混ざるため）。
+            # 対象がまだ決まっていなければ、検索に使った名前で見る（「EE-3」を含まない会社のページなどを読まない）
+            names_for_match = [current["label"]] + list(names) if current else list(names)
             relevant = [w for w in web.results
-                        if not current or mentions(f"{w.title} {w.snippet}", names_for_match)]
+                        if not names_for_match or mentions(f"{w.title} {w.snippet}", names_for_match)]
             urls = first + [w.url for w in relevant if not fetch.is_unreadable(w.url)]
             if not state.get("tier1_searched"):
                 # Tier 1（公的機関・大学）のページを狙って探す。横の展開なのでプログラムが行う（設計書 6.3）

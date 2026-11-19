@@ -109,7 +109,9 @@ def research_step(state: AgentState, d: Decision) -> Decision | None:
         return {**d, "action": "find_images", "guard": "画像を求められているので、応答の前に画像を探して確かめる"}
 
     # 3. さらにページを読む（埋まらない・弱い観点がある、狙って探したページがある）
-    if not converged and ((priority_unread and can_read_extra) or (unread and can_read and (missing or weak))):
+    #    狙って探したページは、収束していても読む（無関係なページや JavaScript のページで空振りが続いた後に、
+    #    狙った検索で見つけたページを読まないまま検索だけを繰り返さないように）
+    if (priority_unread and can_read_extra) or (not converged and unread and can_read and (missing or weak)):
         reason = ("狙って探したページを読む" if priority_unread
                   else "網羅表に埋まっていない・弱い観点があるため、さらにページを読む")
         return {**d, "action": "read_pages", "guard": reason}

@@ -54,6 +54,14 @@ def test_converged_reading_stops():
     assert decide(s)["action"] == "respond"                             # 新しい事実が 2 回続けて出ない → 読まない
 
 
+def test_priority_pages_are_read_even_after_convergence():
+    # 空振りの読み込みが続いて収束した後でも、狙った検索で見つけたページは読む
+    s = state(verified=[fact("日時")], reading_list=["u1", "u2"], priority_urls=["u2"], stale_reads=2)
+    assert decide(s)["action"] == "read_pages"
+    s = state(verified=[fact("日時")], reading_list=["u1", "u2"], stale_reads=2, aspect_searched=["a", "b", "c"])
+    assert decide(s)["action"] == "respond"                    # 狙ったページがなければ、収束したら読まない
+
+
 def test_time_limit_forces_respond():
     # 処理にかかった時間の合計で数える。報告をまとめる時間（RESERVE_SECONDS）を残して打ち切る
     s = state(reading_list=["u1", "u2"], priority_urls=["u2"], trace=[{"node": "read_pages", "seconds": 650}])
