@@ -15,11 +15,10 @@ import httpx
 from lxml import html as lxml_html
 from PIL import Image
 
-from my_llm_app.config import USER_AGENT
+from my_llm_app.tools import http
 
 COMMONS_API = "https://commons.wikimedia.org/w/api.php"
 WIKIDATA_API = "https://www.wikidata.org/w/api.php"
-_HEADERS = {"User-Agent": USER_AGENT}
 
 MIN_SIDE = 100            # これより小さい画像はアイコンとみなして使わない（V-5）。研究者の顔写真は 120 px 程度のことがある
 MAX_BYTES = 8_000_000
@@ -51,7 +50,7 @@ class FetchedImage:
 def fetch_image(src: str, timeout: float = 20.0) -> FetchedImage:
     """画像を取得し、使える大きさかを確かめ、LLM に渡す大きさに縮小する（V-5）。"""
     try:
-        r = httpx.get(src, headers=_HEADERS, timeout=timeout, follow_redirects=True)
+        r = http.get(src, timeout=timeout, cache=False)   # 画像は大きいので覚えない
     except httpx.HTTPError as e:
         return FetchedImage(False, f"取得できない（{type(e).__name__}）")
     if r.status_code != 200:
@@ -131,8 +130,8 @@ def commons_license(src: str, timeout: float = 30.0) -> str:
 
 
 def _imageinfo(params: dict, timeout: float) -> list[dict]:
-    r = httpx.get(COMMONS_API, params={**params, "prop": "imageinfo", "iiprop": "url|extmetadata|mime",
-                                       "iiurlwidth": 1024, "format": "json"}, headers=_HEADERS, timeout=timeout)
+    r = http.get(COMMONS_API, params={**params, "prop": "imageinfo", "iiprop": "url|extmetadata|mime",
+                                       "iiurlwidth": 1024, "format": "json"}, timeout=timeout)
     r.raise_for_status()
     pages = r.json().get("query", {}).get("pages", {})
     out = []
@@ -162,8 +161,8 @@ def _strip_tags(text: str) -> str:
 
 def wikidata_image(entity_id: str, label: str, timeout: float = 30.0) -> list[ImageCandidate]:
     """Wikidata の代表画像（P18）（L2）。"""
-    r = httpx.get(WIKIDATA_API, params={"action": "wbgetclaims", "entity": entity_id, "property": "P18",
-                                        "format": "json"}, headers=_HEADERS, timeout=timeout)
+    r = http.get(WIKIDATA_API, params={"action": "wbgetclaims", "entity": entity_id, "property": "P18",
+                                        "format": "json"}, timeout=timeout)
     r.raise_for_status()
     files = [c["mainsnak"]["datavalue"]["value"] for c in r.json().get("claims", {}).get("P18", [])
              if c.get("mainsnak", {}).get("datavalue")]
@@ -190,8 +189,8 @@ def commons_category(name: str, limit: int = 5, timeout: float = 30.0) -> list[I
     対象の名前のカテゴリ（「Category:Olympus Pen EE-3」）にある画像は、対象を写したものとして分類されている。
     カテゴリ名が対象の名前と一致するかは呼び出し側（mentions）で確かめる。ここでは候補を返すだけ。
     """
-    r = httpx.get(COMMONS_API, params={"action": "query", "list": "search", "srsearch": name, "srnamespace": 14,
-                                       "srlimit": 3, "format": "json"}, headers=_HEADERS, timeout=timeout)
+    r = http.get(COMMONS_API, params={"action": "query", "list": "search", "srsearch": name, "srnamespace": 14,
+                                       "srlimit": 3, "format": "json"}, timeout=timeout)
     r.raise_for_status()
     out: list[ImageCandidate] = []
     for hit in r.json().get("query", {}).get("search", []):
@@ -206,14 +205,42 @@ def commons_category(name: str, limit: int = 5, timeout: float = 30.0) -> list[I
 
 def searxng_images(base_url: str, query: str, limit: int = 8, timeout: float = 60.0) -> list[ImageCandidate]:
     """SearXNG の画像検索（L1）。Tier は画像ではなく掲載ページの URL で決める（設計書 G-3）。"""
-    r = httpx.get(f"{base_url}/search", params={"q": query, "format": "json", "categories": "images"},
-                  headers=_HEADERS, timeout=timeout)
-    r.raise_for_status()
+    from my_llm_app.tools.searxng import search_json   # 検索の間隔・やり直しは Web 検索と共通
+
     out = []
-    for x in r.json().get("results", []):
+    for x in search_json(base_url, {"q": query, "categories": "images"}, timeout).get("results", []):
         if x.get("img_src") and x.get("url"):
             out.append(ImageCandidate(src=x["img_src"], page_url=x["url"], stage="L1-画像検索",
                                       title=x.get("title", ""), caption=(x.get("content") or "")[:200]))
         if len(out) >= limit:
             break
+    return out
+
+
+# L5 で使う関係（設計書 8.1: 所在地・上位の分類・関連するもの）。対象そのものの写真がないときに出す
+RELATIONS = {"P179": "シリーズ", "P361": "上位のもの", "P171": "上位の分類群", "P276": "所在地", "P131": "所在する地域"}
+
+
+def related_images(entity_id: str, limit: int = 3, timeout: float = 30.0) -> list[ImageCandidate]:
+    """周辺の画像（L5）。対象と関係のある項目（シリーズ・上位の分類・所在地など）の代表画像。
+
+    対象そのものではないので、判定は「参考画像」にする（呼び出し側）。extra に関係と項目の名前を入れる。
+    """
+    from my_llm_app.tools import wikimedia
+
+    c = wikimedia.claims(entity_id, timeout)
+    related = [(qid, rel) for prop, rel in RELATIONS.items() for qid in wikimedia.claim_values(c, prop)][:limit]
+    if not related:
+        return []
+    labels = wikimedia.get_entities([q for q, _ in related], timeout)
+    out: list[ImageCandidate] = []
+    for qid, rel in related:
+        files = wikimedia.claim_values(wikimedia.claims(qid, timeout), "P18")[:1]
+        if not files or qid not in labels:
+            continue
+        for i in _imageinfo({"action": "query", "titles": "File:" + files[0]}, timeout):
+            name = labels[qid].label
+            out.append(ImageCandidate(src=i["src"], page_url=i["page_url"], stage="L5-周辺", title=i["title"],
+                                      caption=f"「{name}」（{rel}）の代表画像。{i['description']}"[:300],
+                                      license=i["license"], extra={"related": name, "relation": rel, "id": qid}))
     return out

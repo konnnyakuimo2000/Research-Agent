@@ -33,6 +33,7 @@ cp .env.example .env
 | `VL_MODEL` | `qwen3.8-27b`（そのままでよい） |
 | `VL_API_KEY` | `dummy`（そのままでよい） |
 | `SEARXNG_SECRET` | ランダムな文字列。下のコマンドで作る |
+| `CINII_APPID` | 任意。CiNii Research の API の appid（CiNii の API 利用登録で取得）。空でも動く（その場合 CiNii は site: 検索で探す） |
 
 ```sh
 # どちらか一方で、ランダムな文字列を作る

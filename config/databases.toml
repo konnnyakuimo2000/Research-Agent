@@ -1,0 +1,79 @@
+# 分野別のデータベース（L3。設計書 8.1、6.6、実装計画フェーズ 6）
+#
+# 対象の種類（config/aspects.toml の name）ごとに、公開 API を直接呼ぶデータベースを決める。
+# 呼ぶのは 1 回の調査につき各データベース 1〜2 回だけ（対象が決まり、種類がわかった後）。
+# User-Agent はこのアプリのもの（tools/http.py）。利用制限（429）は Retry-After を守ってやり直す。
+#
+# name:          報告・記録に出す名前
+# function:      tools/databases.py の関数
+# types:         使う対象の種類
+# auth:          認証・登録の要否
+# limits:        確認した利用制限（2026-11-19 時点。確認できなかったものはそう書く）
+# requires_env:  この環境変数（.env）がないときは使わない
+# available:     false なら使わない（API が使えないもの。下の [sites] で site: 検索に回す）
+
+[[databases]]
+name = "ORCID"
+function = "orcid"
+types = ["人物"]
+auth = "不要（匿名の Public API。読み取りのみ）"
+limits = "匿名: 12 回/秒（瞬間 40 回）、1 日 2.5 万回/IP（ORCID の FAQ「What are the API limits?」）"
+
+[[databases]]
+name = "CiNii Research"
+function = "cinii"
+types = ["人物", "技術・概念"]
+auth = "appid（アプリケーション ID）が必要。CiNii の API 利用登録で取得する"
+limits = "短時間の大量アクセスはブロックされることがある（CiNii の API 利用登録のページ）"
+requires_env = "CINII_APPID"
+
+[[databases]]
+name = "国立国会図書館サーチ（著者）"
+function = "ndl_creator"
+types = ["人物"]
+auth = "不要（OpenSearch）"
+limits = "回数の上限は未確認。1 回の調査で 1 回だけ呼ぶ"
+
+[[databases]]
+name = "国立国会図書館サーチ"
+function = "ndl"
+types = ["場所・建造物", "出来事", "組織"]
+auth = "不要（OpenSearch）"
+limits = "回数の上限は未確認。1 回の調査で 1 回だけ呼ぶ"
+
+[[databases]]
+name = "iNaturalist"
+function = "inaturalist"
+types = ["生物"]
+auth = "不要（読み取りのみ）"
+limits = "60 回/分 以下が目安（iNaturalist の API の推奨。超えると 429 で止められる）。GBIF と合わせて 1 回の調査で 2 回"
+
+[[databases]]
+name = "ジャパンサーチ"
+function = "japan_search"
+types = ["場所・建造物", "製品・機械", "出来事", "その他"]
+auth = "不要（利活用 API）"
+limits = "回数の上限は未確認（利用規約: https://jpsearch.go.jp/en/about/terms）。1 回の調査で 1 回だけ呼ぶ。画像の利用条件は項目ごとの権利表示に従う"
+
+[[databases]]
+name = "researchmap"
+function = "researchmap"
+types = ["人物"]
+auth = "アクセストークンが必要（2026-11-19 の確認で invalid_token）"
+limits = "—"
+available = false
+
+[[databases]]
+name = "KAKEN"
+function = "kaken"
+types = ["人物"]
+auth = "appid が必要（CiNii と共通の API 利用登録）"
+limits = "未登録では 403（Exceeds allowed rate）"
+available = false
+
+# API が使えない（登録が必要な）データベースは、そのサイトを site: で狙って検索する（query_plan の候補に入る）
+[sites]
+"人物" = ["researchmap.jp", "nrid.nii.ac.jp", "cir.nii.ac.jp"]
+"技術・概念" = ["cir.nii.ac.jp"]
+"生物" = ["biodic.go.jp"]
+"場所・建造物" = ["bunka.nii.ac.jp"]

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-import httpx
+from my_llm_app.tools import http
 
-from my_llm_app.config import USER_AGENT
+# 検索と検索の間隔（秒）。続けて検索すると、後ろの検索エンジンがタイムアウトしたり一時停止したりする（G-4）
+MIN_INTERVAL = 1.0
+# 応答しなかったエンジンがあって結果が 0 件のとき、この秒数をおいて 1 回だけやり直す（G-5）
+RETRY_DELAY = 5.0
 
 
 @dataclass
@@ -23,6 +26,7 @@ class WebSearchResponse:
     suggestions: list[str] = field(default_factory=list)
     # 応答しなかったエンジン（報告で申告するために記録する。設計書 G-5, G-6）
     unresponsive: list[str] = field(default_factory=list)
+    retried: bool = False    # 0 件だったので時間をおいてやり直したか
 
 
 def parse_response(data: dict, limit: int) -> WebSearchResponse:
@@ -43,12 +47,25 @@ def parse_response(data: dict, limit: int) -> WebSearchResponse:
     )
 
 
-def web_search(base_url: str, query: str, limit: int = 8, timeout: float = 30.0) -> WebSearchResponse:
-    r = httpx.get(
-        f"{base_url}/search",
-        params={"q": query, "format": "json"},
-        headers={"User-Agent": USER_AGENT},
-        timeout=timeout,
-    )
+def search_json(base_url: str, params: dict, timeout: float) -> dict:
+    """SearXNG に 1 回問い合わせる。間隔をあけ、利用制限はやり直す（http.get）。"""
+    url = f"{base_url}/search"
+    r = http.get(url, params={**params, "format": "json"}, timeout=timeout, min_interval=MIN_INTERVAL)
     r.raise_for_status()
-    return parse_response(r.json(), limit)
+    data = r.json()
+    if not data.get("results"):
+        http.forget(url, {**params, "format": "json"})   # 0 件の応答は覚えない（次は取り直す）
+    return data
+
+
+def web_search(base_url: str, query: str, limit: int = 8, timeout: float = 30.0) -> WebSearchResponse:
+    params = {"q": query}
+    out = parse_response(search_json(base_url, params, timeout), limit)
+    if not out.results and out.unresponsive:
+        # 応答しなかったエンジンがあって 0 件 → 一時的な失敗かもしれない。時間をおいて 1 回だけやり直す（G-5）
+        http.sleep(RETRY_DELAY)
+        again = parse_response(search_json(base_url, params, timeout), limit)
+        again.unresponsive = sorted(set(out.unresponsive) | set(again.unresponsive))
+        again.retried = True
+        return again
+    return out

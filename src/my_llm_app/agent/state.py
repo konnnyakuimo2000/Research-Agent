@@ -27,6 +27,8 @@ MAX_FREE_SEARCHES = 3    # LLM が自分で選ぶ検索の上限。これを超�
 MAX_IMAGE_FETCHES = 20   # 画像の候補を取りに行く回数の上限（取れない・小さすぎるものは確かめる回数に数えない）
 MAX_IMAGE_CHECKS = 6     # 1 回の調査で確かめる画像候補の上限（1 枚ごとに LLM を呼ぶため）
 WANTED_IMAGES = 2        # 確認済みの画像がこの枚数そろったら、それ以上確かめない
+MAX_REFERENCE_IMAGES = 2 # 対象の画像が見つからないときに出す、周辺の画像（L5・参考画像）の上限
+MAX_FEATURES = 8         # 画像の照合に使う「見分ける特徴」の上限
 # 候補の 1 位の sitelinks（記事がある言語版などの数）が 2 位のこの倍数以上なら、
 # 一般にはその意味を指すとみなし、聞き返さずに前提を明示して進める（例: 富士山）
 DOMINANCE_RATIO = 4
@@ -115,6 +117,17 @@ class AgentState(TypedDict, total=False):
     link_depth: dict[str, int]        # 参照をたどって見つけたページの深さ（R-2）
     new_ambiguity: str                # 調査の途中で見つかった同名の別の対象（R-5）
     ambiguity_asked: bool             # それについて利用者に確認したか
+    official_checked: bool            # 対象の公式サイト（Wikidata の P856）を調べたか
+    official_hosts: list[str]         # 対象自身・メーカーの公式サイトのドメイン（Tier 1。評価の観点では Tier 4）
+    official_urls: list[str]          # 対象自身の公式サイトの URL（読むページに入れる）
+    databases_checked: bool           # 分野別データベース（L3）を引いたか
+    databases_used: list[str]         # 引いたデータベースの名前（報告で申告する）
+    db_records: dict[str, dict]       # 分野別データベースの記録（canonical URL → url, title, text, database）
+    db_images: list[dict]             # 分野別データベースの画像（L3 の候補）
+    page_signatures: dict[str, list[int]]  # 読んだページの文章の署名（転載の見分け。reprints.py）
+    reprints: dict[str, str]          # 転載のページ（canonical URL → 元のページの URL）。独立した出典として数えない
+    page_tiers: dict[str, int]        # ページ単位で調整した Tier（canonical URL → Tier。設計書 6.3）
+    features: list[dict]              # 見分ける特徴（text, source。画像の照合 V-3 に使う）
     wants_images: bool                # 画像を探すか（求められていなくても探す。断られたときだけ False）
     page_images: list[dict]           # 読んだページに載っていた画像（L4 の候補）
     images_checked: bool              # 画像を探したか（応答の前に 1 回だけ）

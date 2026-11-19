@@ -82,7 +82,7 @@ def test_facts_about_sibling_models_are_dropped():
                           "text": "初代のペンEEは1961年に発売された。ペンEE-3は1973年に発売された。"})()
     state = {"request": "ペン EE-3", "aspects": cov.aspects_for("製品・機械")}
     with patch("my_llm_app.agent.nodes.fetch.fetch_page", return_value=page):
-        _, facts, dropped, _ = Nodes(SETTINGS, ExtractLLM())._read_one(state, page.url)
+        _, facts, dropped, _, _ = Nodes(SETTINGS, ExtractLLM())._read_one(state, page.url)
     assert [f["text"] for f in facts] == ["EE-3は1973年発売"]
     assert dropped[0]["dropped"] == "対象そのものについての記述ではない"
 

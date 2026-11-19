@@ -125,10 +125,10 @@ def _image_response(size):
 
 
 def test_fetch_image_checks_size_and_shrinks():
-    with patch("my_llm_app.tools.images.httpx.get", return_value=_image_response((1600, 1200))):
+    with patch("my_llm_app.tools.http.httpx.get", return_value=_image_response((1600, 1200))):
         f = fetch_image("https://x/a.jpg")
     assert f.ok and (f.width, f.height) == (1600, 1200) and f.data_url.startswith("data:image/jpeg;base64,")
-    with patch("my_llm_app.tools.images.httpx.get", return_value=_image_response((120, 90))):
+    with patch("my_llm_app.tools.http.httpx.get", return_value=_image_response((120, 90))):
         assert fetch_image("https://x/b.jpg").reason.startswith("小さすぎる")
 
 
@@ -158,7 +158,8 @@ def test_find_images_collects_checks_and_judges():
     assert out["images_checked"] is True
     assert [(i["src"], i["level"]) for i in out["images"]] == [("https://up/wd.jpg", imaging.CONFIRMED)]
     assert [r["level"] for r in out["image_log"]] == [imaging.CONFIRMED, imaging.REJECTED]
-    assert out["image_counts"] == {"L2-Wikidata": 1, "L2-Commonsカテゴリ": 0, "L2-Commons": 1, "L1-画像検索": 0,
+    assert out["image_counts"] == {"L2-Wikidata": 1, "L2-Commonsカテゴリ": 0, "L3-分野別データベース": 0, "L2-Commons": 1,
+                                   "L1-画像検索": 0,
                                    "L4-ページ内": 0}
     assert any("L1-画像検索" in f for f in out["failures"])      # 使えなかった方法は申告する
 

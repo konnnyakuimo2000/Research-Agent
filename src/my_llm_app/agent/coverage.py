@@ -12,7 +12,7 @@ from typing import TypedDict
 from urllib.parse import urlparse
 
 from my_llm_app.config import REPO_ROOT
-from my_llm_app.tiers import tier_of
+from my_llm_app.tiers import canonical, page_tier, tier_of
 
 ASPECTS_FILE = REPO_ROOT / "config" / "aspects.toml"
 OTHER_TYPE = "その他"      # どの種類にも当たらない対象
@@ -33,6 +33,7 @@ class CoverageRow(TypedDict):
     facts: int
     sources: list[str]     # 出典の URL（重複なし）
     best_tier: int         # 出典の中で最も高い Tier（数字が小さいほど高い。出典なしは 0）
+    independent: int       # 独立した出典のサイトの数（転載は元のページのサイトとして数える）
     status: str            # 確認済み / 出典不足 / 未発見
 
 
@@ -107,33 +108,50 @@ def _host(url: str) -> str:
     return (urlparse(url).hostname or "").removeprefix("www.")
 
 
-def status_of(sources: list[str]) -> str:
+def status_of(sources: list[str], tier=tier_of, original=None) -> str:
     """出典の状態（設計書 6.3「観点が埋まった」の基準）。
 
     確認済み: Tier 1 の出典がある、または独立した（別のサイトの）出典が 2 つ以上あり、うち 1 つ以上が Tier 1〜2
     出典不足: 出典はあるが、上の条件を満たさない（Tier 3〜4 だけ、または出典が 1 つだけ）
     未発見:   出典なし
+    tier:     URL → Tier（ページ単位の調整を含む）。original: 転載なら元のページの URL（独立した出典として数えない）
     """
     if not sources:
         return MISSING
-    tiers = [tier_of(u) for u in sources]
-    hosts = {_host(u) for u in sources}
-    if min(tiers) == 1 or (len(hosts) >= 2 and min(tiers) <= 2):
+    tiers = [tier(u) for u in sources]
+    if min(tiers) == 1 or (independent_sites(sources, original) >= 2 and min(tiers) <= 2):
         return CONFIRMED
     return WEAK
 
 
-def build_coverage(aspects: list[Aspect], verified: list[dict]) -> list[CoverageRow]:
+def independent_sites(sources: list[str], original=None) -> int:
+    """独立した出典のサイトの数。転載のページは元のページのサイトとして数える。"""
+    original = original or (lambda u: u)
+    return len({_host(original(u)) for u in sources})
+
+
+def build_coverage(aspects: list[Aspect], verified: list[dict], state: dict | None = None) -> list[CoverageRow]:
+    """網羅表を作る。state を渡すと、ページ単位の Tier（公式サイト・LLM の調整）と転載を考えに入れる。"""
+    reprints = (state or {}).get("reprints", {})
+
+    def original(u: str) -> str:
+        return reprints.get(canonical(u), u)
+
     rows: list[CoverageRow] = []
     for a in aspects:
         facts = [f for f in verified if f.get("aspect") == a["name"]]
         sources = list(dict.fromkeys(f["source"] for f in facts))
+
+        def tier(u: str, name: str = a["name"]) -> int:
+            return page_tier(u, state, name)
+
         rows.append({
             "aspect": a["name"],
             "facts": len(facts),
             "sources": sources,
-            "best_tier": min((tier_of(u) for u in sources), default=0),
-            "status": status_of(sources),
+            "best_tier": min((tier(u) for u in sources), default=0),
+            "independent": independent_sites(sources, original),
+            "status": status_of(sources, tier, original),
         })
     return rows
 
@@ -169,7 +187,7 @@ def weak_text(coverage: list[CoverageRow]) -> str:
     for r in coverage:
         if r["status"] != WEAK:
             continue
-        sites = len({_host(u) for u in r["sources"]})
+        sites = r.get("independent") or len({_host(u) for u in r["sources"]})
         if sites == 1:
             lines.append(f"- {r['aspect']}: 1 サイト（Tier {r['best_tier']}）の情報だけで、ほかの出典では確かめていない")
         else:

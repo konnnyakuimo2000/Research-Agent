@@ -10,8 +10,8 @@ import httpx
 import trafilatura
 from lxml import html as lxml_html
 
-from my_llm_app.config import USER_AGENT
 from my_llm_app.tiers import EXCLUDED_TIER, tier_of
+from my_llm_app.tools import http
 from my_llm_app.tools.images import page_images
 
 MAX_BYTES = 3_000_000
@@ -47,7 +47,7 @@ def fetch_page(url: str, timeout: float = 20.0) -> Page:
     if is_skipped_domain(url):
         return Page(url, reason="出典にしないサイト（転載・まとめ）")
     try:
-        r = httpx.get(url, headers={"User-Agent": USER_AGENT}, timeout=timeout, follow_redirects=True)
+        r = http.get(url, timeout=timeout)
     except httpx.HTTPError as e:
         return Page(url, reason=f"取得できない（{type(e).__name__}）")
     if r.status_code != 200:

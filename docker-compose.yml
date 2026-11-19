@@ -37,6 +37,7 @@ services:
       VL_MODEL: ${VL_MODEL:-qwen3.8-27b}
       VL_API_KEY: ${VL_API_KEY:-dummy}
       AGENT_API_KEY: ${AGENT_API_KEY:-}
+      CINII_APPID: ${CINII_APPID:-}
       SEARXNG_URL: http://searxng:8080
     depends_on:
       - searxng

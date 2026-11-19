@@ -5,17 +5,19 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from my_llm_app.tiers import EXCLUDED_TIER, tier_of
+from my_llm_app.tiers import EXCLUDED_TIER, host_of, tier_of
 from my_llm_app.tools.images import ImageCandidate, image_key
 
 CONFIRMED = "確認済み"
 PROBABLE = "おそらく正しい"
 REJECTED = "不採用"
+REFERENCE = "参考画像"   # 対象そのものではないが関連する画像（L5 の周辺の画像。設計書 8.3）
 
 # 画像を求める依頼かどうかを決める言葉（「図」は「地図」「図書館」にも当たるので入れない）
 IMAGE_WORDS = ("画像", "写真", "イメージ図", "見た目", "外観", "ビジュアル")
 # Commons のカテゴリは「対象を写した画像」として人が分類したものなので、ページ内の画像より先に確かめる
-_STAGE_ORDER = {"L2-Wikidata": 0, "L2-Commonsカテゴリ": 1, "L4-ページ内": 2, "L1-画像検索": 3, "L2-Commons": 4}
+_STAGE_ORDER = {"L2-Wikidata": 0, "L2-Commonsカテゴリ": 1, "L3-分野別データベース": 1, "L4-ページ内": 2, "L1-画像検索": 3,
+                "L2-Commons": 4}
 
 
 # 画像を断る言い方（このときだけ画像を探さない）
@@ -67,13 +69,20 @@ def _squash(text: str) -> str:
 def rank(candidates: list[ImageCandidate], names: list[str]) -> list[ImageCandidate]:
     """確かめる順番を決める（横の仕事）。Tier 5 と重複を除き、
     Wikidata の代表画像 → 掲載ページの Tier が高い順 → 説明に対象の名前がある順 → 段階の順。"""
-    seen: set[str] = set()
+    seen: dict[str, ImageCandidate] = {}
     kept = []
     for c in candidates:
         key = image_key(c.src)
-        if key in seen or tier_of(c.page_url) == EXCLUDED_TIER:
+        if tier_of(c.page_url) == EXCLUDED_TIER:
             continue
-        seen.add(key)
+        if key in seen:
+            # V-4: 同じ画像が別のページにも載っている。別のサイトなら記録する（報告に書く）
+            first = seen[key]
+            others = first.extra.setdefault("also_on", [])
+            if c.page_url != first.page_url and host_of(c.page_url) != host_of(first.page_url)                     and c.page_url not in others:
+                others.append(c.page_url)
+            continue
+        seen[key] = c
         kept.append(c)
 
     squashed = [_squash(n) for n in names if _squash(n)]

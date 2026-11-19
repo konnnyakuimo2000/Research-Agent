@@ -195,9 +195,21 @@ EXTRACT_SYSTEM = """あなたは、1 つのページの本文を読んで、調�
 - 「調べる観点」のうち、まだ事実がない観点についての記述を優先して抜き出す
 - other_entity: このページが、調査対象とは別の、同じ名前のもの（同名の別人・別の場所など）について書いている場合に、
   その別のものを 30 文字以内で書く。調査対象について書いているページなら空にする
-- 関係する事実がなければ facts は空にする"""
+- 関係する事実がなければ facts は空にする
+- features: 対象を、似たもの（同名の別人・兄弟機種・近縁種・似た建物など）と見分けるのに使える特徴で、
+  このページに書かれているもの（例: 外見の色・形、刻印・型番の表記、レンズの名前、所属・専門）。最大 3 件。
+  text は 30 文字以内、quote は本文から一字一句そのまま写す。なければ空
+- new_terms: 本文にある、対象の別の呼び方（別名・旧称・略称・原語の表記・型番の別の書き方）。
+  本文の表記を 1 文字も変えずに写す。調査対象の名前と同じもの・推測した読み方は入れない。最大 3 件。なければ空
+- page_tier: このページを出典としてどれだけ信頼できるかの調整。「ページの仮の Tier」（サイトの種類で決めたもの）に対して:
+  - 上げる: 仮の Tier が 3〜4 のページで、出典・資料名（原資料・論文・公式発表など）を本文で明記して一次情報を示している
+  - 下げる: 仮の Tier が 1〜2 のページで、内容が明らかに古い（後の情報で置き換えられている）、
+    他のページの転載であると本文に書かれている、または対象について出典のない伝聞だけを書いている
+  - そのまま: 上のどれでもない、または迷う（ほとんどのページはこれ）
+  reason は 40 文字以内。そのままなら空でよい"""
 
 ABOUT_TARGET = "対象そのもの"   # 事実の主語が調査対象そのものか（型番違い・シリーズ全体などは除く）
+TIER_ADJUSTMENTS = ["上げる", "そのまま", "下げる"]
 
 
 def extract_schema(aspect_names: list[str]) -> dict:
@@ -212,18 +224,28 @@ def extract_schema(aspect_names: list[str]) -> dict:
                 "required": ["text", "quote", "aspect", "about"],
             }},
             "other_entity": {"type": "string"},
+            "features": {"type": "array", "maxItems": 3, "items": {
+                "type": "object",
+                "properties": {"text": {"type": "string"}, "quote": {"type": "string"}},
+                "required": ["text", "quote"],
+            }},
+            "new_terms": {"type": "array", "maxItems": 3, "items": {"type": "string"}},
+            "page_tier": {"type": "object", "properties": {
+                "adjust": {"type": "string", "enum": TIER_ADJUSTMENTS}, "reason": {"type": "string"}},
+                "required": ["adjust", "reason"]},
         },
-        "required": ["facts", "other_entity"],
+        "required": ["facts", "other_entity", "features", "new_terms", "page_tier"],
     }
 
 
-def extract_user(state: AgentState, title: str, text: str) -> str:
+def extract_user(state: AgentState, title: str, text: str, base_tier: int = 4) -> str:
     target = state.get("target")
     return json.dumps({
         "依頼": state.get("request", ""),
         "調査対象": f"{target['label']}（{target['description']}）" if target else state.get("request", ""),
         "調べる観点": [a["name"] for a in state.get("aspects", [])],
         "まだ事実がない観点": [r["aspect"] for r in state.get("coverage", []) if r["facts"] == 0],
+        "ページの仮の Tier": base_tier,
         "ページのタイトル": title,
         "ページの本文": text,
     }, ensure_ascii=False, indent=1)
@@ -278,6 +300,9 @@ IMAGE_SYSTEM = """あなたは、1 枚の画像が調査対象を写したもの
   - low: 文脈が対象と関係ない、または別のもの（同名の別の対象・関連する別の物）を示している
 - visual: 画像の内容が、対象の説明・事実と合うか
   - consistent: 合う（矛盾がない）  - contradict: 明らかに合わない（別の種類の物が写っている等）  - unknown: 判断できない
+  - 「見分ける特徴」（ページから集めた、似たものと区別できる特徴）があれば、画像にその特徴が写っているかを見る。
+    特徴と明らかに違うもの（色・形・刻印が違う）が写っていれば contradict。写っていなければ判断に使わない
+- features_seen: 「見分ける特徴」のうち、画像で確かめられたものを、そのまま写す（なければ空）
 - 画像だけで対象を特定しようとしない。マイナーな対象は見た目だけでは区別できないので、文脈（context）を重視する
 - 地図・図表・関係のない人物写真などは、対象そのものの画像ではない（context は low か mid）
 - ロゴは、対象が組織・会社・ブランド・製品のときは対象を表す画像として認めてよい。それ以外の対象では対象そのものの画像ではない
@@ -291,10 +316,11 @@ IMAGE_SCHEMA = {
         "context": {"type": "string", "enum": ["high", "mid", "low"]},
         "visual": {"type": "string", "enum": ["consistent", "contradict", "unknown"]},
         "visible_text": {"type": "string"},
+        "features_seen": {"type": "array", "items": {"type": "string"}},
         "description": {"type": "string"},
         "reason": {"type": "string"},
     },
-    "required": ["context", "visual", "visible_text", "description", "reason"],
+    "required": ["context", "visual", "visible_text", "features_seen", "description", "reason"],
 }
 
 
@@ -305,6 +331,7 @@ def image_user(state: AgentState, title: str, caption: str, page_url: str) -> st
         "調査対象": f"{target['label']}（{target['description']}）" if target else state.get("request", ""),
         "対象の種類": state.get("subject_type", ""),
         "対象についての事実": facts,
+        "見分ける特徴": [f["text"] for f in state.get("features", [])][:6],
         "掲載ページ": page_url,
         "タイトル": title,
         "キャプション・alt・説明": caption,

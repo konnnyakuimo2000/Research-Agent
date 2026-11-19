@@ -65,6 +65,44 @@ class UrlNumbers(dict):
         return isinstance(url, str) and super().__contains__(canonical(url))
 
 
+def host_of(url: str) -> str:
+    return (urlparse(url).hostname or "").lower().removeprefix("www.")
+
+
+# 観点ごとの例外（設計書 6.3）: 対象自身の公式サイトは Tier 1 だが、評価・評判の観点では Tier 4 とする（自己評価のため）
+EVALUATION_ASPECT = re.compile(r"評価|評判|レビュー|口コミ|感想|批評|反響")
+
+
+def is_official(url: str, official_hosts: list[str]) -> bool:
+    h = host_of(url)
+    return any(_matches(h, o) for o in official_hosts)
+
+
+def page_tier(url: str, state: dict | None = None, aspect: str = "") -> int:
+    """ページ単位の Tier（設計書 6.3「Tier の調整」）。ドメインの Tier から始めて、次の順に変える。
+
+    1. 対象自身の公式サイト（Wikidata の公式サイト）→ Tier 1。ただし評価・評判の観点では Tier 4
+    2. ページを読んだ LLM の判定で 1 段上げ下げしたもの（state["page_tiers"]。プログラムが幅を確かめて入れる）
+    """
+    tier = tier_of(url)
+    if not state:
+        return tier
+    if is_official(url, state.get("official_hosts", [])):
+        if aspect and EVALUATION_ASPECT.search(aspect):
+            return 4
+        tier = 1
+    return state.get("page_tiers", {}).get(canonical(url), tier)
+
+
+def adjusted_tier(base: int, adjust: str) -> int:
+    """LLM の「上げる / 下げる」を、設計書の幅（1 段だけ。上げるのは Tier 3〜4、下げるのは Tier 1〜2）に収める。"""
+    if adjust == "上げる" and base in (3, 4):
+        return base - 1
+    if adjust == "下げる" and base in (1, 2):
+        return base + 1
+    return base
+
+
 def by_tier(urls: list[str]) -> list[str]:
     """Tier 5 と、表記が違うだけの重複を除き、Tier の高い順に並べる（同じ Tier の中では元の順を保つ）。"""
     seen: set[str] = set()

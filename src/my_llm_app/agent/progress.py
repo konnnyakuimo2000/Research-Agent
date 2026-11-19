@@ -52,9 +52,21 @@ def describe(node: str, update: dict) -> str:
             names = "、".join(a["name"] for a in update.get("aspects", []))
             origin = update.get("aspects_origin", "チェックリスト")
             lines.insert(0, f"  - 対象の種類: {update['subject_type']}。調べる観点（{origin}が作成）: {names}")
+        if update.get("databases_checked"):
+            used = "、".join(update.get("databases_used", [])) or "なし（この種類に使えるものがない）"
+            lines.insert(1 if update.get("subject_type") else 0,
+                         f"  - 分野別データベース: {used}。見つかった記録 {len(update.get('db_records', {}))} 件")
         followed = update["trace"][0].get("followed", [])
         if followed:
             lines.append(f"  - 参考文献のリンクを {len(followed)} 件たどる")
+        read = update["trace"][0]["pages"]
+        copies = [p for p in read if p.get("reprint_of")]
+        if copies:
+            lines.append(f"  - ほかのページとほぼ同じ文章のページ {len(copies)} 件（独立した出典として数えない）")
+        moved = [p for p in read if p.get("tier_reason")]
+        if moved:
+            lines.append("  - 信頼度を調整したページ: " + "、".join(
+                f"Tier {p['base_tier']}→{p['tier']}（{p['tier_reason']}）" for p in moved))
         rows = update.get("coverage", [])
         if rows:
             done = sum(1 for r in rows if r["status"] == CONFIRMED)
@@ -65,6 +77,8 @@ def describe(node: str, update: dict) -> str:
         cs = update["conflicts"]
         return f"  - 食い違い {len(cs)} 件" + ("".join(f"\n    - {c['topic']}" for c in cs))
     if node == "find_images":
-        n = len(update.get("images", []))
-        return f"  - 確かめた候補 {len(update.get('image_log', []))} 件、採用 {n} 件"
+        imgs = update.get("images", [])
+        ref = sum(1 for i in imgs if i.get("level") == "参考画像")
+        s = f"  - 確かめた候補 {len(update.get('image_log', []))} 件、採用 {len(imgs) - ref} 件"
+        return s + (f"（ほかに参考画像 {ref} 件）" if ref else "")
     return ""

@@ -20,17 +20,20 @@ from my_llm_app.agent import coverage as cov
 from my_llm_app.agent import imaging
 from my_llm_app.agent import prompts
 from my_llm_app.agent import query_plan
+from my_llm_app.agent import reprints
 from my_llm_app.agent.guard import check_decision, is_ambiguous
-from my_llm_app.agent.names import mentions
+from my_llm_app.agent.names import mentions, same_name
 from my_llm_app.agent.quotes import normalize, quote_in_text
-from my_llm_app.agent.state import (DOMINANCE_RATIO, MAX_CANDIDATES, MAX_IMAGE_CHECKS, MAX_IMAGE_FETCHES,
-                                    MAX_REF_DEPTH,
+from my_llm_app.agent.state import (DOMINANCE_RATIO, MAX_CANDIDATES, MAX_FEATURES, MAX_IMAGE_CHECKS,
+                                    MAX_IMAGE_FETCHES, MAX_REF_DEPTH, MAX_REFERENCE_IMAGES,
                                     PAGES_PER_READ, REFS_PER_PAGE, WANTED_IMAGES, AgentState,
                                     Candidate, PageRead, Source)
 from my_llm_app.config import Settings
 from my_llm_app.llm import LLM
-from my_llm_app.tiers import UrlNumbers, by_tier, canonical, tier_of
-from my_llm_app.tools import fetch, images, searxng, wikimedia
+from my_llm_app.tiers import UrlNumbers, adjusted_tier, by_tier, canonical, host_of, page_tier, tier_of
+from my_llm_app.tools import databases, fetch, images, searxng, wikimedia
+
+L3_STAGE = "L3-分野別データベース"
 
 # LLM に渡す本文の長さの上限（文字数）。長いページは先頭から
 MAX_PAGE_CHARS = 8000
@@ -202,11 +205,21 @@ class Nodes:
             if ws:
                 pages[ws.url] = f"Wikipedia: {ws.title}"
                 result.update(target_summary=ws.extract, summary_url=ws.url)
+        if current and current.get("id") and not state.get("official_checked"):
+            # 対象自身・メーカーの公式サイト（Wikidata の P856）は Tier 1 として扱い、site: で狙う（設計書 6.3）
+            try:
+                official = wikimedia.official_sites(current["id"])
+            except Exception as e:  # noqa: BLE001
+                official = []
+                errors.append(f"wikidata(official): {e}")
+            hosts = list(dict.fromkeys(host_of(u) for u in official if host_of(u)))
+            result.update(official_checked=True, official_hosts=hosts, official_urls=official[:1])
 
         # 対象が決まっている（または曖昧でない）ときの検索結果を、深掘りするページの候補にする。
         # 曖昧なまま集めた結果は、別の対象のページが混ざるので使わない
         if not is_ambiguous({**state, **result}):
             first = [result["summary_url"]] if result.get("summary_url") else []
+            first += [u for u in result.get("official_urls", []) if not fetch.is_unreadable(u)]
             # 題名・抜粋に対象の名前がある結果だけを読む（観点の言葉で無関係なページが混ざるため）。
             # 対象がまだ決まっていなければ、検索に使った名前で見る（「EE-3」を含まない会社のページなどを読まない）
             names_for_match = [current["label"]] + list(names) if current else list(names)
@@ -242,6 +255,9 @@ class Nodes:
             new_relevant = len({canonical(w.url) for w in relevant} - known_urls)
             result.update(query_plan.harvest(state, web.results, current["label"] if current else "",
                                              {**decision, "query": query}, new_relevant))
+            if result.get("official_hosts"):
+                # 公式サイトは、事実が取れる前から site: 検索の候補にする
+                result["seen_sites"] = list(dict.fromkeys(result["seen_sites"] + result["official_hosts"]))
 
         log.info("search: %r names=%s -> wikidata %d, web %d (%.1fs)", query, names, len(entities),
                  len(web.results), time.perf_counter() - started)
@@ -266,8 +282,11 @@ class Nodes:
                 subject_type = cov.OTHER_TYPE
             aspects, origin = cov.make_aspects(out.get("aspects"), subject_type)
             extra = {"subject_type": subject_type, "aspects": aspects, "aspects_origin": origin,
-                     "coverage": cov.build_coverage(aspects, state.get("verified", []))}
+                     "coverage": cov.build_coverage(aspects, state.get("verified", []), state)}
             log.info("subject_type: %s -> aspects (%s) %s", subject_type, origin, [a["name"] for a in aspects])
+            state = {**state, **extra}
+        if state.get("target") and state.get("subject_type") and not state.get("databases_checked"):
+            extra.update(self._lookup_databases(state))
             state = {**state, **extra}
 
         done = {canonical(p["url"]) for p in state.get("pages_read", [])}
@@ -285,11 +304,17 @@ class Nodes:
         verified = list(state.get("verified", []))
         page_imgs = list(state.get("page_images", []))
         depth = dict(state.get("link_depth", {}))
+        signatures = dict(state.get("page_signatures", {}))
+        copies = dict(state.get("reprints", {}))
+        page_tiers = dict(state.get("page_tiers", {}))
+        features = list(state.get("features", []))
+        variants = dict(state.get("name_variants", {}))
+        label = (state.get("target") or {}).get("label", "")
         new_links: list[str] = []
         others: list[str] = []
         reads: list[PageRead] = []
         traces = []
-        for page, facts, dropped, other in results:
+        for page, facts, dropped, other, meta in results:
             if other:
                 others.append(other)
             if facts and depth.get(page.url, 0) < MAX_REF_DEPTH:
@@ -299,15 +324,30 @@ class Nodes:
                     new_links.append(link)
             if page.ok and page.title:
                 pages.setdefault(page.url, page.title)
+            key = canonical(page.url)
+            if meta.get("signature"):
+                # 転載の見分け（6.3）: 先に読んだページとほぼ同じ文章なら、そのページの写しとして記録する
+                if original := reprints.find_original(meta["signature"], signatures):
+                    copies[key] = original
+                signatures[key] = meta["signature"]
+            if meta.get("tier") is not None and meta["tier"] != meta.get("base_tier"):
+                page_tiers[key] = meta["tier"]
+            have = {f["text"] for f in features}
+            features += [f for f in meta.get("features", []) if f["text"] not in have][:MAX_FEATURES - len(features)]
+            for term in meta.get("new_terms", []):
+                if label and not same_name(term, label):
+                    variants.setdefault(term, 1)   # 本文にあった別の呼び方（7.2 の 3）。題名で見つかったものより弱く扱う
             verified += facts
             page_imgs += [{**im, "page_url": page.url, "title": page.title} for im in page.images]
             reads.append({"url": page.url, "ok": page.ok, "reason": page.reason,
                           "extracted": len(facts) + len(dropped), "verified": len(facts)})
             traces.append({"url": page.url, "ok": page.ok, "reason": page.reason,
-                           "verified": facts, "dropped": dropped})
+                           "verified": facts, "dropped": dropped, "reprint_of": copies.get(key, ""),
+                           **{k: meta[k] for k in ("base_tier", "tier", "tier_reason", "new_terms") if k in meta}})
         log.info("read_pages: %d pages -> verified %d facts (%.1fs)", len(urls),
                  sum(r["verified"] for r in reads), time.perf_counter() - started)
-        coverage = cov.build_coverage(state["aspects"], verified)
+        tiers_state = {**state, "page_tiers": page_tiers, "reprints": copies}
+        coverage = cov.build_coverage(state["aspects"], verified, tiers_state)
         gained = len(verified) - len(state.get("verified", []))
         if (others and not state.get("ambiguity_asked") and state.get("assumptions")
                 and not state.get("clarifications")):
@@ -321,19 +361,60 @@ class Nodes:
             "pages_read": state.get("pages_read", []) + reads,
             "verified": verified,
             "page_images": page_imgs,
+            "page_signatures": signatures,
+            "reprints": copies,
+            "page_tiers": page_tiers,
+            "features": features,
+            "name_variants": variants,
             "coverage": coverage,
             "pages": pages,
             "trace": [{"node": "read_pages", "pages": traces, "coverage": coverage, "followed": new_links,
                        "other_entities": others}],
         }
 
+    def _lookup_databases(self, state: AgentState) -> dict:
+        """L3: 対象の種類に合う分野別データベースを引き、見つかった記録を先に読むページにする（設計書 8.1、6.6）。"""
+        name = state["target"]["label"]
+        started = time.perf_counter()
+        try:
+            records, failed = databases.lookup(state["subject_type"], name)
+        except Exception as e:  # noqa: BLE001
+            records, failed = [], [f"分野別データベース（{type(e).__name__}）"]
+        db_records = dict(state.get("db_records", {}))
+        db_images = list(state.get("db_images", []))
+        for r in records:
+            db_records[canonical(r.url)] = {"url": r.url, "title": r.title, "text": r.text, "database": r.database}
+            db_images += [{**im, "database": r.database} for im in r.images]
+        log.info("databases: %s -> %d records %s (%.1fs)", state["subject_type"], len(records), failed,
+                 time.perf_counter() - started)
+        sites = [s for s in databases.sites_for(state["subject_type"]) if s not in state.get("seen_sites", [])]
+        return {
+            "databases_checked": True,
+            "db_records": db_records,
+            "db_images": db_images,
+            "databases_used": [d["name"] for d in databases.databases_for(state["subject_type"])],
+            # 記録は信頼度の高い一次情報なので、他より先に読む
+            "priority_urls": by_tier(state.get("priority_urls", []) + [r.url for r in records]),
+            "pages": {**state.get("pages", {}), **{r.url: r.title for r in records}},
+            # API で引けない専門のサイト（researchmap など）は site: 検索の候補にする
+            "seen_sites": state.get("seen_sites", []) + sites,
+            "failures": list(dict.fromkeys(state.get("failures", [])
+                                           + [f"分野別データベースに問い合わせられなかった: {f}" for f in failed])),
+        }
+
     def _read_one(self, state: AgentState, url: str):
-        page = fetch.fetch_page(url)
+        record = state.get("db_records", {}).get(canonical(url))
+        if record:
+            # 分野別データベースの記録は、API の値から作った文章を本文として読む（ページを取りに行かない）
+            page = fetch.Page(url, title=record["title"], text=record["text"], ok=True)
+        else:
+            page = fetch.fetch_page(url)
         if not page.ok:
-            return page, [], [], ""
+            return page, [], [], "", {}
         text = page.text[:MAX_PAGE_CHARS]
         names = [a["name"] for a in state.get("aspects", [])]
-        out = self.llm.chat_json(prompts.EXTRACT_SYSTEM, prompts.extract_user(state, page.title, text),
+        base = page_tier(url, state)
+        out = self.llm.chat_json(prompts.EXTRACT_SYSTEM, prompts.extract_user(state, page.title, text, base),
                                  prompts.extract_schema(names))
         facts, dropped = [], []
         for f in out.get("facts", []):
@@ -345,7 +426,8 @@ class Nodes:
                 facts.append({"text": f["text"], "quote": f["quote"], "aspect": aspect, "source": url})
             else:
                 dropped.append(f)
-        return page, facts, dropped, out.get("other_entity", "").strip()
+        meta = page_meta(out, text, url, base, from_database=bool(record))
+        return page, facts, dropped, out.get("other_entity", "").strip(), meta
 
     @staticmethod
     def _target_name(state: AgentState) -> str:
@@ -399,6 +481,11 @@ class Nodes:
         # カテゴリ名が対象の名前と一致するものだけを使う（型番のある名前は型番で見るので、兄弟機種のカテゴリは入らない）
         gather("L2-Commonsカテゴリ", lambda: [c for c in images.commons_category(name)
                                              if mentions(c.extra.get("category", ""), [name])])
+        gather(L3_STAGE, lambda: [
+            images.ImageCandidate(src=im["src"], page_url=im["page_url"], stage=L3_STAGE, title=im.get("title", ""),
+                                  caption=im.get("caption", ""), license=im.get("license", ""),
+                                  extra={"database": im.get("database", "")})
+            for im in state.get("db_images", [])])
         gather("L2-Commons", lambda: images.commons_search(name))
         gather("L1-画像検索", lambda: images.searxng_images(self.settings.searxng_url, name))
         gather("L4-ページ内", lambda: [
@@ -417,7 +504,7 @@ class Nodes:
                 if fetched.ok:
                     usable.append((c, fetched))
                 else:
-                    log_rows.append({**self._image_row(c), "level": imaging.REJECTED, "reason": fetched.reason})
+                    log_rows.append({**self._image_row(c, state), "level": imaging.REJECTED, "reason": fetched.reason})
         with ThreadPoolExecutor(max_workers=2) as pool:
             for start in range(0, min(len(usable), MAX_IMAGE_CHECKS), 2):
                 batch = usable[start:min(start + 2, MAX_IMAGE_CHECKS)]
@@ -428,7 +515,24 @@ class Nodes:
                 if sum(r["level"] == imaging.CONFIRMED for r in accepted) >= WANTED_IMAGES:
                     break
 
-        order = {imaging.CONFIRMED: 0, imaging.PROBABLE: 1}
+        if not accepted and target.get("id"):
+            # L5: 対象そのものの画像がない → 関係のある項目（シリーズ・上位の分類・所在地など）の画像を、
+            # 「対象そのものではない」と明記して出す（設計書 8.1 L5、8.3 参考画像）
+            gather("L5-周辺", lambda: images.related_images(target["id"]))
+            for c in [c for c in candidates if c.stage == "L5-周辺"]:
+                fetched = images.fetch_image(c.src)
+                row = {**self._image_row(c, state), "related": c.extra.get("related", ""),
+                       "relation": c.extra.get("relation", "")}
+                if fetched.ok:
+                    accepted.append({**row, "level": imaging.REFERENCE, "description": c.extra.get("related", ""),
+                                     "size": f"{fetched.width}×{fetched.height}"})
+                    log_rows.append(accepted[-1])
+                else:
+                    log_rows.append({**row, "level": imaging.REJECTED, "reason": fetched.reason})
+                if len(accepted) >= MAX_REFERENCE_IMAGES:
+                    break
+
+        order = {imaging.CONFIRMED: 0, imaging.PROBABLE: 1, imaging.REFERENCE: 2}
         accepted.sort(key=lambda r: order[r["level"]])
         log.info("find_images: %d candidates %s -> checked %d, accepted %d (%.1fs)", len(ranked), counts,
                  len(log_rows), len(accepted), time.perf_counter() - started)
@@ -442,12 +546,13 @@ class Nodes:
         }
 
     @staticmethod
-    def _image_row(c: images.ImageCandidate) -> dict:
+    def _image_row(c: images.ImageCandidate, state: AgentState | None = None) -> dict:
+        # 掲載ページの Tier はページ単位の調整を含める（V-2）。同じ画像が載っている別のサイトも残す（V-4）
         return {"src": c.src, "page_url": c.page_url, "stage": c.stage, "title": c.title,
-                "license": c.license, "tier": tier_of(c.page_url)}
+                "license": c.license, "tier": page_tier(c.page_url, state), "also_on": c.extra.get("also_on", [])}
 
     def _check_image(self, state: AgentState, c: images.ImageCandidate, fetched: images.FetchedImage) -> dict:
-        row = self._image_row(c)
+        row = self._image_row(c, state)
         if not row["license"] and images.is_wikimedia_file(c.src):
             try:
                 row["license"] = images.commons_license(c.src)   # Wikimedia の画像なら利用条件を取りに行く
@@ -462,7 +567,7 @@ class Nodes:
         text_match = bool(re.search(r"\d", label) and len(visible) >= 2 and mentions(visible, [label]))
         level = imaging.judge(row["tier"], True, out.get("context", "low"), out.get("visual", "unknown"), text_match)
         return {**row, "level": level, "context": out.get("context"), "visual": out.get("visual"),
-                "visible_text": visible, "text_match": text_match,
+                "visible_text": visible, "text_match": text_match, "features_seen": out.get("features_seen", []),
                 "description": out.get("description", ""), "reason": out.get("reason", ""),
                 "size": f"{fetched.width}×{fetched.height}"}
 
@@ -542,9 +647,10 @@ class Nodes:
                          + "\n".join(f"- {f}" for f in state["failures"]))
         if state.get("unresponsive"):
             parts.append(f"\n※ SearXNG で応答しなかった検索エンジン: {', '.join(state['unresponsive'])}")
+        if state.get("databases_used"):
+            parts.append(f"\n※ 分野別データベースも調べました: {'、'.join(state['databases_used'])}")
         if sources:
-            parts.append("\n### 出典\n" + "\n".join(
-                f"[{i}] {s['title']} — {s['url']}（Tier {s['tier']}）" for i, s in enumerate(sources, 1)))
+            parts.append("\n### 出典\n" + sources_text(state, sources))
         answer = "\n".join(parts)
         return {"answer": answer, "trace": [{"node": "respond", "answer": answer}]}
 
@@ -608,6 +714,29 @@ def evidence_ok(evidence: str, request: str, label: str) -> bool:
     return len(rest.strip("のをはがにでとや、。")) >= 2
 
 
+def page_meta(out: dict, text: str, url: str, base: int, from_database: bool = False) -> dict:
+    """1 ページの深掘りで、事実のほかに取れたもの（プログラムが確かめてから使う）。
+
+    - signature: 転載の見分けに使う文章の署名（分野別データベースの記録は比べない）
+    - tier: ページ単位の Tier。LLM の「上げる / 下げる」を、理由があり、設計書の幅に収まるときだけ認める（6.3）
+    - features: 見分ける特徴（7.2 の 3）。引用が本文にあるものだけ
+    - new_terms: 別の呼び方（7.2 の 3）。本文にそのままの表記であるものだけ
+    """
+    meta: dict = {"base_tier": base, "tier": base}
+    if not from_database:
+        meta["signature"] = reprints.signature(text)
+        pt = out.get("page_tier") or {}
+        adjusted = adjusted_tier(base, pt.get("adjust", ""))
+        if adjusted != base and pt.get("reason", "").strip():
+            meta.update(tier=adjusted, tier_reason=f"{pt['adjust']}: {pt['reason'].strip()}")
+    meta["features"] = [{"text": f["text"].strip()[:30], "source": url} for f in out.get("features", [])
+                        if f.get("text", "").strip() and quote_in_text(f.get("quote", ""), text)]
+    body = normalize(text)
+    meta["new_terms"] = [t.strip() for t in out.get("new_terms", [])
+                         if 2 <= len(t.strip()) <= 40 and normalize(t.strip()) in body]
+    return meta
+
+
 def follow_links(page: fetch.Page, name: str, known: set[str]) -> list[str]:
     """R-2: ページからたどる参照を選ぶ（プログラム）。出典欄の中のリンクか、文字や URL に対象の名前がある
     リンクのうち、別のサイトで Tier 1〜2 のものを、Tier の高い順に最大 REFS_PER_PAGE 件。"""
@@ -635,7 +764,10 @@ def confirm_target(state: AgentState, answer: str) -> dict:
             "clarifications": state.get("clarifications", []) + [answer],
             "verified": [], "reading_list": [], "priority_urls": [], "pages_read": [], "coverage": [],
             "aspects": [], "conflicts": [], "conflicts_checked_at": -1, "tier1_searched": False, "stale_reads": 0,
-            "new_ambiguity": "", "name_variants": {}, "seen_sites": [], "query_log": []}
+            "new_ambiguity": "", "name_variants": {}, "seen_sites": [], "query_log": [],
+            "official_checked": False, "official_hosts": [], "official_urls": [], "databases_checked": False,
+            "databases_used": [], "db_records": {}, "db_images": [], "page_signatures": {}, "reprints": {},
+            "page_tiers": {}, "features": [], "page_images": []}
 
 
 def as_candidate(e: wikimedia.Entity) -> Candidate:
@@ -675,29 +807,52 @@ def pick_candidate(answer: str, candidates: list[Candidate]) -> Candidate | None
     return None
 
 
+def _image_lines(img: dict, name: str) -> list[str]:
+    if img["level"] == imaging.REFERENCE:
+        level = (f"{img['level']}（{name}そのものではありません。関係のある「{img.get('related', '')}」"
+                 f"（{img.get('relation', '')}）の画像です）")
+    else:
+        level = img["level"] + ("" if img["level"] == imaging.CONFIRMED else "（確認しきれていません）")
+    lines = [f"![{img.get('description', '')}]({img['src']})", f"- 確信度: {level}"]
+    if img["level"] != imaging.REFERENCE:
+        lines.append(f"- 写っているもの: {img.get('description', '')}")
+    if img.get("features_seen"):
+        lines.append(f"- 画像で確かめた特徴: {'、'.join(img['features_seen'])}")
+    lines += [f"- 出典: {img.get('title') or img['page_url']} — {img['page_url']}（Tier {img['tier']}）",
+              f"- ライセンス: {img.get('license') or '不明（掲載ページで確認してください）'}"]
+    if img.get("also_on"):
+        # V-4: 同じ画像が別のサイトにも載っている（複数の出典での一致）
+        lines.append(f"- 同じ画像が載っている別のページ: {len(img['also_on'])} 件（{img['also_on'][0]} など）")
+    return lines + [""]
+
+
 def images_section(state: AgentState) -> str:
-    """報告の「画像」（設計書 9.1, 9.2）。採用した画像と、見つからなかった場合の申告をプログラムが書く。"""
+    """報告の「画像」（設計書 9.1, 9.2）。採用した画像と、見つからなかった場合の申告をプログラムが書く。
+
+    参考画像（L5）は対象そのものではないので、対象の画像が見つからなかったことを先に書いてから出す。
+    """
+    name = (state.get("target") or {}).get("label", "対象")
+    found = [i for i in state.get("images", []) if i["level"] != imaging.REFERENCE]
+    references = [i for i in state.get("images", []) if i["level"] == imaging.REFERENCE]
     lines = ["### 画像"]
-    for img in state.get("images", []):
-        note = "" if img["level"] == imaging.CONFIRMED else "（確認しきれていません）"
-        lines += [f"![{img.get('description', '')}]({img['src']})",
-                  f"- 確信度: {img['level']}{note}",
-                  f"- 写っているもの: {img.get('description', '')}",
-                  f"- 出典: {img.get('title') or img['page_url']} — {img['page_url']}（Tier {img['tier']}）",
-                  f"- ライセンス: {img.get('license') or '不明（掲載ページで確認してください）'}", ""]
-    if not state.get("images") and not imaging.asks_for_images(state.get("request", "")):
+    for img in found:
+        lines += _image_lines(img, name)
+    checked = [r for r in state.get("image_log", []) if r.get("stage") != "L5-周辺"]
+    if not found and not imaging.asks_for_images(state.get("request", "")):
         # 求められていない画像は、見つからなかったことを短く書くだけにする
-        checked = state.get("image_log", [])
-        return f"### 画像\n対象の画像として確認できるものは見つかりませんでした（候補 {len(checked)} 件を確かめました）。"
-    if not state.get("images"):
-        counts = state.get("image_counts", {})
-        checked = state.get("image_log", [])
+        lines.append(f"対象の画像として確認できるものは見つかりませんでした（候補 {len(checked)} 件を確かめました）。")
+    elif not found:
+        counts = {k: v for k, v in state.get("image_counts", {}).items() if k != "L5-周辺"}
         reasons = list(dict.fromkeys(r.get("reason", "") for r in checked if r.get("reason")))[:3]
         lines += ["対象の画像として確認できるものは見つかりませんでした。",
                   "- 試したこと: " + "、".join(f"{k} {v} 件" for k, v in counts.items())
                   + f" の候補から {len(checked)} 件を確かめ、採用 0 件",
                   "- 主な不採用の理由: " + ("／".join(reasons) if reasons else "候補がなかった"),
                   "- 次にできること: 対象の公式サイトや所蔵機関に問い合わせる。お持ちの画像があれば、それが対象かを確認できます"]
+    if references:
+        lines += ["", "参考として、関係のあるものの画像を載せます（対象そのものではありません）。", ""]
+        for img in references:
+            lines += _image_lines(img, name)
     return "\n".join(lines).rstrip()
 
 
@@ -711,7 +866,26 @@ def collect_sources(state: AgentState) -> list[Source]:
     for u in urls:
         by_key.setdefault(canonical(u), u)
     ordered = list(by_key.values())
-    return [{"title": pages.get(u, u), "url": u, "tier": tier_of(u)} for u in ordered]
+    # Tier はページ単位の調整（公式サイト・LLM の判定）を含めたもの
+    return [{"title": pages.get(u, u), "url": u, "tier": page_tier(u, state)} for u in ordered]
+
+
+def sources_text(state: AgentState, sources: list[Source]) -> str:
+    """報告の出典一覧。転載のページには、元のページの番号を添える（独立した出典として数えていないことを示す）。"""
+    number = UrlNumbers([s["url"] for s in sources])
+    copies = state.get("reprints", {})
+    changed = state.get("page_tiers", {})
+    lines = []
+    for i, s in enumerate(sources, 1):
+        line = f"[{i}] {s['title']} — {s['url']}（Tier {s['tier']}"
+        if canonical(s["url"]) in changed and changed[canonical(s["url"])] != tier_of(s["url"]):
+            line += f"。サイトの種類では Tier {tier_of(s['url'])}"
+        line += "）"
+        original = copies.get(canonical(s["url"]))
+        if original and original in number and number[original] != i:
+            line += f" ※ [{number[original]}] とほぼ同じ文章のため、独立した出典として数えていません"
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def infeasible_report(request: str, f: dict) -> str:
