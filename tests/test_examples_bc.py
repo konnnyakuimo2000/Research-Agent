@@ -185,12 +185,12 @@ WEB = WebSearchResponse([WebResult("Martin J. Dürst", "https://www.sw.it.aoyama
                                    "情報テクノロジー学科 教授", [])])
 
 
-def run_search(llm, request):
+def run_search(llm, request, web=WEB):
     state = {"request": request, "decision": {"action": "search", "query": "q", "names": ["マーティン"]}}
     with patch("my_llm_app.agent.nodes.wikimedia.search_entities", return_value=[CITY, NAME]), \
          patch("my_llm_app.agent.nodes.wikimedia.get_entities", return_value={"Q1": CITY, "Q2": NAME}), \
          patch("my_llm_app.agent.nodes.wikimedia.summary_for_entity", return_value=None), \
-         patch("my_llm_app.agent.nodes.searxng.web_search", return_value=WEB):
+         patch("my_llm_app.agent.nodes.searxng.web_search", return_value=web):
         return Nodes(SETTINGS, llm).search(state)
 
 
@@ -219,6 +219,20 @@ def test_specific_subject_is_rewritten_from_results():
             return super().chat_json(system, user, schema, temperature)
     request = "青山学院大学の情報テクノロジー学科のマーティン先生について"
     out = run_search(FixLLM("マーティン・ヤーコプ・デュルスト", "青山学院大学の情報テクノロジー学科の"), request)
+    assert out["target"]["label"] == "Martin J. Dürst"
+
+
+def test_snippet_only_name_is_replaced_by_title_name():
+    # 抜粋にだけある表記（題名は「Martin J. Dürst」）→ 題名の表記に写し直す
+    class FixLLM(SpecificLLM):
+        def chat_json(self, system, user, schema, temperature=0.2):
+            if len(schema["properties"]) == 1:
+                return {"specific_subject": "Martin J. Dürst"}
+            return super().chat_json(system, user, schema, temperature)
+    web = WebSearchResponse([WebResult("Martin J. Dürst", "https://www.sw.it.aoyama.ac.jp/D%C3%BCrst/",
+                                       "テュールスト マーティン 情報テクノロジー学科 教授", [])])
+    request = "青山学院大学の情報テクノロジー学科のマーティン先生について"
+    out = run_search(FixLLM("テュールスト マーティン", "青山学院大学の情報テクノロジー学科の"), request, web)
     assert out["target"]["label"] == "Martin J. Dürst"
 
 

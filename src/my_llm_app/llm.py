@@ -29,6 +29,19 @@ class LLM:
             api_key=settings.llm_api_key,
             timeout=settings.llm_timeout,
         )
+        # 接続できずに待った秒数の合計（失敗した呼び出しの時間 + やり直し前の待ち）。
+        # 調査の時間の上限から除くために使う（サーバーが止まっている間に上限を使い切らないように）
+        self._waited = 0.0
+        self._lock = threading.Lock()
+
+    @property
+    def waited(self) -> float:
+        with self._lock:
+            return self._waited
+
+    def _add_wait(self, seconds: float) -> None:
+        with self._lock:
+            self._waited += seconds
 
     def _create(self, messages: list[dict], **kwargs: Any) -> str:
         for attempt in range(len(_RETRY_WAITS) + 1):
@@ -43,11 +56,13 @@ class LLM:
                         **kwargs,
                     )
             except (APIConnectionError, APITimeoutError, InternalServerError) as e:
+                self._add_wait(time.perf_counter() - started)
                 if attempt == len(_RETRY_WAITS):
                     raise
                 wait = _RETRY_WAITS[attempt]
                 log.warning("LLM に接続できません（%s）。%d 秒後にやり直します", type(e).__name__, wait)
                 time.sleep(wait)
+                self._add_wait(wait)
                 continue
             usage = r.usage
             log.info("llm: %.1fs (prompt %s, completion %s tokens)", time.perf_counter() - started,

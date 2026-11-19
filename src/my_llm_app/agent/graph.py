@@ -23,24 +23,38 @@ from my_llm_app.config import Settings, load_settings
 from my_llm_app.llm import LLM
 
 
-def timed(name: str, fn: Callable[[AgentState], dict]) -> Callable[[AgentState], dict]:
-    """ノードの所要時間を実行記録（trace）に残す。どこに時間がかかったかを調べるため。"""
+LLM_OUTAGE = "研究室の LLM サーバーに一時的に接続できなかった（待った時間は調査の時間に数えていない）"
+
+
+def timed(name: str, fn: Callable[[AgentState], dict], llm: LLM | None = None) -> Callable[[AgentState], dict]:
+    """ノードの所要時間を実行記録（trace）に残す。どこに時間がかかったかを調べるため。
+
+    LLM サーバーに接続できずに待った時間（llm_wait）も残す。時間の上限はこれを除いて数える（guard.elapsed）。
+    """
     def run(state: AgentState) -> dict:
         started = time.perf_counter()
+        waited = getattr(llm, "waited", 0.0)
         out = fn(state)
         seconds = round(time.perf_counter() - started, 1)
-        return {**out, "trace": out.get("trace", []) + [{"node": name, "seconds": seconds}]}
+        # 並列に読むノードでは待ちが重なって数えられるので、ノードの時間を超えないようにする
+        wait = round(min(seconds, getattr(llm, "waited", 0.0) - waited), 1)
+        entry = {"node": name, "seconds": seconds} | ({"llm_wait": wait} if wait > 0 else {})
+        out = {**out, "trace": out.get("trace", []) + [entry]}
+        if wait > 0:
+            out["failures"] = list(dict.fromkeys(out.get("failures", state.get("failures", [])) + [LLM_OUTAGE]))
+        return out
     return run
 
 
 def build_graph(settings: Settings | None = None, llm: LLM | None = None):
     settings = settings or load_settings()
-    nodes = Nodes(settings, llm or LLM(settings))
+    llm = llm or LLM(settings)
+    nodes = Nodes(settings, llm)
 
     g = StateGraph(AgentState)
     for name in ("check_feasibility", "report_infeasible", "decide", "search", "ask_user", "read_pages",
                  "check_conflicts", "find_images", "respond"):
-        g.add_node(name, timed(name, getattr(nodes, name)))
+        g.add_node(name, timed(name, getattr(nodes, name), llm))
 
     g.add_edge(START, "check_feasibility")
     g.add_conditional_edges("check_feasibility", route_feasibility, ["report_infeasible", "decide"])

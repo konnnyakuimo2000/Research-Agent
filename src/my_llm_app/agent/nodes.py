@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 import re
 import time
-import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import unquote, urlparse
 
@@ -20,7 +19,9 @@ from langgraph.types import interrupt
 from my_llm_app.agent import coverage as cov
 from my_llm_app.agent import imaging
 from my_llm_app.agent import prompts
+from my_llm_app.agent import query_plan
 from my_llm_app.agent.guard import check_decision, is_ambiguous
+from my_llm_app.agent.names import mentions
 from my_llm_app.agent.quotes import normalize, quote_in_text
 from my_llm_app.agent.state import (DOMINANCE_RATIO, MAX_CANDIDATES, MAX_IMAGE_CHECKS, MAX_IMAGE_FETCHES,
                                     MAX_REF_DEPTH,
@@ -134,16 +135,20 @@ class Nodes:
             errors.append(f"target rejected: evidence={update.get('target_evidence', '')!r}")
             target = None
         subject = update.get("specific_subject", "").strip()
-        found_text = " ".join(f"{w.title} {w.snippet}" for w in web.results) + " " + " ".join(e.label for e in entities)
-        if subject and not mentions(found_text, [subject]):
-            # 名前は検索結果にある表記に限る。LLM が作った読み方・訳し方（例: 実在しないカタカナ表記）で
-            # 対象を決めると、その名前で検索し、その名前で読むページを絞ってしまう。1 回だけ書き直させる
-            errors.append(f"specific_subject not in results: {subject!r}")
+        titles = " ".join(w.title for w in web.results) + " " + " ".join(e.label for e in entities)
+        found_text = titles + " " + " ".join(w.snippet for w in web.results)
+        if subject and not mentions(titles, [subject]):
+            # 名前は検索結果の題名にある表記を使う。LLM が作った読み方（例: 実在しないカタカナ表記）や、
+            # 抜粋にだけある別の文字の表記で対象を決めると、その名前で検索し、その名前で読むページを絞ってしまう
+            # （題名の「DÜRST, Martin J.」が抜粋の「テュールスト マーティン ヤコブ」と一致しない）。1 回だけ書き直させる
+            errors.append(f"specific_subject not in titles: {subject!r}")
             fixed = self.llm.chat_json(prompts.SUBJECT_FIX_SYSTEM, prompts.subject_fix_user(subject, web.results),
                                        prompts.SUBJECT_FIX_SCHEMA).get("specific_subject", "").strip()
-            subject = fixed if fixed and mentions(found_text, [fixed]) else ""
-            if not subject:
+            if fixed and mentions(titles, [fixed]):
+                subject = fixed
+            elif not mentions(found_text, [subject]):
                 errors.append(f"specific_subject rejected: {fixed!r}")
+                subject = ""                    # 抜粋にもない名前は使わない。抜粋にある名前なら、そのまま使う
         if (not target and not state.get("target") and not state.get("clarifications") and subject
                 and evidence_ok(update.get("specific_evidence", ""), state["request"], subject)):
             # 依頼文の条件（所属・型番など）で、検索結果の対象が 1 つに決まった。同名の別の意味は聞き返さない
@@ -225,12 +230,17 @@ class Nodes:
                 result["tier1_searched"] = True
             # 上の Tier から読む。Tier 5（転載・まとめ）は読まない
             result["reading_list"] = by_tier(state.get("reading_list", []) + urls)
+            read = {canonical(p["url"]) for p in state.get("pages_read", [])}
             if decision.get("aspect") or decision.get("conflict_topic"):
                 # 観点や食い違いを狙って探したページは、他より先に読む（R-1, R-6）
-                read = {p["url"] for p in state.get("pages_read", [])}
                 result["priority_urls"] = by_tier(state.get("priority_urls", [])
                                                   + [w.url for w in relevant
-                                                     if w.url not in read and not fetch.is_unreadable(w.url)])
+                                                     if canonical(w.url) not in read and not fetch.is_unreadable(w.url)])
+            # この検索で初めて見つかった、対象のページの数（次の検索を選ぶときの「空振り」の判定に使う）
+            known_urls = read | {canonical(u) for u in state.get("reading_list", [])}
+            new_relevant = len({canonical(w.url) for w in relevant} - known_urls)
+            result.update(query_plan.harvest(state, web.results, current["label"] if current else "",
+                                             {**decision, "query": query}, new_relevant))
 
         log.info("search: %r names=%s -> wikidata %d, web %d (%.1fs)", query, names, len(entities),
                  len(web.results), time.perf_counter() - started)
@@ -570,30 +580,6 @@ def drop_sentences_with(body: str, words: list[str]) -> str:
     return "".join(p for p in pieces if p.lstrip().startswith("#") or not any(w in p for w in words))
 
 
-def mentions(text: str, names: list[str]) -> bool:
-    # 文に対象の名前が出てくるか。型番のように数字を含む語は、その語だけで一致とみなす
-    t = normalize(text).lower()
-    for name in names:
-        n = normalize(name).lower()
-        if len(n) >= 2 and n in t:
-            return True
-        words = [normalize(w).lower() for w in re.split(r"[\s・,，.]+", name)]
-        words = [w for w in words if len(w) >= 2]
-        model = [w for w in words if len(w) >= 3 and re.search(r"\d", w)]
-        if model:
-            if any(w in t for w in model):
-                return True
-            continue                          # 型番のある名前は型番で見る（兄弟機種を通さない）
-        # 「DÜRST, Martin Jakob」と「Martin J. Dürst」のように、語順や略し方が違う名前。
-        # 名前の語のうち 2 つ以上が出てくれば一致とみなす（ラテン文字の語だけ。語の境目で見る）
-        latin = [w for w in words if re.fullmatch(r"[a-zà-öø-ÿ]+", w)]
-        tl = unicodedata.normalize("NFKC", text).lower()
-        if len(latin) >= 2 and sum(bool(re.search(rf"(?<![a-zà-öø-ÿ]){w}(?![a-zà-öø-ÿ])", tl))
-                                   for w in latin) >= 2:
-            return True
-    return False
-
-
 # 依頼文によく出る決まり文句（対象を絞り込む根拠にならない）
 _GENERIC_PHRASES = ("について", "に関して", "調べて", "教えて", "知りたい", "ください", "とは", "の情報", "情報")
 
@@ -636,7 +622,7 @@ def confirm_target(state: AgentState, answer: str) -> dict:
             "clarifications": state.get("clarifications", []) + [answer],
             "verified": [], "reading_list": [], "priority_urls": [], "pages_read": [], "coverage": [],
             "aspects": [], "conflicts": [], "conflicts_checked_at": -1, "tier1_searched": False, "stale_reads": 0,
-            "new_ambiguity": ""}
+            "new_ambiguity": "", "name_variants": {}, "seen_sites": [], "query_log": []}
 
 
 def as_candidate(e: wikimedia.Entity) -> Candidate:

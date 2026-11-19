@@ -130,8 +130,9 @@ def match_user(question: str, answer: str, candidates: list) -> str:
 
 
 SUBJECT_FIX_SYSTEM = """調査対象の名前を、検索結果にある表記に直す役です。
-前に答えた名前は、検索結果のどこにも書かれていなかった。同じ対象を指す名前を、検索結果の題名か抜粋から
-1 文字も変えずにそのまま写す（読み方・訳し方・並べ替えをしない）。見つからなければ空文字にする。"""
+前に答えた名前は、検索結果の題名に書かれていなかった。同じ対象を指す名前を、検索結果の題名から
+1 文字も変えずにそのまま写す（読み方・訳し方・並べ替えをしない。題名のうち名前の部分だけを写す）。
+題名に見つからなければ空文字にする。"""
 
 SUBJECT_FIX_SCHEMA = {"type": "object", "properties": {"specific_subject": {"type": "string"}},
                       "required": ["specific_subject"]}

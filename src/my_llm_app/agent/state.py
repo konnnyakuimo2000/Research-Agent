@@ -100,7 +100,10 @@ class AgentState(TypedDict, total=False):
     pages_read: list[PageRead]        # 読んだ（読もうとした）ページ
     verified: list[VerifiedFact]      # ページ本文から抜き出し、引用を照合できた事実（回答はこれだけで書く）
     subject_type: str                 # 対象の種類（観点のお手本のチェックリストを選ぶため）
-    aspects_origin: str               # 観点を作ったもの（"LLM" か、使えなかったときの "チェックリスト"）
+    name_variants: dict[str, int]     # 検索結果の題名にあった対象の名前の別の表記 → 出てきた題名の数（query_plan）
+    seen_sites: list[str]             # 対象の名前を含む結果が出た、Tier 1〜2 のドメイン（query_plan）
+    query_log: list[dict]             # 検索ごとの成果（query, aspect, site, new = 初めて見つかった対象のページ数）
+    aspects_origin: str              # 観点を作ったもの（"LLM" か、使えなかったときの "チェックリスト"）
     aspects: list[dict]               # 調べる観点（観点チェックリストから展開）
     coverage: list[dict]              # 網羅表（観点ごとの出典数・Tier・状態。プログラムが集計）
     aspect_searched: list[str]        # 埋まっていない観点を狙って検索した観点

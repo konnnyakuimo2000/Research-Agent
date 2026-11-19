@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 
+from my_llm_app.agent import query_plan
 from my_llm_app.agent.coverage import MISSING, WEAK
 from my_llm_app.agent.state import (EXTRA_PAGES, MAX_ASPECT_SEARCHES, MAX_CANDIDATES, MAX_CONFLICT_SEARCHES,
                                     MAX_FREE_SEARCHES, MAX_PAGE_ATTEMPTS, MAX_PAGES, MAX_QUESTIONS, MAX_SECONDS,
@@ -45,8 +46,12 @@ def is_ambiguous(state: AgentState) -> bool:
 
 
 def elapsed(state: AgentState) -> float:
-    """ここまでに処理にかかった秒数。各ノードの時間の合計なので、利用者の答えを待つ時間は入らない。"""
-    return sum(t.get("seconds", 0) for t in state.get("trace", []))
+    """ここまでに処理にかかった秒数。各ノードの時間の合計なので、利用者の答えを待つ時間は入らない。
+
+    LLM サーバーに接続できずに待った時間（llm_wait）も除く。サーバーが止まっている間に上限を使い切り、
+    何も読まずに報告してしまうのを防ぐ。
+    """
+    return sum(t.get("seconds", 0) - t.get("llm_wait", 0) for t in state.get("trace", []))
 
 
 def time_over(state: AgentState) -> bool:
@@ -109,19 +114,22 @@ def research_step(state: AgentState, d: Decision) -> Decision | None:
                   else "網羅表に埋まっていない・弱い観点があるため、さらにページを読む")
         return {**d, "action": "read_pages", "guard": reason}
 
-    # 4. 観点を狙って検索し直す。未発見の観点（R-1）を先に、出典が弱い観点（R-6）を後に。
+    # 4. 埋まっていない・弱い観点（R-1, R-6）のために検索し直す。どの検索を打つかは query_plan が点数で選ぶ
+    #    （検索結果にある名前の表記 × 観点、事実が取れたドメインへの site: 検索）。点数が低ければ打たない。
     #    見つけたページを読む枠が残っていなければ、検索しても無駄なのでしない
-    if web_ok and can_read_extra:
-        searched = state.get("aspect_searched", [])
-        todo = [r["aspect"] for r in missing + weak if r["aspect"] not in searched]
-        if todo and len(searched) < MAX_ASPECT_SEARCHES:
-            aspect = todo[0]
-            words = next((a["words"] for a in state.get("aspects", []) if a["name"] == aspect), aspect)
-            query = f"{_name(state)} {words}"
-            if query not in state.get("searched", []):
+    if web_ok and can_read_extra and len(state.get("aspect_searched", [])) < MAX_ASPECT_SEARCHES:
+        plan = query_plan.next_search(state)
+        if plan:
+            aspect = plan["aspect"]
+            if plan["site"]:
+                why = f"事実が取れた・信頼度の高いサイト（{plan['site']}）の別のページを探す"
+            else:
                 kind = "見つかっていない" if any(r["aspect"] == aspect for r in missing) else "弱い"
-                return {**d, "action": "search", "query": query, "names": [_name(state)], "aspect": aspect,
-                        "guard": f"観点「{aspect}」の出典が{kind}ため、その観点で検索し直す"}
+                why = f"観点「{aspect}」の出典が{kind}ため、その観点で検索し直す"
+            return {**d, "action": "search", "query": plan["query"], "names": plan["names"], "aspect": aspect,
+                    "site": plan["site"], "plan": {"score": plan["score"], "parts": plan["parts"],
+                                                   "alternatives": plan["alternatives"]},
+                    "guard": f"{why}（点数 {plan['score']}）"}
 
     # 5. 食い違いを調べる。前に調べた後で事実が増えていれば調べ直す
     if verified and state.get("conflicts_checked_at", -1) < len(verified):
