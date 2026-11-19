@@ -14,7 +14,8 @@ REJECTED = "不採用"
 
 # 画像を求める依頼かどうかを決める言葉（「図」は「地図」「図書館」にも当たるので入れない）
 IMAGE_WORDS = ("画像", "写真", "イメージ図", "見た目", "外観", "ビジュアル")
-_STAGE_ORDER = {"L2-Wikidata": 0, "L4-ページ内": 1, "L1-画像検索": 2, "L2-Commons": 3}
+# Commons のカテゴリは「対象を写した画像」として人が分類したものなので、ページ内の画像より先に確かめる
+_STAGE_ORDER = {"L2-Wikidata": 0, "L2-Commonsカテゴリ": 1, "L4-ページ内": 2, "L1-画像検索": 3, "L2-Commons": 4}
 
 
 # 画像を断る言い方（このときだけ画像を探さない）
@@ -31,15 +32,22 @@ def wants_images(request: str) -> bool:
     return not NO_IMAGE.search(request)
 
 
-def judge(page_tier: int, fetched_ok: bool, context: str, visual: str) -> str:
+def judge(page_tier: int, fetched_ok: bool, context: str, visual: str, text_match: bool = False) -> str:
     """確信度（設計書 8.3）。
 
     context: 掲載ページの文脈が、対象そのものの画像だと示しているか（high / mid / low）  … V-1（LLM）
     visual:  画像の内容が対象の説明・事実と矛盾しないか（consistent / contradict / unknown） … V-3（LLM）
     page_tier: 掲載ページの Tier                                                         … V-2（プログラム）
     fetched_ok: 画像として使えるか（取得・大きさ）                                        … V-5（プログラム）
+    text_match: 画像の中の文字（刻印・型番）が対象の名前と一致するか                        … V-4（照合はプログラム）
     """
-    if not fetched_ok or visual == "contradict" or context == "low" or page_tier >= EXCLUDED_TIER:
+    if not fetched_ok or visual == "contradict" or page_tier >= EXCLUDED_TIER:
+        return REJECTED
+    if text_match:
+        # 写っている刻印・型番が対象と一致する。ページの題名が兄弟機種（例: PEN EE のページの EE-3 の写真）でも採る。
+        # 文字の読み取りは LLM なので、信頼度の高いページで文脈も合うときだけ確認済みにする
+        return CONFIRMED if page_tier <= 2 and context == "high" else PROBABLE
+    if context == "low":
         return REJECTED
     if context == "high" and page_tier <= 2:
         return CONFIRMED

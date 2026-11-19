@@ -37,6 +37,61 @@ def test_judge_table():
     assert j(1, True, "low", "consistent") == imaging.REJECTED
     assert j(1, False, "high", "consistent") == imaging.REJECTED     # 取得できない・小さすぎる
     assert j(5, True, "high", "consistent") == imaging.REJECTED      # Tier 5
+    # 写っている刻印・型番が対象と一致する → ページの題名が兄弟機種（文脈 low）でも採る
+    assert j(4, True, "low", "consistent", text_match=True) == imaging.PROBABLE
+    assert j(4, True, "low", "unknown", text_match=True) == imaging.PROBABLE
+    assert j(2, True, "high", "consistent", text_match=True) == imaging.CONFIRMED
+    assert j(4, True, "high", "contradict", text_match=True) == imaging.REJECTED   # 見た目の矛盾は優先
+    assert j(5, True, "high", "consistent", text_match=True) == imaging.REJECTED   # Tier 5 は使わない
+
+
+def test_commons_category_images_are_used_only_for_matching_categories():
+    from unittest.mock import patch
+    from my_llm_app.agent.nodes import Nodes
+    from my_llm_app.tools.images import ImageCandidate
+
+    def cat(name, file):
+        return ImageCandidate(src=f"https://upload.wikimedia.org/{file}", page_url=f"https://commons.wikimedia.org/wiki/File:{file}",
+                              stage="L2-Commonsカテゴリ", title=f"File:{file}", extra={"category": name})
+    found = [cat("Olympus Pen EE-3", "Olympus_pen_ee3.jpg"), cat("Olympus Pen EE-2", "ee2.jpg")]
+    seen = []
+
+    class VLM:
+        def chat_json(self, system, user, schema, temperature=0.2, image_data_url=None):
+            seen.append(user)
+            return {"context": "high", "visual": "consistent", "visible_text": "", "description": "カメラ", "reason": ""}
+
+    state = {"request": "EE-3", "target": {"id": "", "label": "Olympus PEN EE-3", "description": "カメラ"}}
+    ok = images.FetchedImage(ok=True, data_url="data:,", width=400, height=300)
+    with patch("my_llm_app.agent.nodes.images.commons_category", return_value=found), \
+         patch("my_llm_app.agent.nodes.images.commons_search", return_value=[]), \
+         patch("my_llm_app.agent.nodes.images.searxng_images", return_value=[]), \
+         patch("my_llm_app.agent.nodes.images.fetch_image", return_value=ok):
+        out = Nodes(SETTINGS, VLM()).find_images(state)
+    assert out["image_counts"]["L2-Commonsカテゴリ"] == 1                      # EE-2 のカテゴリは使わない
+    assert [i["src"] for i in out["images"]] == ["https://upload.wikimedia.org/Olympus_pen_ee3.jpg"]
+    assert out["images"][0]["level"] == imaging.CONFIRMED                        # Commons（Tier 2）で文脈も合う
+
+
+def test_engraved_model_number_is_checked_by_program():
+    from my_llm_app.agent.nodes import Nodes
+    from my_llm_app.tools.images import FetchedImage, ImageCandidate
+
+    class VLM:
+        def __init__(self, text):
+            self.text = text
+
+        def chat_json(self, system, user, schema, temperature=0.2, image_data_url=None):
+            return {"context": "low", "visual": "consistent", "visible_text": self.text,
+                    "description": "銀色のカメラ", "reason": "ページは PEN EE"}
+
+    state = {"request": "EE-3", "target": {"id": "", "label": "Olympus PEN EE-3", "description": "カメラ"}}
+    c = ImageCandidate(src="https://shop.example.com/a.jpg", page_url="https://shop.example.com/pen-ee",
+                       title="オリンパス ペン EE", caption="", stage="L4-ページ内")
+    fetched = FetchedImage(ok=True, data_url="data:image/jpeg;base64,", width=400, height=300)
+    assert Nodes(None, VLM("OLYMPUS PEN EE-3"))._check_image(state, c, fetched)["level"] == imaging.PROBABLE
+    assert Nodes(None, VLM("OLYMPUS PEN EE-2"))._check_image(state, c, fetched)["level"] == imaging.REJECTED
+    assert Nodes(None, VLM("OLYMPUS PEN"))._check_image(state, c, fetched)["level"] == imaging.REJECTED
 
 
 def test_rank_puts_wikidata_first_and_drops_tier5_and_duplicates():
@@ -95,6 +150,7 @@ def test_find_images_collects_checks_and_judges():
                         title="File:wave.jpg", caption="浮世絵")
     with patch.object(images, "wikidata_image", return_value=[wd]), \
          patch.object(images, "commons_search", return_value=[cm]), \
+         patch.object(images, "commons_category", return_value=[]), \
          patch.object(images, "searxng_images", side_effect=RuntimeError("down")), \
          patch.object(images, "fetch_image", return_value=images.FetchedImage(True, data_url="data:x", width=800,
                                                                               height=600)):
@@ -102,7 +158,8 @@ def test_find_images_collects_checks_and_judges():
     assert out["images_checked"] is True
     assert [(i["src"], i["level"]) for i in out["images"]] == [("https://up/wd.jpg", imaging.CONFIRMED)]
     assert [r["level"] for r in out["image_log"]] == [imaging.CONFIRMED, imaging.REJECTED]
-    assert out["image_counts"] == {"L2-Wikidata": 1, "L2-Commons": 1, "L1-画像検索": 0, "L4-ページ内": 0}
+    assert out["image_counts"] == {"L2-Wikidata": 1, "L2-Commonsカテゴリ": 0, "L2-Commons": 1, "L1-画像検索": 0,
+                                   "L4-ページ内": 0}
     assert any("L1-画像検索" in f for f in out["failures"])      # 使えなかった方法は申告する
 
 

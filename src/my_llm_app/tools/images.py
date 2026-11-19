@@ -183,6 +183,27 @@ def commons_search(query: str, limit: int = 5, timeout: float = 30.0) -> list[Im
                            caption=i["description"], license=i["license"]) for i in infos]
 
 
+def commons_category(name: str, limit: int = 5, timeout: float = 30.0) -> list[ImageCandidate]:
+    """Wikimedia Commons のカテゴリから画像を探す（L2）。
+
+    ファイル名に名前がない画像（「File:Olympus pen ee3.jpg」など）は、ファイル検索では見つからないことがある。
+    対象の名前のカテゴリ（「Category:Olympus Pen EE-3」）にある画像は、対象を写したものとして分類されている。
+    カテゴリ名が対象の名前と一致するかは呼び出し側（mentions）で確かめる。ここでは候補を返すだけ。
+    """
+    r = httpx.get(COMMONS_API, params={"action": "query", "list": "search", "srsearch": name, "srnamespace": 14,
+                                       "srlimit": 3, "format": "json"}, headers=_HEADERS, timeout=timeout)
+    r.raise_for_status()
+    out: list[ImageCandidate] = []
+    for hit in r.json().get("query", {}).get("search", []):
+        cat = hit["title"]
+        infos = _imageinfo({"action": "query", "generator": "categorymembers", "gcmtitle": cat, "gcmtype": "file",
+                            "gcmlimit": limit}, timeout)
+        out += [ImageCandidate(src=i["src"], page_url=i["page_url"], stage="L2-Commonsカテゴリ", title=i["title"],
+                               caption=f"{cat} に分類された画像。{i['description']}"[:300], license=i["license"],
+                               extra={"category": cat.removeprefix("Category:")}) for i in infos]
+    return out
+
+
 def searxng_images(base_url: str, query: str, limit: int = 8, timeout: float = 60.0) -> list[ImageCandidate]:
     """SearXNG の画像検索（L1）。Tier は画像ではなく掲載ページの URL で決める（設計書 G-3）。"""
     r = httpx.get(f"{base_url}/search", params={"q": query, "format": "json", "categories": "images"},

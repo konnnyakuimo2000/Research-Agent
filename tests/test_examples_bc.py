@@ -154,6 +154,7 @@ def test_small_images_do_not_use_up_checks():
              "page_images": [], "verified": []}
     llm = CountingVLM()
     with patch.object(images, "commons_search", return_value=[]), \
+         patch.object(images, "commons_category", return_value=[]), \
          patch.object(images, "searxng_images", return_value=icons + [photo]), \
          patch.object(images, "fetch_image", side_effect=fake_fetch):
         out = Nodes(SETTINGS, llm).find_images(state)

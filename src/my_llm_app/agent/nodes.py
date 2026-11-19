@@ -395,6 +395,10 @@ class Nodes:
 
         if target.get("id"):
             gather("L2-Wikidata", lambda: images.wikidata_image(target["id"], name))
+        # Commons はカテゴリからも探す。ファイル名に型番がない画像（例: Olympus pen ee3.jpg）はファイル検索に出ない。
+        # カテゴリ名が対象の名前と一致するものだけを使う（型番のある名前は型番で見るので、兄弟機種のカテゴリは入らない）
+        gather("L2-Commonsカテゴリ", lambda: [c for c in images.commons_category(name)
+                                             if mentions(c.extra.get("category", ""), [name])])
         gather("L2-Commons", lambda: images.commons_search(name))
         gather("L1-画像検索", lambda: images.searxng_images(self.settings.searxng_url, name))
         gather("L4-ページ内", lambda: [
@@ -451,8 +455,14 @@ class Nodes:
                 pass
         out = self.llm.chat_json(prompts.IMAGE_SYSTEM, prompts.image_user(state, c.title, c.caption, c.page_url),
                                  prompts.IMAGE_SCHEMA, image_data_url=fetched.data_url)
-        level = imaging.judge(row["tier"], True, out.get("context", "low"), out.get("visual", "unknown"))
+        # 画像の中の文字（刻印・型番）と対象の名前の照合はプログラムが行う（型番のある名前は型番で見るので兄弟機種は通らない）
+        label = (state.get("target") or {}).get("label", "")
+        visible = out.get("visible_text", "").strip()
+        # 型番（数字を含む語）のある名前だけに使う。駅名の看板などで別の物を対象と取り違えないように
+        text_match = bool(re.search(r"\d", label) and len(visible) >= 2 and mentions(visible, [label]))
+        level = imaging.judge(row["tier"], True, out.get("context", "low"), out.get("visual", "unknown"), text_match)
         return {**row, "level": level, "context": out.get("context"), "visual": out.get("visual"),
+                "visible_text": visible, "text_match": text_match,
                 "description": out.get("description", ""), "reason": out.get("reason", ""),
                 "size": f"{fetched.width}×{fetched.height}"}
 
@@ -521,6 +531,8 @@ class Nodes:
                      + " / ".join(f"「{f['text']}」[{number[f['source']]}]" for f in c["facts"] if f["source"] in number)
                      for c in state["conflicts"]]
             parts.append("\n### 出典どうしの食い違い\n" + "\n".join(lines))
+        if weak := cov.weak_text(state.get("coverage", [])):
+            parts.append("\n### 出典が限られること\n" + weak)
         if gaps := cov.gaps_text(state.get("coverage", [])):
             parts.append("\n### 確認できなかったこと\n" + gaps)
         if state.get("images_checked"):

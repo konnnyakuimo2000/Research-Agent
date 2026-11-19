@@ -280,6 +280,8 @@ IMAGE_SYSTEM = """あなたは、1 枚の画像が調査対象を写したもの
 - 画像だけで対象を特定しようとしない。マイナーな対象は見た目だけでは区別できないので、文脈（context）を重視する
 - 地図・図表・関係のない人物写真などは、対象そのものの画像ではない（context は low か mid）
 - ロゴは、対象が組織・会社・ブランド・製品のときは対象を表す画像として認めてよい。それ以外の対象では対象そのものの画像ではない
+- visible_text: 画像の中にはっきり読める文字（製品の刻印・型番・ラベル・看板など）を、そのまま写す。
+  読めない・ない場合は空文字。推測で補わない（ページの情報ではなく、画像に写っている文字だけ）
 - description には画像に写っているものを 40 文字以内で書く。reason は 40 文字以内"""
 
 IMAGE_SCHEMA = {
@@ -287,10 +289,11 @@ IMAGE_SCHEMA = {
     "properties": {
         "context": {"type": "string", "enum": ["high", "mid", "low"]},
         "visual": {"type": "string", "enum": ["consistent", "contradict", "unknown"]},
+        "visible_text": {"type": "string"},
         "description": {"type": "string"},
         "reason": {"type": "string"},
     },
-    "required": ["context", "visual", "description", "reason"],
+    "required": ["context", "visual", "visible_text", "description", "reason"],
 }
 
 
