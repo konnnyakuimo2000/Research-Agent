@@ -14,10 +14,15 @@ SETTINGS = Settings(llm_base_url="http://unused/v1", llm_model="m", llm_api_key=
 
 
 def test_wants_images():
-    assert imaging.wants_images("マーキュリーについて調べて、画像もつけて")
-    assert imaging.wants_images("当時の写真がほしい")
-    assert not imaging.wants_images("富士山について調べて")
-    assert not imaging.wants_images("国立国会図書館について調べて")      # 「図」だけでは画像の依頼としない
+    # 求められていなくても画像は探す。断られたときだけ探さない
+    assert imaging.wants_images("富士山について調べて")
+    assert not imaging.wants_images("富士山について調べて。画像はいらない")
+    assert not imaging.wants_images("写真は不要です")
+    # はっきり求めているか（報告の書き方が変わる）
+    assert imaging.asks_for_images("マーキュリーについて調べて、画像もつけて")
+    assert imaging.asks_for_images("当時の写真がほしい")
+    assert not imaging.asks_for_images("富士山について調べて")
+    assert not imaging.asks_for_images("国立国会図書館について調べて")    # 「図」だけでは画像の依頼としない
 
 
 def test_judge_table():
@@ -106,11 +111,15 @@ def test_images_section_found_and_not_found():
         {"src": "https://up/wd.jpg", "page_url": "https://commons.wikimedia.org/wiki/File:a.jpg", "tier": 2,
          "title": "File:a.jpg", "license": "CC BY-SA 3.0", "level": imaging.CONFIRMED, "description": "富士山"}]})
     assert "![富士山](https://up/wd.jpg)" in found and "ライセンス: CC BY-SA 3.0" in found
-    none = images_section({"images_checked": True, "images": [], "image_counts": {"L2-Commons": 3, "L1-画像検索": 5},
-                           "image_log": [{"reason": "別の物"}, {"reason": "小さすぎる（100×80）"}]})
+    empty = {"images_checked": True, "images": [], "image_counts": {"L2-Commons": 3, "L1-画像検索": 5},
+             "image_log": [{"reason": "別の物"}, {"reason": "小さすぎる（100×80）"}]}
+    none = images_section({**empty, "request": "富士山の写真がほしい"})
     assert "見つかりませんでした" in none
     assert "L2-Commons 3 件、L1-画像検索 5 件 の候補から 2 件を確かめ、採用 0 件" in none
     assert "別の物／小さすぎる（100×80）" in none
+    # 求められていない画像は、見つからなかったことを 1 行で書くだけ
+    short = images_section({**empty, "request": "富士山について調べて"})
+    assert short == "### 画像\n対象の画像として確認できるものは見つかりませんでした（候補 2 件を確かめました）。"
 
 
 def test_guard_finds_images_before_responding_only_when_asked():
@@ -131,3 +140,6 @@ def test_image_key_merges_thumbnail_sizes_and_query_strings():
     assert image_key(a) == image_key(b)
     assert image_key("https://example.com/a.jpg?x=1") == image_key("https://example.com/a.jpg")
     assert image_key("https://example.com/a.jpg") != image_key("https://other.example.com/a.jpg")
+    # パーセント符号化の有無だけが違う URL は同じ画像
+    assert (image_key("https://www.sw.it.aoyama.ac.jp/D%C3%BCrst/Martin300.jpg")
+            == image_key("https://www.sw.it.aoyama.ac.jp/Dürst/Martin300.jpg"))

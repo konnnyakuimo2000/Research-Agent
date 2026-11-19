@@ -673,6 +673,10 @@ def images_section(state: AgentState) -> str:
                   f"- 写っているもの: {img.get('description', '')}",
                   f"- 出典: {img.get('title') or img['page_url']} — {img['page_url']}（Tier {img['tier']}）",
                   f"- ライセンス: {img.get('license') or '不明（掲載ページで確認してください）'}", ""]
+    if not state.get("images") and not imaging.asks_for_images(state.get("request", "")):
+        # 求められていない画像は、見つからなかったことを短く書くだけにする
+        checked = state.get("image_log", [])
+        return f"### 画像\n対象の画像として確認できるものは見つかりませんでした（候補 {len(checked)} 件を確かめました）。"
     if not state.get("images"):
         counts = state.get("image_counts", {})
         checked = state.get("image_log", [])

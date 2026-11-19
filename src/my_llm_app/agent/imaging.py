@@ -17,8 +17,18 @@ IMAGE_WORDS = ("画像", "写真", "イメージ図", "見た目", "外観", "�
 _STAGE_ORDER = {"L2-Wikidata": 0, "L4-ページ内": 1, "L1-画像検索": 2, "L2-Commons": 3}
 
 
+# 画像を断る言い方（このときだけ画像を探さない）
+NO_IMAGE = re.compile(r"(画像|写真)(は|も)?(いら|不要|要らない|なし|無し|なくて|無くて)")
+
+
+def asks_for_images(request: str) -> bool:
+    """依頼がはっきり画像を求めているか（報告の書き方を変えるため）。"""
+    return any(w in request for w in IMAGE_WORDS) and not NO_IMAGE.search(request)
+
+
 def wants_images(request: str) -> bool:
-    return any(w in request for w in IMAGE_WORDS)
+    """画像を探すか。求められていなくても探す（対象の理解に役立つため）。断られたときだけ探さない。"""
+    return not NO_IMAGE.search(request)
 
 
 def judge(page_tier: int, fetched_ok: bool, context: str, visual: str) -> str:

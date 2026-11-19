@@ -106,7 +106,7 @@ def research_step(state: AgentState, d: Decision) -> Decision | None:
 
     # 2. 画像。求められていれば、調べ直し（時間がかかる）より先に探す。画像を出さずに時間切れにならないように
     if wants_more_images(state):
-        return {**d, "action": "find_images", "guard": "画像を求められているので、応答の前に画像を探して確かめる"}
+        return {**d, "action": "find_images", "guard": "応答の前に、対象の画像を探して確かめる"}
 
     # 3. さらにページを読む（埋まらない・弱い観点がある、狙って探したページがある）
     #    狙って探したページは、収束していても読む（無関係なページや JavaScript のページで空振りが続いた後に、

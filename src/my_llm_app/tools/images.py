@@ -119,7 +119,8 @@ def image_key(src: str) -> str:
     if is_wikimedia_file(src):
         name = unquote(parsed.path.rsplit("/", 1)[-1])
         return "wikimedia:" + re.sub(r"^\d+px-", "", name).lower()
-    return f"{parsed.hostname}{parsed.path}"
+    # 「/D%C3%BCrst/a.jpg」と「/Dürst/a.jpg」は同じ画像（パーセント符号化の有無だけの違い）
+    return f"{parsed.hostname}{unquote(parsed.path)}"
 
 
 def commons_license(src: str, timeout: float = 30.0) -> str:

@@ -115,7 +115,7 @@ class AgentState(TypedDict, total=False):
     link_depth: dict[str, int]        # 参照をたどって見つけたページの深さ（R-2）
     new_ambiguity: str                # 調査の途中で見つかった同名の別の対象（R-5）
     ambiguity_asked: bool             # それについて利用者に確認したか
-    wants_images: bool                # 依頼が画像を求めているか
+    wants_images: bool                # 画像を探すか（求められていなくても探す。断られたときだけ False）
     page_images: list[dict]           # 読んだページに載っていた画像（L4 の候補）
     images_checked: bool              # 画像を探したか（応答の前に 1 回だけ）
     images: list[dict]                # 採用した画像（確認済み・おそらく正しい）
