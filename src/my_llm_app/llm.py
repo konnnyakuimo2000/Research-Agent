@@ -8,7 +8,8 @@ import threading
 import time
 from typing import Any
 
-from openai import APIConnectionError, APITimeoutError, InternalServerError, OpenAI
+import httpx
+from openai import APIConnectionError, APIStatusError, OpenAI
 
 from my_llm_app.config import Settings
 
@@ -18,16 +19,34 @@ _semaphore = threading.Semaphore(_MAX_CONCURRENCY)
 # 研究室サーバーが一時的に応答しなくなることがあるため、間隔を広げながらやり直す
 _RETRY_WAITS = (10, 30, 60)
 
+# やり直す失敗（一時的なもの）: 接続できない・待ち時間切れ（APIConnectionError とその子の APITimeoutError）と、
+# 状態コード 408（待ち時間切れ）・409（競合）・429（混雑）・5xx（サーバーの障害）。SDK が既定でやり直すものと同じ範囲
+_RETRY_STATUS = {408, 409, 429}
+
 log = logging.getLogger(__name__)
 
 
+class LLMOutputError(ValueError):
+    """LLM の出力を、やり直しても JSON として読めなかった（呼び出した側で、その 1 件の失敗として扱う）。"""
+
+
+def _transient(e: Exception) -> bool:
+    if isinstance(e, APIConnectionError):
+        return True
+    return isinstance(e, APIStatusError) and (e.status_code in _RETRY_STATUS or e.status_code >= 500)
+
+
 class LLM:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, http_client: httpx.Client | None = None) -> None:
         self.model = settings.llm_model
+        # やり直しはこのクラス（_create）だけで行う。SDK のやり直し（既定 2 回）と重なると、
+        # 1 回の呼び出しで最大 12 回送ってしまい、待った時間も数えられないため、SDK 側は 0 回にする
         self.client = OpenAI(
             base_url=settings.llm_base_url,
             api_key=settings.llm_api_key,
             timeout=settings.llm_timeout,
+            max_retries=0,
+            http_client=http_client,
         )
         # 接続できずに待った秒数の合計（失敗した呼び出しの時間 + やり直し前の待ち）。
         # 調査の時間の上限から除くために使う（サーバーが止まっている間に上限を使い切らないように）
@@ -55,7 +74,9 @@ class LLM:
                         extra_body={"chat_template_kwargs": {"enable_thinking": False}},
                         **kwargs,
                     )
-            except (APIConnectionError, APITimeoutError, InternalServerError) as e:
+            except (APIConnectionError, APIStatusError) as e:
+                if not _transient(e):
+                    raise                       # 400・401 などは、やり直しても同じ
                 self._add_wait(time.perf_counter() - started)
                 if attempt == len(_RETRY_WAITS):
                     raise
@@ -85,7 +106,7 @@ class LLM:
                 return json.loads(text)
             except json.JSONDecodeError as e:
                 last_error = e
-        raise ValueError(f"LLM の出力が JSON になりませんでした: {last_error}")
+        raise LLMOutputError(f"LLM の出力が JSON になりませんでした: {last_error}")
 
     def chat_messages(self, messages: list[dict], temperature: float = 0.5) -> str:
         """会話の履歴をそのまま送る（Open WebUI のタイトル生成などの裏処理を中継するため）。"""

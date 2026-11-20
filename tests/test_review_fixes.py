@@ -82,3 +82,111 @@ def test_unicode_spelling_and_tracking_parameters_still_merge():
     assert canonical("https://www.sw.it.aoyama.ac.jp/D%C3%BCrst/") == canonical("https://www.sw.it.aoyama.ac.jp/Dürst/")
     assert canonical("https://x.example/p?id=1&utm_source=a") == canonical("https://x.example/p?id=1")
     assert canonical("https://x.example/s?q=%E6%B0%B4%E6%98%9F") == canonical("https://x.example/s?q=水星")
+
+
+# ---- 10. LLM のやり直しを 1 か所で管理する ----
+
+def _llm_with(handler):
+    import httpx
+
+    from my_llm_app.config import Settings
+    from my_llm_app.llm import LLM
+    settings = Settings(llm_base_url="http://llm.test/v1", llm_model="m", llm_api_key="k", searxng_url="http://unused")
+    return LLM(settings, http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+
+
+def _ok_body():
+    return {"id": "x", "object": "chat.completion", "created": 0, "model": "m",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "はい"}}]}
+
+
+def test_llm_sends_at_most_four_times_on_repeated_transient_errors(monkeypatch):
+    import httpx
+    import pytest
+    from openai import InternalServerError
+
+    from my_llm_app import llm as llm_module
+    monkeypatch.setattr(llm_module.time, "sleep", lambda s: None)
+    sent = []
+
+    def always_503(request):
+        sent.append(request)
+        return httpx.Response(503, json={"error": "busy"})
+
+    llm = _llm_with(always_503)
+    with pytest.raises(InternalServerError):
+        llm.chat_text("s", "u")
+    assert len(sent) == 4                                # SDK のやり直しが重ならない（以前は最大 12 回）
+    assert llm.waited >= 10 + 30 + 60                    # やり直す前に待った時間を数えている
+
+
+def test_llm_stops_retrying_after_a_success_and_retries_429(monkeypatch):
+    import httpx
+
+    from my_llm_app import llm as llm_module
+    monkeypatch.setattr(llm_module.time, "sleep", lambda s: None)
+    replies = [httpx.Response(429, json={"error": "rate"}), httpx.Response(200, json=_ok_body())]
+    sent = []
+
+    def handler(request):
+        sent.append(request)
+        return replies[min(len(sent) - 1, 1)]
+
+    assert _llm_with(handler).chat_text("s", "u") == "はい"
+    assert len(sent) == 2
+
+
+def test_llm_does_not_retry_client_errors(monkeypatch):
+    import httpx
+    import pytest
+    from openai import BadRequestError
+
+    from my_llm_app import llm as llm_module
+    monkeypatch.setattr(llm_module.time, "sleep", lambda s: None)
+    sent = []
+
+    def bad(request):
+        sent.append(request)
+        return httpx.Response(400, json={"error": "bad"})
+
+    with pytest.raises(BadRequestError):
+        _llm_with(bad).chat_text("s", "u")
+    assert len(sent) == 1
+
+
+# ---- 11. 1 ページの不正な LLM 出力を、そのページの失敗に留める ----
+
+def test_one_page_with_broken_llm_output_does_not_lose_other_pages():
+    from unittest.mock import patch
+
+    from my_llm_app.agent import prompts
+    from my_llm_app.agent.nodes import Nodes
+    from my_llm_app.config import Settings
+    from my_llm_app.llm import LLMOutputError
+    from my_llm_app.tools.fetch import Page
+
+    good_text = "水星は太陽系で最も内側を公転する惑星である。" * 5
+    pages = {"https://bad.example/1": Page("https://bad.example/1", title="壊れる", text="何か" * 80, ok=True),
+             "https://good.example/2": Page("https://good.example/2", title="水星", text=good_text, ok=True)}
+
+    class LLM:
+        def chat_json(self, system, user, schema, temperature=0.2, image_data_url=None):
+            if "壊れる" in user:
+                raise LLMOutputError("LLM の出力が JSON になりませんでした")
+            return {"facts": [{"text": "最も内側を公転する", "quote": "水星は太陽系で最も内側を公転する惑星である",
+                               "aspect": "特徴", "about": prompts.ABOUT_TARGET}],
+                    "other_entity": "", "features": [], "new_terms": [], "page_tier": {"adjust": "そのまま", "reason": ""}}
+
+    state = {"request": "水星", "target": {"id": "Q308", "label": "水星", "description": "惑星"},
+             "aspects": [{"name": "特徴", "words": "特徴"}], "subject_type": "自然物", "databases_checked": True,
+             "reading_list": list(pages)}
+    settings = Settings(llm_base_url="http://unused/v1", llm_model="m", llm_api_key="k", searxng_url="http://unused")
+    with patch("my_llm_app.agent.nodes.fetch.fetch_page", side_effect=lambda u: pages[u]):
+        out = Nodes(settings, LLM()).read_pages(state)
+    by_url = {p["url"]: p for p in out["pages_read"]}
+    assert by_url["https://bad.example/1"]["ok"] is False
+    assert "JSON" in by_url["https://bad.example/1"]["reason"]
+    assert by_url["https://good.example/2"]["verified"] == 1
+    assert [f["source"] for f in out["verified"]] == ["https://good.example/2"]
+    traced = {p["url"]: p for p in out["trace"][0]["pages"]}
+    assert "JSON" in traced["https://bad.example/1"]["reason"]          # 実行記録にも理由が残る

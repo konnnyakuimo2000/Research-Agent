@@ -30,7 +30,7 @@ from my_llm_app.agent.state import (DOMINANCE_RATIO, MAX_CANDIDATES, MAX_FEATURE
                                     PAGES_PER_READ, REFS_PER_PAGE, WANTED_IMAGES, AgentState,
                                     Candidate, PageRead, Source)
 from my_llm_app.config import Settings
-from my_llm_app.llm import LLM
+from my_llm_app.llm import LLM, LLMOutputError
 from my_llm_app.tiers import UrlNumbers, adjusted_tier, by_tier, canonical, host_of, page_tier, tier_of
 from my_llm_app.tools import databases, fetch, images, searxng, wikimedia
 
@@ -362,9 +362,10 @@ class Nodes:
                     variants.setdefault(term, 1)   # 本文にあった別の呼び方（7.2 の 3）。題名で見つかったものより弱く扱う
             verified += facts
             page_imgs += [{**im, "page_url": page.url, "title": page.title} for im in page.images]
-            reads.append({"url": page.url, "ok": page.ok, "reason": page.reason,
+            ok, reason = page.ok and not meta.get("error"), meta.get("error") or page.reason
+            reads.append({"url": page.url, "ok": ok, "reason": reason,
                           "extracted": len(facts) + len(dropped), "verified": len(facts)})
-            traces.append({"url": page.url, "ok": page.ok, "reason": page.reason,
+            traces.append({"url": page.url, "ok": ok, "reason": reason,
                            "verified": facts, "dropped": dropped, "reprint_of": copies.get(key, ""),
                            **{k: meta[k] for k in ("base_tier", "tier", "tier_reason", "new_terms") if k in meta}})
         log.info("read_pages: %d pages -> verified %d facts (%.1fs)", len(urls),
@@ -453,8 +454,16 @@ class Nodes:
         names = [a["name"] for a in state.get("aspects", [])]
         base = page_tier(url, state)
         ev("page.llm", url=url)
-        out = self.llm.chat_json(prompts.EXTRACT_SYSTEM, prompts.extract_user(state, page.title, text, base),
-                                 prompts.extract_schema(names))
+        try:
+            out = self.llm.chat_json(prompts.EXTRACT_SYSTEM, prompts.extract_user(state, page.title, text, base),
+                                     prompts.extract_schema(names))
+        except LLMOutputError as err:
+            # このページだけの失敗にする（並行して読んでいる他のページの結果を失わない）
+            reason = "LLM の出力を JSON として読めなかった"
+            log.warning("read_pages: %s: %s (%s)", url, reason, err)
+            ev("page.done", url=url, title=page.title, base_tier=base, tier=base, tier_reason="", other_entity="",
+               facts=[], dropped=[], features=[], new_terms=[], error=reason)
+            return page, [], [], "", {"error": reason}
         facts, dropped = [], []
         for f in out.get("facts", []):
             # 引用が本文に実在するものだけを認める（設計書 M-4）

@@ -460,6 +460,7 @@ const HANDLERS = {
   },
   "page.done": (e) => {
     const id = "p:" + e.url; if (!N[id]) return;
+    if (e.error) { setState(id, "failed"); step(id, 1, "ng"); setSub(id, e.error); info[id].kv.push(["結果", esc(e.error)]); return; }
     setState(id, "done"); step(id, 1, "on"); step(id, 2, "on");
     const moved = e.tier !== e.base_tier ? ` · T${e.base_tier}→T${e.tier}` : "";
     setSub(id, `事実 ${e.facts.length} 件 · 捨てた ${e.dropped.length} 件${moved}`);
@@ -820,6 +821,7 @@ const FLOW = {
       case "page.llm": { const c = f.pageChip[e.url]; if (c) c.className = "pchip llm"; f.setText("read", host(e.url), "LLM が引用付きで事実を抜き出している"); break; }
       case "page.done": {
         const c = f.pageChip[e.url];
+        if (e.error) { if (c) c.className = "pchip failed"; f.push("read", `${host(e.url)}: ${e.error}`); f.updatePages(); break; }
         f.flow("read", "pages", 1, () => {   // 読み終えたページが「読んだページ」へ
           if (c) { c.className = "pchip done"; if (e.facts.length) c.insertAdjacentHTML("beforeend", `<span class="n">${e.facts.length}</span>`); }
           f.updatePages();
