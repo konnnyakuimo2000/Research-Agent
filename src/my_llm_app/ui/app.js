@@ -52,7 +52,7 @@ function reset() {
   svg.innerHTML = "";
   N = {}; order = []; info = {}; selected = null; round = null; work = null; dbNode = {}; statusEl = null;
   questions = new Set(); sources = []; instant = false; rounds = 0; aim = null;
-  $("drawer").classList.remove("open"); $("flowEmpty").hidden = view === "flow";
+  $("drawer").classList.remove("open"); $("flowEmpty").hidden = false;
   FLOW.reset();
   fitMode(true); cam = { x: 0, y: 0, s: 1 }; camT = { ...cam };
 }
@@ -128,7 +128,7 @@ let view = "flow";
 function setView(v) {
   view = v;
   $("graph").hidden = v !== "flow"; canvas.hidden = v !== "tree";
-  $("flowEmpty").hidden = v === "flow" || order.length > 0;
+  $("flowEmpty").hidden = v === "flow" ? Object.keys(FLOW.n).length > 0 : order.length > 0;
   document.querySelectorAll("[data-view]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === v)));
   fitMode(true);
 }
@@ -235,7 +235,7 @@ function animate(dt) {
   svg.innerHTML = `<path d="${d}"/>` + live.map((p) => `<path class="live" d="${p}"/>`).join("")
     + growing.map((p) => `<path class="grow" d="${p}"/>`).join("") + buds.map((q) => `<circle cx="${q.x.toFixed(1)}" cy="${q.y.toFixed(1)}" r="3"/>`).join("")
     + rep.map((p) => `<path class="rep" d="${p}"/>`).join("");
-  if (view === "flow") FLOW.draw();
+  if (view === "flow") FLOW.draw(dt);
   if (auto) fitTarget();
   const kc = instant || reduce ? 1 : 1 - Math.pow(0.02, dt);
   cam.x += (camT.x - cam.x) * kc; cam.y += (camT.y - cam.y) * kc; cam.s += (camT.s - cam.s) * kc;
@@ -573,115 +573,162 @@ function wireCites(el) {
 }
 
 // ==== 流れの図（エージェントのフロー）====
-// LangGraph のノードと同じ形の図。位置は決まっていて、今いるノードが光り、作業が移るたびに線の上を点が流れる。
-// 線には通った回数を出す。プログラムが LLM の選択を変えたときは、LLM が選んだ先への線を点線で一瞬出す。
-// 「読んだページ」「網羅表」「画像」は、集まったものを載せるノード（データ）。
+// ノードと線は、イベントが起きたときに初めて生まれる（線が伸びてから、ノードが実るように膨らむ）。
+// 配置: 左から「依頼 → 判定 → 判断 → 作業 → 集まったもの」の 5 列。作業は決まった順のうち出てきたものだけを縦に詰め、
+//       判断・判定・依頼は作業の並びの真ん中に揃える。判断と作業の間の行きと帰りの線は、判断の右端に扇形に分けた平行な 2 本。
+// 線のエフェクト: 制御の流れ（判断 → 作業）は尾を引く点、情報の流れ（検索結果・ページ・事実・画像・出典）は線を流れる粒。
 const graph = $("graph"), gsvg = $("gedges");
+const SVGNS = "http://www.w3.org/2000/svg";
 const STAGE = { check_feasibility: "feas", decide: "hub", search: "search", read_pages: "read", find_images: "images",
   check_conflicts: "conflicts", ask_user: "ask", respond: "respond", report_infeasible: "infeasible" };
 const LLM_STAGES = new Set(["feas", "hub", "conflicts", "respond", "infeasible"]);
 const ACTION_STAGE = { search: "search", read_pages: "read", find_images: "images", check_conflicts: "conflicts", ask_user: "ask", respond: "respond" };
-const FLOW_NODES = {
-  start:      { x: 0,    y: 300, w: 160, label: "依頼", cls: "start terminal" },
-  feas:       { x: 200,  y: 300, w: 160, label: "判定" },
-  hub:        { x: 400,  y: 286, w: 210, label: "判断", cls: "hub" },
-  infeasible: { x: 200,  y: 520, w: 190, label: "調べられないことの報告" },
-  ask:        { x: 700,  y: 0,   w: 230, label: "聞き返し" },
-  search:     { x: 700,  y: 105, w: 230, label: "検索" },
-  read:       { x: 700,  y: 250, w: 230, label: "ページを読む" },
-  images:     { x: 700,  y: 410, w: 230, label: "画像" },
-  conflicts:  { x: 700,  y: 560, w: 230, label: "食い違い" },
-  respond:    { x: 700,  y: 670, w: 230, label: "報告" },
-  end:        { x: 990,  y: 690, w: 150, label: "終わり", cls: "terminal" },
-  pages:      { x: 990,  y: 105, w: 250, label: "読んだページ", cls: "data" },
-  cov:        { x: 1290, y: 105, w: 250, label: "網羅表", cls: "data" },
-  imgs:       { x: 990,  y: 410, w: 250, label: "確かめた画像", cls: "data" },
+const STAGE_ORDER = ["ask", "search", "read", "images", "conflicts", "respond"];
+const ROW_DATA = { read: ["pages", "cov"], images: ["imgs"], respond: ["end"] };   // 作業の行に並べる、集まったもののノード
+const COL = { start: 0, feas: 210, infeasible: 210, hub: 420, stage: 740, data1: 1050, data2: 1350 };
+const FLOW_DEF = {
+  start:      { col: "start", w: 160, label: "依頼", cls: "start terminal" },
+  feas:       { col: "feas", w: 170, label: "判定" },
+  hub:        { col: "hub", w: 230, label: "判断", cls: "hub" },
+  infeasible: { col: "infeasible", w: 190, label: "調べられないことの報告" },
+  ask:        { col: "stage", w: 240, label: "聞き返し" },
+  search:     { col: "stage", w: 240, label: "検索" },
+  read:       { col: "stage", w: 240, label: "ページを読む" },
+  images:     { col: "stage", w: 240, label: "画像" },
+  conflicts:  { col: "stage", w: 240, label: "食い違い" },
+  respond:    { col: "stage", w: 240, label: "報告" },
+  end:        { col: "data1", w: 160, label: "終わり", cls: "terminal" },
+  pages:      { col: "data1", w: 250, label: "読んだページ", cls: "data" },
+  cov:        { col: "data2", w: 250, label: "網羅表", cls: "data" },
+  imgs:       { col: "data1", w: 250, label: "確かめた画像", cls: "data" },
 };
-const FLOW_EDGES = [
-  ["start", "feas"], ["feas", "hub"], ["feas", "infeasible"], ["infeasible", "end"], ["respond", "end"],
-  ...["ask", "search", "read", "images", "conflicts", "respond"].map((s) => ["hub", s]),
-  ...["ask", "search", "read", "images", "conflicts"].map((s) => [s, "hub", "back"]),
-  ["read", "pages", "data"], ["pages", "cov", "data"], ["images", "imgs", "data"],
-];
 const FLOW = {
   reset() {
-    graph.querySelectorAll(".fnode, .fly2").forEach((e) => e.remove());
+    graph.querySelectorAll(".fnode").forEach((e) => e.remove());
     gsvg.innerHTML = "";
-    this.n = {}; this.e = {}; this.tokens = []; this.ghosts = []; this.cur = null; this.pageChip = {}; this.covRow = {}; this.thumb = {};
-    this.visits = {}; this.seconds = {};
-    for (const [id, d] of Object.entries(FLOW_NODES)) {
-      const el = document.createElement("div");
-      el.className = `fnode idle ${d.cls || ""}`; el.style.setProperty("--w", d.w + "px");
-      el.style.transform = `translate(${d.x}px, ${d.y}px)`;
-      el.innerHTML = `<div class="k"><span>${d.label}</span><span class="row"><span class="cnt"></span><span class="st"></span></span></div>
-        <div class="t"></div><div class="s"></div>${d.cls?.includes("data") ? this.dataBody(id) : `<ul class="hist"></ul>`}`;
-      el.tabIndex = 0; el.setAttribute("role", "button");
-      el.addEventListener("click", (ev) => { if (!ev.target.closest(".pchip")) this.details(id); });
-      graph.appendChild(el);
-      this.n[id] = { el, ...d, hist: [] };
-      this.visits[id] = 0; this.seconds[id] = 0;
+    this.fx = document.createElementNS(SVGNS, "g"); gsvg.appendChild(this.fx);   // 点と粒（毎フレーム描き直す）
+    this.n = {}; this.e = {}; this.tokens = []; this.particles = []; this.ghosts = []; this.cur = null; this.lastFrom = null;
+    this.pageChip = {}; this.covRow = {}; this.thumb = {}; this.visits = {}; this.seconds = {};
+  },
+  // ノードを（なければ）作る。生まれたノードは、その場所で実るように膨らむ
+  node(id) {
+    if (this.n[id]) return this.n[id];
+    const d = FLOW_DEF[id];
+    const el = document.createElement("div");
+    el.className = `fnode ${d.cls || ""}`; el.style.setProperty("--w", d.w + "px");
+    el.innerHTML = `<div class="k"><span>${d.label}</span><span class="row"><span class="cnt"></span><span class="st"></span></span></div>
+      <div class="t"></div><div class="s"></div>${d.cls?.includes("data") ? this.dataBody(id) : `<ul class="hist"></ul>`}`;
+    el.tabIndex = 0; el.setAttribute("role", "button");
+    el.addEventListener("click", (ev) => { if (!ev.target.closest(".pchip")) this.details(id); });
+    graph.appendChild(el);
+    const n = this.n[id] = { id, el, ...d, hist: [], cur: { x: 0, y: 0 }, tgt: { x: 0, y: 0 }, born: instant || reduce ? -1e9 : performance.now() };
+    this.visits[id] = 0; this.seconds[id] = 0;
+    this.layout();
+    n.cur = { ...n.tgt };
+    if (view === "flow") $("flowEmpty").hidden = true;
+    return n;
+  },
+  // 線を（なければ）作る。生まれた線は、元のノードから伸びていく
+  edge(a, b, kind = "") {
+    const key = `${a}>${b}`;
+    if (this.e[key]) return this.e[key];
+    this.node(a); this.node(b);
+    const path = document.createElementNS(SVGNS, "path");
+    gsvg.insertBefore(path, this.fx);
+    let label = null;
+    if (a === "hub" && kind !== "back") {
+      label = document.createElementNS(SVGNS, "text"); label.setAttribute("class", "glabel"); label.setAttribute("text-anchor", "middle");
+      gsvg.insertBefore(label, this.fx);
     }
-    for (const [a, b, kind] of FLOW_EDGES) {
-      const key = `${a}>${b}`;
-      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      path.setAttribute("class", `gedge ${kind || ""}`); gsvg.appendChild(path);
-      const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
-      label.setAttribute("class", "glabel"); label.setAttribute("text-anchor", "middle"); gsvg.appendChild(label);
-      this.e[key] = { a, b, kind: kind || "", path, label, count: 0, over: 0 };
-    }
-    this.setText("start", "", "依頼を待っている");
+    return (this.e[key] = { a, b, kind, path, label, count: 0, over: 0, born: instant || reduce ? -1e9 : performance.now() });
   },
   dataBody(id) {
     if (id === "pages") return `<div class="chipgrid"></div>`;
     if (id === "cov") return `<div class="covrows"></div>`;
     return `<div class="thumbs"></div>`;
   },
+  layout() {
+    const h = (id) => this.n[id]?.el.offsetHeight || 0;
+    const rows = STAGE_ORDER.filter((s) => this.n[s]);
+    let y = 0;
+    for (const s of rows) {
+      const members = (ROW_DATA[s] || []).filter((m) => this.n[m]);
+      const rh = Math.max(h(s), ...members.map(h));
+      this.n[s].tgt = { x: COL.stage, y };
+      members.forEach((m) => { this.n[m].tgt = { x: COL[FLOW_DEF[m].col], y }; });
+      y += rh + 30;
+    }
+    const mid = rows.length ? (y - 30) / 2 : 40;
+    for (const id of ["start", "feas", "hub"]) if (this.n[id]) this.n[id].tgt = { x: COL[FLOW_DEF[id].col], y: mid - h(id) / 2 };
+    if (this.n.infeasible) {
+      const f = this.n.feas;
+      this.n.infeasible.tgt = { x: COL.infeasible, y: (f ? f.tgt.y + h("feas") : mid) + 70 };
+      if (this.n.end && !this.n.respond) this.n.end.tgt = { x: COL.data1, y: this.n.infeasible.tgt.y };
+    }
+    if (instant) Object.values(this.n).forEach((n) => { n.cur = { ...n.tgt }; });
+  },
   setText(id, t, s) { const n = this.n[id]; if (!n) return; if (t !== undefined) n.el.querySelector(".t").textContent = t; if (s !== undefined) n.el.querySelector(".s").textContent = s; },
   setState(id, st) {
     const n = this.n[id]; if (!n) return;
-    n.el.classList.remove("idle", "running", "llm", "waiting", "done", "failed");
+    n.el.classList.remove("running", "llm", "waiting", "done", "failed");
     n.el.classList.add(st);
   },
   push(id, line) {   // ノードの中の最近の出来事（新しいものを上に、3 つまで）。すべては詳細に残す
     const n = this.n[id]; if (!n) return;
     n.hist.unshift(line);
     const ul = n.el.querySelector(".hist"); if (ul) ul.innerHTML = n.hist.slice(0, 3).map((x) => `<li>${esc(x)}</li>`).join("");
+    this.layout();
   },
   count(id) {
     const n = this.n[id]; if (!n) return;
     n.el.querySelector(".cnt").textContent = `×${this.visits[id]}${this.seconds[id] ? ` · ${Math.round(this.seconds[id])} 秒` : ""}`;
   },
-  // 作業が移る: 前のノードから次のノードへの線に点を流し、通った回数を数える
+  // 作業が移る: 線を（なければ）作り、尾を引く点を流して回数を数える
   go(to) {
     const from = this.cur;
+    this.node(to);
     if (from && from !== to) {
-      const e = this.e[`${from}>${to}`];
-      if (e) { e.count++; this.tokens.push({ e, t0: performance.now() }); }
-      if (this.n[from] && !this.n[from].el.classList.contains("failed") && !this.n[from].el.classList.contains("waiting")) this.setState(from, "done");
+      const back = to === "hub" && STAGE_ORDER.includes(from) && from !== "respond";
+      const e = this.edge(from, to, back ? "back" : "");
+      e.count++;
+      this.tokens.push({ e, t0: performance.now() + (e.born > performance.now() - 300 ? STEM * 1000 : 0) });
+      if (!["failed", "waiting"].some((c) => this.n[from].el.classList.contains(c))) this.setState(from, "done");
     }
     this.lastFrom = from; this.cur = to;
     this.visits[to]++; this.count(to);
     this.setState(to, to === "ask" ? "waiting" : LLM_STAGES.has(to) ? "llm" : "running");
   },
-  ghost(to) {   // LLM が選んだが、プログラムが変えた行き先（点線で一瞬出して消す）
-    const e = this.e[`hub>${to}`]; if (!e) return;
-    this.ghosts.push({ e, t0: performance.now() });
+  // 情報の流れ: 線の上に粒を n 個、少しずつずらして流す。届いたら onArrive を呼ぶ
+  flow(a, b, n = 1, onArrive = null, kind = "data") {
+    if (!this.n[a] || !this.n[b]) return;
+    const e = this.edge(a, b, kind);
+    const start = performance.now() + Math.max(0, e.born + STEM * 1000 - performance.now());
+    for (let i = 0; i < Math.min(n, 12); i++) {
+      const p = { e, t0: start + i * 140, dur: 900, done: false, onArrive: i < n ? onArrive : null };
+      if (instant || reduce) { onArrive?.(i); continue; }
+      this.particles.push({ ...p, i });
+    }
+    if (n > 12 && onArrive) for (let i = 12; i < n; i++) setTimeout(() => onArrive(i), instant || reduce ? 0 : 900 + 12 * 140);
+  },
+  ghost(choice) {   // LLM が選んだが、プログラムが変えた行き先（その線を点線で一瞬出して消す。まだない作業なら文字で出す）
+    const to = ACTION_STAGE[choice];
+    this.ghosts.push({ to, label: ACTION[choice] || choice, t0: performance.now() });
   },
   on(e) {
     const f = this;
     switch (e.type) {
-      case "run.start": f.setState("start", "done"); f.setText("start", e.request, runId); f.cur = "start"; break;
+      case "run.start": f.node("start"); f.setState("start", "done"); f.setText("start", e.request, runId); f.cur = "start"; break;
       case "step.start": {
         const id = STAGE[e.node]; if (!id) break;
         if (id === "ask" && f.cur === "ask") { f.setState("ask", "running"); break; }   // 答えで再開した
         f.go(id);
-        if (id === "read") f.setText("read", "ページを読む順番を決めている", "");
+        if (id === "read") f.setText("read", "読む順番を決めている", "");
         if (id === "respond") f.setText("respond", "確かめた事実だけで報告を書いている", "");
         if (id === "conflicts") f.setText("conflicts", "別々のサイトの事実を比べている", "");
         break;
       }
       case "step.end": {
-        const id = e.node === "decide" ? "hub" : STAGE[e.node]; if (!id) break;
+        const id = e.node === "decide" ? "hub" : STAGE[e.node]; if (!id || !f.n[id]) break;
         f.seconds[id] += e.seconds || 0; f.count(id);
         if (e.error) { f.setState(id, "failed"); f.setText(id, undefined, e.error); }
         break;
@@ -693,43 +740,61 @@ const FLOW = {
       case "decision": {
         const llm = ACTION[e.llm?.action] || e.llm?.action || "", act = ACTION[e.action] || e.action;
         const changed = e.guard && e.llm?.action !== e.action;
-        f.setText("hub", act + (e.action === "search" && e.query ? `「${e.query}」` : ""), changed ? `LLM は「${llm}」→ プログラムが変更` : `LLM の選択どおり`);
+        f.setText("hub", act + (e.action === "search" && e.query ? `「${e.query}」` : ""), changed ? `LLM は「${llm}」→ プログラムが変更` : "LLM の選択どおり");
         f.push("hub", changed ? `${llm} → ${act}（変更）` : act);
         if (changed) {
-          const llmTo = ACTION_STAGE[e.llm?.action]; if (llmTo) f.ghost(llmTo);
-          const real = f.e[`hub>${ACTION_STAGE[e.action]}`]; if (real) real.over++;
+          f.ghost(e.llm?.action);
+          const to = ACTION_STAGE[e.action];
+          if (to) f.edge("hub", to).over++;
         }
         break;
       }
       case "search.start": f.setText("search", e.query, SEARCH_KIND[e.kind] || e.kind); f.push("search", e.query); break;
-      case "search.done": f.setText("search", undefined, e.failed || `結果 ${e.results.length} 件 · 対象を含む ${e.results.filter((r) => r.relevant).length} 件`); break;
+      case "search.done": {
+        const rel = e.results.filter((r) => r.relevant).length;
+        f.setText("search", undefined, e.failed || `結果 ${e.results.length} 件 · 対象を含む ${rel} 件`);
+        f.flow("search", "hub", Math.max(1, rel), null, "back");   // 検索結果が判断へ戻る
+        break;
+      }
       case "aspects": {
-        f.n.cov.el.querySelector(".covrows").innerHTML = e.aspects.map((a) =>
+        const cov = f.node("cov");
+        cov.el.querySelector(".covrows").innerHTML = e.aspects.map((a) =>
           `<div class="covrow" data-a="${esc(a)}"><span class="m"></span><span class="nm">${esc(a)}</span><span class="sq"></span></div>`).join("");
-        e.aspects.forEach((a) => { f.covRow[a] = f.n.cov.el.querySelector(`.covrow[data-a="${CSS.escape(a)}"]`); });
+        e.aspects.forEach((a) => { f.covRow[a] = cov.el.querySelector(`.covrow[data-a="${CSS.escape(a)}"]`); });
         f.setState("cov", "done"); f.setText("cov", `観点 ${e.aspects.length} つ`, `${e.subject_type} · ${e.origin}が作成`);
         f.setText("read", `対象の種類: ${e.subject_type}`, "観点を作った");
+        f.edge(f.n.pages ? "pages" : "read", "cov", "data");
+        f.layout();
         break;
       }
       case "databases": f.push("read", `データベース: ${e.used.join(" → ") || "なし"}（記録 ${e.records.length} 件）`); break;
       case "page.planned": case "page.start": {
         let chip = f.pageChip[e.url];
         if (!chip) {
+          const pages = f.node("pages"); f.setState("pages", "done"); f.edge("read", "pages", "data");
+          if (f.e["read>cov"] && !f.e["pages>cov"]) { const old = f.e["read>cov"]; old.path.remove(); delete f.e["read>cov"]; f.edge("pages", "cov", "data"); }
           chip = document.createElement("div"); chip.className = "pchip planned"; chip.title = e.host;
           chip.innerHTML = icon(e.host); chip.addEventListener("click", () => f.pageDetails(e.url));
-          f.n.pages.el.querySelector(".chipgrid").appendChild(chip); f.pageChip[e.url] = chip;
-          f.setState("pages", "done"); f.updatePages();
+          pages.el.querySelector(".chipgrid").appendChild(chip); f.pageChip[e.url] = chip;
+          f.updatePages(); f.layout();
         }
         if (e.type === "page.start") { chip.className = "pchip running"; f.setText("read", e.host, e.db ? "データベースの記録を読んでいる" : "ページを取得している"); }
         break;
       }
-      case "page.fetched": { const c = f.pageChip[e.url]; if (c && !e.ok) { c.className = "pchip failed"; f.push("read", `${host(e.url)}: ${e.reason}`); } break; }
+      case "page.fetched": { const c = f.pageChip[e.url]; if (c && !e.ok) { c.className = "pchip failed"; f.push("read", `${host(e.url)}: ${e.reason}`); f.updatePages(); } break; }
       case "page.llm": { const c = f.pageChip[e.url]; if (c) c.className = "pchip llm"; f.setText("read", host(e.url), "LLM が引用付きで事実を抜き出している"); break; }
       case "page.done": {
         const c = f.pageChip[e.url];
-        if (c) { c.className = "pchip done"; if (e.facts.length) c.insertAdjacentHTML("beforeend", `<span class="n">${e.facts.length}</span>`); }
-        f.push("read", `${host(e.url)}: 事実 ${e.facts.length} 件`); f.updatePages();
-        e.facts.forEach((x, i) => f.flyFact(c, x, e.tier, i * 140));
+        f.flow("read", "pages", 1, () => {   // 読み終えたページが「読んだページ」へ
+          if (c) { c.className = "pchip done"; if (e.facts.length) c.insertAdjacentHTML("beforeend", `<span class="n">${e.facts.length}</span>`); }
+          f.updatePages();
+          // 照合できた事実が、1 件ずつ網羅表の観点へ流れ、届いたら観点の四角になる
+          if (f.n.cov) f.flow("pages", "cov", e.facts.length, (i) => {
+            const x = e.facts[i], row = x && f.covRow[x.aspect]; if (!row) return;
+            const sq = document.createElement("i"); if (e.tier !== 1) sq.className = "t2"; sq.title = x.text; row.querySelector(".sq").appendChild(sq);
+          });
+        });
+        f.push("read", `${host(e.url)}: 事実 ${e.facts.length} 件`);
         break;
       }
       case "coverage":
@@ -739,26 +804,38 @@ const FLOW = {
       case "image.candidates": f.setText("images", `${e.ranked} 候補`, `${e.fetching} 件を取得して確かめる`); break;
       case "image.fetched": {
         if (!e.ok) break;
+        f.node("imgs"); f.setState("imgs", "done"); f.edge("images", "imgs", "data");
         const th = document.createElement("div"); th.className = "th"; th.textContent = "…"; th.title = e.title || e.src;
-        f.n.imgs.el.querySelector(".thumbs").appendChild(th); f.thumb[e.src] = th; f.setState("imgs", "done");
+        f.n.imgs.el.querySelector(".thumbs").appendChild(th); f.thumb[e.src] = th; f.layout();
         break;
       }
       case "image.llm": { const th = f.thumb[e.src]; if (th) th.classList.add("llm"); f.setText("images", undefined, "VLM が対象かどうか確かめている"); break; }
       case "image.done": {
         const th = f.thumb[e.src]; if (!th) break;
         th.classList.remove("llm");
-        if (e.level === "不採用") { th.classList.add("ng"); th.textContent = "✕"; }
-        else if (NEEDS_PERMISSION.test(e.license || "")) { th.classList.add("lock"); th.innerHTML = "許可が<br>必要"; }
-        else th.innerHTML = `<img src="${withKey(`/api/image?run=${encodeURIComponent(runId)}&src=${encodeURIComponent(e.src)}`)}" alt="${esc(e.description)}">`;
+        const ok = e.level !== "不採用";
+        const show = () => {
+          if (!ok) { th.classList.add("ng"); th.textContent = "✕"; }
+          else if (NEEDS_PERMISSION.test(e.license || "")) { th.classList.add("lock"); th.innerHTML = "許可が<br>必要"; }
+          else th.innerHTML = `<img src="${withKey(`/api/image?run=${encodeURIComponent(runId)}&src=${encodeURIComponent(e.src)}`)}" alt="${esc(e.description)}">`;
+        };
+        if (ok) f.flow("images", "imgs", 1, show); else show();   // 採用した画像が「確かめた画像」へ流れる
         f.push("images", `${e.level}: ${e.description || e.reason || ""}`);
         break;
       }
       case "image.final": f.setText("images", `載せる ${e.shown.length} 枚`, `確かめた ${Object.keys(f.thumb).length} 枚`); break;
-      case "conflicts": f.setText("conflicts", `食い違い ${e.conflicts.length} 件`, `比べた観点 ${e.aspects.length}`); e.conflicts.forEach((c) => f.push("conflicts", c.topic)); break;
+      case "conflicts":
+        f.setText("conflicts", `食い違い ${e.conflicts.length} 件`, `比べた観点 ${e.aspects.length}`);
+        e.conflicts.forEach((c) => f.push("conflicts", c.topic));
+        if (e.conflicts.length) f.flow("conflicts", "hub", e.conflicts.length, null, "back");
+        break;
       case "question": f.setState("ask", "waiting"); f.setText("ask", e.question.split("\n")[0], "利用者の答えを待っている"); break;
       case "answer": f.setState("ask", "running"); f.push("ask", `答え: ${e.answer}`); f.setText("ask", undefined, `答え: ${e.answer}`); break;
-      case "report": f.setText("respond", `出典 ${(e.sources || []).length} 件`, "報告を書いた"); break;
-      case "run.end": f.go("end"); f.setState("end", "done"); f.setText("end", `${Math.round(e.t)} 秒`, "報告をチャットに出した"); break;
+      case "report": f.setText("respond", `出典 ${(e.sources || []).length} 件`, "報告を書いた"); f.reportSources = (e.sources || []).length; break;
+      case "run.end":
+        f.go("end"); f.setState("end", "done"); f.setText("end", `${Math.round(e.t)} 秒`, "報告をチャットに出した");
+        if (f.n.respond) f.flow("respond", "end", Math.max(1, f.reportSources || 1), null, "");
+        break;
       case "run.error": if (f.cur) { f.setState(f.cur, "failed"); f.setText(f.cur, undefined, e.error); } break;
     }
   },
@@ -767,77 +844,102 @@ const FLOW = {
     const ok = chips.filter((c) => c.classList.contains("done")).length, ng = chips.filter((c) => c.classList.contains("failed")).length;
     this.setText("pages", `${chips.length} ページ`, `読めた ${ok} · 読めなかった ${ng}`);
   },
-  flyFact(chip, x, tier, delay) {
-    const row = this.covRow[x.aspect];
-    const land = () => { if (!row) return; const sq = document.createElement("i"); if (tier !== 1) sq.className = "t2"; sq.title = x.text; row.querySelector(".sq").appendChild(sq); };
-    if (instant || reduce || !chip || !row) { land(); return; }
-    setTimeout(() => {
-      const g = graph.getBoundingClientRect(), s = cam.s;
-      const from = chip.getBoundingClientRect(), to = row.getBoundingClientRect();
-      const dot = document.createElement("div"); dot.className = "fly2";
-      dot.style.transform = `translate(${(from.left - g.left) / s + 8}px, ${(from.top - g.top) / s + 8}px)`; graph.appendChild(dot);
-      requestAnimationFrame(() => requestAnimationFrame(() => {
-        dot.style.transform = `translate(${(to.right - g.left) / s - 30}px, ${(to.top - g.top) / s + 3}px)`; dot.style.opacity = ".2";
-      }));
-      setTimeout(() => { dot.remove(); land(); }, 800);
-    }, delay);
+  // 線の形。判断と作業の間は、判断の右端に作業ごとの出口を扇形に分け、行きと帰りを平行な 2 本にする
+  geometry(e) {
+    const A = this.n[e.a], B = this.n[e.b];
+    const box = (n) => ({ x: n.cur.x, y: n.cur.y, w: n.el.offsetWidth, h: n.el.offsetHeight });
+    const a = box(A), b = box(B);
+    const rows = STAGE_ORDER.filter((s) => this.n[s]);
+    const hubY = (stage) => {
+      const hub = box(this.n.hub), i = rows.indexOf(stage), k = rows.length;
+      return hub.y + 16 + (k <= 1 ? 0.5 : i / (k - 1)) * (hub.h - 32);
+    };
+    const anchor = (n) => n.y + Math.min(24, n.h / 2);
+    let p0, p3;
+    if (e.a === "hub" && STAGE_ORDER.includes(e.b)) { p0 = { x: a.x + a.w, y: hubY(e.b) - 5 }; p3 = { x: b.x, y: anchor(b) - 5 }; }
+    else if (e.b === "hub" && STAGE_ORDER.includes(e.a)) { p0 = { x: a.x, y: anchor(a) + 5 }; p3 = { x: b.x + b.w, y: hubY(e.a) + 5 }; }
+    else if (e.a === "feas" && e.b === "infeasible") {
+      p0 = { x: a.x + a.w / 2, y: a.y + a.h }; p3 = { x: b.x + b.w / 2, y: b.y };
+      return [p0, { x: p0.x, y: p0.y + 30 }, { x: p3.x, y: p3.y - 30 }, p3];
+    } else { p0 = { x: a.x + a.w, y: anchor(a) }; p3 = { x: b.x, y: anchor(b) }; }
+    const mx = (p0.x + p3.x) / 2;
+    return [p0, { x: mx, y: p0.y }, { x: mx, y: p3.y }, p3];
   },
-  // 線を引き直し、流れている点を動かす（毎フレーム）
-  draw() {
+  // 毎フレーム: ノードを目標の位置へ近づけて膨らませ、線を伸ばし、点と粒を流す
+  draw(dt) {
     const t = performance.now();
-    const box = (id) => { const n = this.n[id]; return { x: n.x, y: n.y, w: n.el.offsetWidth, h: n.el.offsetHeight }; };
-    for (const e of Object.values(this.e)) {
-      const A = box(e.a), B = box(e.b);
-      let p0, p1, p2, p3;
-      if (e.kind === "back") {   // 戻りの線: 作業の左下から判断の右下へ、下にふくらませる
-        p0 = { x: A.x, y: A.y + A.h * 0.72 }; p3 = { x: B.x + B.w, y: B.y + B.h * 0.72 };
-        p1 = { x: p0.x - 90, y: p0.y + 26 }; p2 = { x: p3.x + 90, y: p3.y + 26 };
-      } else if (e.a === "feas" && e.b === "infeasible") {
-        p0 = { x: A.x + A.w / 2, y: A.y + A.h }; p3 = { x: B.x + 40, y: B.y }; p1 = { x: p0.x, y: p0.y + 80 }; p2 = { x: p3.x, y: p3.y - 80 };
-      } else {
-        p0 = { x: A.x + A.w, y: A.y + Math.min(24, A.h / 2) }; p3 = { x: B.x, y: B.y + Math.min(24, B.h / 2) };
-        const mx = (p0.x + p3.x) / 2; p1 = { x: mx, y: p0.y }; p2 = { x: mx, y: p3.y };
-      }
-      e.path.setAttribute("d", `M${p0.x},${p0.y} C${p1.x},${p1.y} ${p2.x},${p2.y} ${p3.x},${p3.y}`);
-      const hot = this.cur === e.b && this.lastFrom === e.a && !this.n[e.b].el.classList.contains("done");
-      e.path.setAttribute("class", `gedge ${e.kind} ${e.count ? "used" : ""} ${hot ? "hot" : ""}`);
-      e.path.style.strokeWidth = e.count && e.kind !== "data" ? Math.min(4, 1.4 + e.count * 0.4) : "";
-      // 回数の文字は線の行き先寄りに置く（判断から出る線は、出発点の近くで重なるため）
-      const at = e.kind === "back" ? 0.5 : e.a === "hub" ? 0.78 : 0.5;
-      const lp = bezierPoint(p0, p1, p2, p3, at);
-      e.label.setAttribute("x", lp.x); e.label.setAttribute("y", lp.y - 6);
-      e.label.textContent = e.count && e.kind !== "data" ? `×${e.count}${e.over ? ` · 変更 ${e.over}` : ""}` : "";
-      e.label.setAttribute("class", `glabel ${e.over ? "over" : ""}`);
-      e.pts = [p0, p1, p2, p3];
+    const k = instant || reduce ? 1 : 1 - Math.pow(0.0008, dt);
+    for (const n of Object.values(this.n)) {
+      n.cur.x += (n.tgt.x - n.cur.x) * k; n.cur.y += (n.tgt.y - n.cur.y) * k;
+      const age = (t - n.born) / 1000, g = clamp((age - (n.id === "start" ? 0 : STEM * 0.7)) / RIPEN);
+      const s = g >= 1 ? 1 : 0.04 + 0.96 * easeBack(g);
+      n.el.style.transform = `translate(${n.cur.x.toFixed(1)}px, ${n.cur.y.toFixed(1)}px) scale(${s.toFixed(3)})`;
+      n.el.style.opacity = clamp(g * 2.5).toFixed(2);
     }
-    // 流れている点（0.7 秒で線をたどる）
-    this.tokens = this.tokens.filter((k) => {
-      const u = (t - k.t0) / 700; if (u >= 1) { k.dot?.remove(); return false; }
-      if (!k.dot) { k.dot = document.createElementNS("http://www.w3.org/2000/svg", "circle"); k.dot.setAttribute("r", "5"); k.dot.setAttribute("class", "token"); gsvg.appendChild(k.dot); }
-      const p = bezierPoint(...k.e.pts, easeOut(u)); k.dot.setAttribute("cx", p.x); k.dot.setAttribute("cy", p.y);
+    const fmt = (p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`;
+    for (const e of Object.values(this.e)) {
+      const full = e.pts = this.geometry(e);
+      const grow = clamp((t - e.born) / 1000 / STEM);
+      const [p0, p1, p2, p3] = grow >= 1 ? full : bezierTo(...full, easeOut(grow));
+      e.path.setAttribute("d", `M${fmt(p0)} C${fmt(p1)} ${fmt(p2)} ${fmt(p3)}`);
+      const target = this.n[e.b];
+      const hot = this.cur === e.b && this.lastFrom === e.a && ["running", "llm", "waiting"].some((c) => target.el.classList.contains(c));
+      const busyData = e.kind === "data" && this.particles.some((q) => q.e === e);
+      e.path.setAttribute("class", `gedge ${e.kind} ${e.count || busyData ? "used" : ""} ${hot ? "hot" : ""} ${grow < 1 ? "growing" : ""}`);
+      e.path.style.strokeWidth = e.count && e.kind !== "data" ? Math.min(4, 1.4 + e.count * 0.4) : "";
+      if (e.label) {
+        const lp = bezierPoint(...full, 0.8);
+        e.label.setAttribute("x", lp.x); e.label.setAttribute("y", lp.y - 7);
+        e.label.textContent = e.count ? `×${e.count}${e.over ? ` · 変更 ${e.over}` : ""}` : "";
+        e.label.setAttribute("class", `glabel ${e.over ? "over" : ""}`);
+      }
+    }
+    let fx = "";
+    // 制御の流れ: 尾を引く点（0.75 秒で線をたどる）
+    this.tokens = this.tokens.filter((tk) => {
+      const u = (t - tk.t0) / 750; if (u >= 1) return false; if (u < 0 || !tk.e.pts) return true;
+      for (let j = 4; j >= 0; j--) {
+        const p = bezierPoint(...tk.e.pts, easeOut(clamp(u - j * 0.035)));
+        fx += `<circle class="token" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${(5 - j * 0.8).toFixed(1)}" opacity="${(1 - j * 0.18).toFixed(2)}"/>`;
+      }
       return true;
     });
-    // LLM が選んだが変えられた行き先: 点線を 2.5 秒かけて消す
+    // 情報の流れ: 線を流れる粒。届いたら知らせる
+    this.particles = this.particles.filter((q) => {
+      const u = (t - q.t0) / q.dur; if (u < 0 || !q.e.pts) return true;
+      if (u >= 1) { if (!q.done) { q.done = true; q.onArrive?.(q.i); } return false; }
+      const p = bezierPoint(...q.e.pts, u * u * (3 - 2 * u));
+      fx += `<circle class="particle" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3"/>`;
+      return true;
+    });
+    // LLM が選んだが、プログラムが変えた行き先: 点線（その作業がまだなければ文字）を 2.5 秒かけて消す
     this.ghosts = this.ghosts.filter((g) => {
-      const u = (t - g.t0) / 2500; if (u >= 1) { g.el?.remove(); return false; }
-      if (!g.el) { g.el = document.createElementNS("http://www.w3.org/2000/svg", "path"); g.el.setAttribute("class", "gedge ghost"); gsvg.appendChild(g.el); }
-      const [p0, p1, p2, p3] = g.e.pts;
-      g.el.setAttribute("d", `M${p0.x},${p0.y + 8} C${p1.x},${p1.y + 8} ${p2.x},${p2.y + 8} ${p3.x},${p3.y + 8}`);
-      g.el.style.opacity = (1 - u).toFixed(2);
+      const u = (t - g.t0) / 2500; if (u >= 1 || !this.n.hub) return false;
+      const op = (1 - u).toFixed(2), hub = this.n.hub;
+      const e = g.to && this.e[`hub>${g.to}`];
+      if (e?.pts) {
+        const [p0, p1, p2, p3] = e.pts.map((p) => ({ x: p.x, y: p.y - 9 }));
+        fx += `<path class="gedge ghost" opacity="${op}" d="M${fmt(p0)} C${fmt(p1)} ${fmt(p2)} ${fmt(p3)}"/>`;
+      } else {
+        fx += `<text class="glabel over" opacity="${op}" x="${(hub.cur.x + hub.el.offsetWidth + 16).toFixed(1)}" y="${(hub.cur.y - 10 - u * 14).toFixed(1)}">LLM の選択: ${esc(g.label)} ✕</text>`;
+      }
       return true;
     });
+    this.fx.innerHTML = fx;
   },
   bounds() {
+    const ns = Object.values(this.n);
+    if (!ns.length) return { x0: 0, y0: 0, x1: 400, y1: 300 };
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    for (const n of Object.values(this.n)) { if (!n) continue; x0 = Math.min(x0, n.x); y0 = Math.min(y0, n.y); x1 = Math.max(x1, n.x + n.el.offsetWidth); y1 = Math.max(y1, n.y + n.el.offsetHeight); }
+    for (const n of ns) { x0 = Math.min(x0, n.tgt.x); y0 = Math.min(y0, n.tgt.y); x1 = Math.max(x1, n.tgt.x + n.el.offsetWidth); y1 = Math.max(y1, n.tgt.y + n.el.offsetHeight); }
     return { x0, y0, x1, y1 };
   },
   details(id) {
     const n = this.n[id];
     document.querySelectorAll(".fnode.sel").forEach((x) => x.classList.remove("sel")); n.el.classList.add("sel");
-    const kv = [["通った回数", `${this.visits[id]} 回`], ["かかった時間", this.seconds[id] ? `${Math.round(this.seconds[id])} 秒` : ""]];
-    const list = n.hist.map((x) => esc(x));
-    if (id === "pages") list.splice(0, list.length, ...Object.keys(this.pageChip).map((u) => `${esc(host(u))} — ${link(u)}`));
+    const kv = [["通った回数", this.visits[id] ? `${this.visits[id]} 回` : ""], ["かかった時間", this.seconds[id] ? `${Math.round(this.seconds[id])} 秒` : ""]];
+    let list = n.hist.map((x) => esc(x));
+    if (id === "pages") list = Object.keys(this.pageChip).map((u) => `${esc(host(u))} — ${link(u)}`);
     showDetails({ title: n.label, kv, list, note: id === "pages" ? "アイコンを押すと、そのページで確かめた事実と引用が出ます。" : "" });
   },
   pageDetails(url) { const d = info["p:" + url]; if (d) showDetails(d); },

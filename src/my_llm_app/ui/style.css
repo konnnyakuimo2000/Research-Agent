@@ -252,5 +252,8 @@ button:focus-visible, .node:focus-visible, input:focus-visible { outline: 2px so
 .glabel { font-family: var(--font-data); font-size: 11px; fill: var(--muted); paint-order: stroke; stroke: var(--surface); stroke-width: 4px; }
 .glabel.over { fill: var(--ink); font-weight: 600; }
 .token { fill: var(--ink); }
+.particle { fill: var(--ink); stroke: var(--surface); stroke-width: 1.5; }
+.gedge.growing { stroke: var(--ink); opacity: 1; }
+.fnode { will-change: transform, opacity; transform-origin: 0 24px; }
 .fly2 { position: absolute; left: 0; top: 0; z-index: 30; width: 9px; height: 9px; border-radius: 3px; background: var(--ink); pointer-events: none;
   transition: transform .8s cubic-bezier(.45,.05,.2,1), opacity .8s ease-in; }
