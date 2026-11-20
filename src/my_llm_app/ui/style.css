@@ -47,7 +47,7 @@ button:focus-visible, .node:focus-visible, input:focus-visible { outline: 2px so
 .chat { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; padding: 6px 2px 12px; }
 .chatpane.empty { justify-content: center; }
 .chatpane.empty .chat { display: none; }
-.hello { display: none; text-align: center; font-size: 26px; font-weight: 500; letter-spacing: .01em; margin: 0 0 22px; text-wrap: balance; }
+.hello { display: none; text-align: center; margin: 0; text-wrap: balance; }
 .chatpane.empty .hello { display: block; }
 .dock { display: grid; }
 .u { align-self: flex-end; background: var(--surface); border-radius: 20px; padding: 8px 14px; max-width: 85%; overflow-wrap: anywhere; white-space: pre-wrap; }
@@ -72,35 +72,38 @@ button:focus-visible, .node:focus-visible, input:focus-visible { outline: 2px so
   font-family: var(--font-data); font-size: 10.5px; color: var(--muted); }
 .cite:hover { color: var(--ink); border-color: var(--ink); }
 
-/* 入力欄: 大きな角丸のカード。下の段に「新しい調査」「モデル」「送信（調査中は一時停止）」 */
-.composer { position: relative; z-index: 1; background: var(--bg); border: 1px solid var(--line); border-radius: 26px; padding: 14px 12px 10px 18px;
-  display: grid; gap: 10px; box-shadow: 0 4px 18px rgb(0 0 0 / .07), 0 1px 3px rgb(0 0 0 / .05); transition: border-color .2s, box-shadow .2s; }
-.composer:focus-within { border-color: var(--faint); }
-.composer.answer { border-color: var(--ink); }
-.composer textarea { border: none; background: none; color: var(--ink); font: inherit; font-size: 15px; line-height: 1.55; resize: none; outline: none;
-  max-height: 180px; min-height: 26px; padding: 0 6px 0 0; }
+/* 入力欄: ノードと同じ角丸と細い枠のカード。下の段に「新しい調査」「調査の一覧」「接続とモデル」「送信（調査中は一時停止）」 */
+.hello { font-size: 22px; font-weight: 600; margin-bottom: 12px; }
+.examples { display: none; flex-wrap: wrap; justify-content: center; gap: 6px; margin: 0 0 18px; }
+.chatpane.empty .examples { display: flex; }
+.ex { border: 1px solid var(--line); background: var(--bg); border-radius: 8px; padding: 3px 10px; font-size: 12px; color: var(--muted); cursor: pointer; }
+.ex:hover { color: var(--ink); border-color: var(--faint); }
+.composer { background: var(--bg); border: 1px solid var(--faint); border-radius: 14px; padding: 12px 10px 8px 14px; display: grid; gap: 8px;
+  transition: border-color .2s, box-shadow .2s; }
+.composer:focus-within { border-color: var(--ink); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 8%, transparent); }
+.composer.answer { border-color: var(--ink); border-width: 1.5px; }
+.composer textarea { border: none; background: none; color: var(--ink); font: inherit; font-size: 14.5px; line-height: 1.55; resize: none; outline: none;
+  max-height: 180px; min-height: 24px; padding: 0 6px 0 0; }
 .composer textarea::placeholder { color: var(--faint); }
-.crow, .tray { display: flex; align-items: center; gap: 6px; }
+.crow { display: flex; align-items: center; gap: 2px; }
 .cspace { flex: 1; }
-.cbtn, .tbtn { width: 34px; height: 34px; border-radius: 50%; border: none; background: none; display: grid; place-items: center; cursor: pointer; color: var(--ink); }
-.cbtn:hover, .tbtn:hover { background: var(--surface); }
-.cbtn svg, .tbtn svg, .send svg, .conn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.model { font-size: 13px; color: var(--muted); padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 55%; }
-.send { width: 38px; height: 38px; border-radius: 50%; border: none; background: var(--strong); color: var(--on-strong); display: grid; place-items: center; cursor: pointer;
-  transition: transform .15s, opacity .2s; }
-.send:hover { transform: scale(1.05); }
+.cbtn { width: 30px; height: 30px; border-radius: 8px; border: none; background: none; display: grid; place-items: center; cursor: pointer; color: var(--muted); }
+.cbtn:hover { background: var(--surface); color: var(--ink); }
+.cbtn svg, .send svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+/* 接続の状態はモデル名の横の小さな丸で出す: 黒い丸 = つながっている、点線の丸 = つながらない */
+.conn { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); padding: 0 8px; min-width: 0; }
+.conn .dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px dashed var(--faint); flex: none; }
+.conn.ok .dot { background: var(--ink); border: 1.5px solid var(--ink); }
+.conn.ng .dot { border-color: var(--ink); }
+.conn.ng #connText { color: var(--ink); }
+.model { font-family: var(--font-data); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.send { width: 32px; height: 32px; border-radius: 9px; border: none; background: var(--strong); color: var(--on-strong); display: grid; place-items: center; cursor: pointer;
+  margin-left: 4px; transition: opacity .2s; }
+.send:hover { opacity: .85; }
 .send .i-pause, .send .i-play { display: none; }
 .send.pause .i-send { display: none; } .send.pause .i-pause { display: inline; }
 .send.resume .i-send { display: none; } .send.resume .i-play { display: inline; }
 .send .i-play { fill: currentColor; stroke-width: 1.2; }
-/* 入力欄の下の棚: 調査の一覧、接続の状態 */
-.tray { margin: -12px 14px 0; padding: 18px 10px 6px; background: var(--surface); border: 1px solid var(--line); border-top: none; border-radius: 0 0 20px 20px; }
-.tbtn { width: 32px; height: 32px; color: var(--muted); }
-.tbtn:hover { color: var(--ink); background: var(--bg); }
-.conn { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); padding-right: 6px; }
-.conn.ok svg { color: var(--ink); }
-.conn.ng { color: var(--ink); }
-.conn.ng svg { stroke-dasharray: 3 3; }
 .app.noside { grid-template-columns: 0 minmax(300px, 440px) minmax(0, 1fr); }
 .app.noside .side { visibility: hidden; }
 

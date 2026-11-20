@@ -1045,11 +1045,13 @@ async function checkConnection() {
     $("modelName").textContent = st.model; $("modelName").title = `調査エージェント（research-agent）が使っているモデル: ${st.model}`;
     const ok = st.llm.ok && st.search.ok;
     $("conn").className = "conn " + (ok ? "ok" : "ng");
-    $("connText").textContent = ok ? "接続中" : !st.llm.ok ? "LLM サーバーにつながらない（VPN を確認）" : "検索（SearXNG）につながらない";
+    $("connText").textContent = ok ? "" : !st.llm.ok ? "VPN を確認" : "検索につながらない";
     $("conn").title = `LLM: ${st.llm.ok ? `応答 ${st.llm.seconds} 秒` : st.llm.error || "応答なし"} / 検索: ${st.search.ok ? "応答あり" : st.search.error || "応答なし"}`;
   } catch (err) { $("conn").className = "conn ng"; $("connText").textContent = "エージェントにつながらない"; }
 }
 checkConnection(); setInterval(checkConnection, 30000);
+// 依頼の例: 押すと入力欄に入る（送るのは利用者）
+document.querySelectorAll(".ex").forEach((b) => b.addEventListener("click", () => { input.value = b.textContent; growInput(); input.focus(); }));
 
 // 再生: 終わった調査は、記録の時刻どおりに（速さを掛けて）流す。動いている調査は届いたらすぐ描く
 let queue = [], clock = 0, speed = 8, playing = true, replay = false, lastTs = null, stopAt = Infinity;
