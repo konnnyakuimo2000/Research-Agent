@@ -1050,8 +1050,18 @@ async function checkConnection() {
   } catch (err) { $("conn").className = "conn ng"; $("connText").textContent = "エージェントにつながらない"; }
 }
 checkConnection(); setInterval(checkConnection, 30000);
-// 依頼の例: 押すと入力欄に入る（送るのは利用者）
-document.querySelectorAll(".ex").forEach((b) => b.addEventListener("click", () => { input.value = b.textContent; growInput(); input.focus(); }));
+// 最近の依頼（調査の一覧の新しい順。同じ依頼は 1 つにまとめ、3 つまで）。押すと入力欄に入る（送るのは利用者）
+function showRecent(runs) {
+  const seen = new Set(), recent = [];
+  for (const r of runs) {
+    const q = (r.request || "").trim();
+    if (q && !seen.has(q)) { seen.add(q); recent.push(q); }
+    if (recent.length >= 3) break;
+  }
+  const box = $("examples");
+  box.innerHTML = recent.length ? `<span class="lbl">最近の依頼</span>` + recent.map((q) => `<button type="button" class="ex" title="${esc(q)}">${esc(q)}</button>`).join("") : "";
+  box.querySelectorAll(".ex").forEach((b) => b.addEventListener("click", () => { input.value = b.title; growInput(); input.focus(); }));
+}
 
 // 再生: 終わった調査は、記録の時刻どおりに（速さを掛けて）流す。動いている調査は届いたらすぐ描く
 let queue = [], clock = 0, speed = 8, playing = true, replay = false, lastTs = null, stopAt = Infinity;
@@ -1089,6 +1099,7 @@ async function loadRuns() {
       <span class="r1">${esc(r.request || "(依頼なし)")}</span><span class="r2">${esc(r.id.slice(0, 13).replace(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2}).*/, "$2/$3 $4:$5"))} · ${label[r.status] || r.status}</span></button>`).join("")
       || `<p class="r2" style="padding:8px;color:var(--muted)">まだ調査はありません</p>`;
     $("runs").querySelectorAll(".run").forEach((b) => b.addEventListener("click", () => open(b.dataset.id, b.dataset.live === "true")));
+    showRecent(runs);
     highlightRun();
   } catch (err) { $("runs").innerHTML = `<p style="padding:8px;color:var(--muted)">一覧を読めません: ${esc(err.message)}</p>`; }
 }
