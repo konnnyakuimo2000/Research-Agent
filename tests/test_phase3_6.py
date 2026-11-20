@@ -251,8 +251,25 @@ def test_images_needing_permission_are_shown_only_without_free_ones():
 
 def test_report_lists_gbif_when_it_was_looked_up_after_inaturalist():
     inat = databases.Record("https://www.inaturalist.org/taxa/1", "iNaturalist: x", "学名: Capricornis crispus\n和名: x",
-                            "iNaturalist")
+                            "iNaturalist", scientific_name="Capricornis crispus")
     with patch.dict(databases.FUNCTIONS, {"inaturalist": MagicMock(return_value=[inat])}), \
          patch.object(databases, "gbif", return_value=[]):
         _, _, used = real_lookup("生物", "x")
     assert used == ["iNaturalist", "GBIF"]
+
+
+def test_gbif_uses_the_scientific_name_field_not_the_display_text():
+    # 表示用の見出しを変えても、同じ学名で GBIF を引く。学名が空なら引かない（レビュー 12）
+    renamed = databases.Record("https://www.inaturalist.org/taxa/1", "iNaturalist: x", "Scientific name: Capricornis crispus",
+                               "iNaturalist", scientific_name="Capricornis crispus")
+    with patch.dict(databases.FUNCTIONS, {"inaturalist": MagicMock(return_value=[renamed])}), \
+         patch.object(databases, "gbif", return_value=[]) as gbif:
+        _, _, used = real_lookup("生物", "x")
+    gbif.assert_called_once_with("Capricornis crispus")
+    assert used == ["iNaturalist", "GBIF"]
+    nameless = databases.Record("https://www.inaturalist.org/taxa/2", "iNaturalist: y", "学名: Foo bar", "iNaturalist")
+    with patch.dict(databases.FUNCTIONS, {"inaturalist": MagicMock(return_value=[nameless])}), \
+         patch.object(databases, "gbif", return_value=[]) as gbif:
+        _, _, used = real_lookup("生物", "y")
+    gbif.assert_not_called()
+    assert used == ["iNaturalist"]

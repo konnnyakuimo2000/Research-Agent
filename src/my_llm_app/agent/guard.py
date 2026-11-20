@@ -156,7 +156,8 @@ def check_decision(state: AgentState, decision: Decision) -> Decision:
     asked = state.get("questions_asked", 0)
 
     # 上限: 行動の回数・時間を使い切ったら、わかった範囲で答える（設計書 10.3 S-2, S-5）
-    if state.get("steps", 0) >= MAX_STEPS and action != "respond":
+    if state.get("steps", 0) >= MAX_STEPS:
+        # LLM が応答を選んでいても、ここで確定する（下の research_step が読み込みなどに変えないように）
         return {**d, "action": "respond", "guard": "行動の上限に達したため、わかった範囲で応答する"}
     if time_over(state):
         if wants_more_images(state):

@@ -33,6 +33,7 @@ class Record:
     text: str                # API の値から作った文章（深掘りと引用の照合に使う）
     database: str            # データベースの名前
     images: list[dict] = field(default_factory=list)   # src, page_url, title, caption, license
+    scientific_name: str = ""   # 学名（生物）。GBIF はこれで引く（表示用の text の見出しに頼らない）
 
 
 @lru_cache(maxsize=1)
@@ -127,7 +128,8 @@ def inaturalist(name: str) -> list[Record]:
                            "caption": f"iNaturalist の分類群「{common}（{t.get('name', '')}）」の代表写真。"
                                       f"{photo.get('attribution', '')}",
                            "license": (photo.get("license_code") or "all rights reserved").upper()})
-        out.append(Record(url, f"iNaturalist: {common or t.get('name', '')}", "\n".join(lines), "iNaturalist", images))
+        out.append(Record(url, f"iNaturalist: {common or t.get('name', '')}", "\n".join(lines), "iNaturalist", images,
+                          scientific_name=t.get("name", "")))
     return out[:1]
 
 
@@ -236,7 +238,7 @@ def lookup(subject_type: str, name: str) -> tuple[list[Record], list[str], list[
         records += found
         if db["function"] == "inaturalist" and found:
             # GBIF は学名で引く（和名では引けない）
-            sci = next((ln.removeprefix("学名: ") for ln in found[0].text.splitlines() if ln.startswith("学名: ")), "")
+            sci = found[0].scientific_name
             if sci:
                 used.append("GBIF")
                 try:

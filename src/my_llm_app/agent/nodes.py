@@ -844,7 +844,9 @@ def confirm_target(state: AgentState, answer: str) -> dict:
             "new_ambiguity": "", "name_variants": {}, "seen_sites": [], "query_log": [],
             "official_checked": False, "official_hosts": [], "official_urls": [], "databases_checked": False,
             "databases_used": [], "db_records": {}, "db_images": [], "page_signatures": {}, "reprints": {},
-            "page_tiers": {}, "features": [], "page_images": []}
+            "page_tiers": {}, "features": [], "page_images": [],
+            # 旧対象の画像・判定・件数も消す（新しい対象の画像を探し直し、旧対象の画像を報告に出さない）
+            "images": [], "images_checked": False, "image_log": [], "image_counts": {}}
 
 
 def as_candidate(e: wikimedia.Entity) -> Candidate:

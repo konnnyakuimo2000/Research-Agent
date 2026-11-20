@@ -39,15 +39,33 @@ def tier_of(url: str) -> int:
 _TRACKING = re.compile(r"^(srsltid|utm_\w+|gclid|fbclid|yclid|msclkid|mc_cid|mc_eid)$", re.IGNORECASE)
 
 
+# パスの中で、文字に戻すと区切りに化ける符号（/ ? # %）。これらは符号のまま残す
+_RESERVED_IN_PATH = re.compile(r"%(2f|3f|23|25)", re.IGNORECASE)
+
+
+def _path_key(path: str) -> str:
+    """パスの表記ゆれをそろえる。%C3%BC と ü は同じにするが、%2F（文字の /）と区切りの / は区別する。"""
+    held: list[str] = []
+
+    def hold(m: re.Match) -> str:
+        held.append(m.group(0).upper())
+        return f"\x00{len(held) - 1}\x00"
+
+    text = unquote(_RESERVED_IN_PATH.sub(hold, path))
+    return re.sub(r"\x00(\d+)\x00", lambda m: held[int(m.group(1))], text)
+
+
 def canonical(url: str) -> str:
     """同じページを指す URL の表記ゆれをそろえた形。重複の判定に使う。
 
     そろえるもの: %C3%BC と %c3%bc と ü、#以降、;jsessionid=…、追跡用のパラメータ（Google の srsltid など）。
+    パスとクエリは別々にそろえる。URL 全体を文字に戻すと、クエリの値の中の符号（%26 = &、%3D = =）が
+    区切りに化けて、別の資料が同じ出典になってしまうため。クエリは parse_qsl → urlencode で符号の形にそろえる。
     """
     parts = urlsplit(url.split("#", 1)[0])
-    path = re.sub(r";jsessionid=[^/?]*", "", parts.path, flags=re.IGNORECASE)
+    path = _path_key(re.sub(r";jsessionid=[^/?]*", "", parts.path, flags=re.IGNORECASE))
     query = urlencode([(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if not _TRACKING.match(k)])
-    return unquote(urlunsplit((parts.scheme, parts.netloc, path, query, "")))
+    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, query, ""))
 
 
 class UrlNumbers(dict):

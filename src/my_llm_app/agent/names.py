@@ -10,20 +10,31 @@ from my_llm_app.agent.quotes import normalize
 _LATIN_WORD = r"[a-zà-öø-ÿ]"
 
 
+def _has_token(token: str, text: str) -> bool:
+    """token が text の中に、前後を英数字に挟まれずに出てくるか（「ee-3」は「ee-30」「xee-3」に当てない）。"""
+    return bool(re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", text))
+
+
 def mentions(text: str, names: list[str]) -> bool:
-    """文に対象の名前が出てくるか。型番のように数字を含む語は、その語だけで一致とみなす。"""
+    """文に対象の名前が出てくるか。型番のように数字を含む語は、その語だけで一致とみなす。
+
+    型番のある名前は、全文の部分一致より先に型番で見る。型番は前後の英数字との境目を確かめる
+    （「Example EE-30」は「EE-3」ではない）。
+    """
     t = normalize(text).lower()
+    # 型番の境目は、空白を残した形で見る（normalize は空白を消すので「PEN EE-3」が「penee-3」になり、境目が消える）
+    spaced = unicodedata.normalize("NFKC", text).lower()
     for name in names:
         n = normalize(name).lower()
-        if len(n) >= 2 and n in t:
-            return True
         words = [normalize(w).lower() for w in re.split(r"[\s・,，.]+", name)]
         words = [w for w in words if len(w) >= 2]
         model = [w for w in words if len(w) >= 3 and re.search(r"\d", w)]
         if model:
-            if any(w in t for w in model):
+            if any(_has_token(w, spaced) or _has_token(w, t) for w in model):
                 return True
             continue                          # 型番のある名前は型番で見る（兄弟機種を通さない）
+        if len(n) >= 2 and n in t:
+            return True
         # 「DÜRST, Martin Jakob」と「Martin J. Dürst」のように、語順や略し方が違う名前。
         # 名前の語のうち 2 つ以上が出てくれば一致とみなす（ラテン文字の語だけ。語の境目で見る）
         latin = [w for w in words if re.fullmatch(rf"{_LATIN_WORD}+", w)]
