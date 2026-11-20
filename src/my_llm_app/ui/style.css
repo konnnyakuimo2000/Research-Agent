@@ -196,7 +196,8 @@ button:focus-visible, .node:focus-visible, input:focus-visible { outline: 2px so
   padding: 8px 10px; cursor: pointer; transition: border-color .3s, box-shadow .3s, opacity .4s, background .3s; box-shadow: 0 1px 2px rgb(0 0 0 / .04); }
 .fnode.idle { border-style: dashed; opacity: .55; }
 .fnode.hub { border-radius: 18px; padding: 10px 14px; border-width: 1.5px; }
-.fnode.terminal { border-radius: 999px; }
+.fnode.terminal { border-radius: 26px; padding: 12px 22px; }   /* 丸い端に文字が寄らないよう、左右を広くあける */
+.hist:empty { display: none; }   /* 出来事がまだないときは、区切りの線も出さない */
 .fnode.terminal.done, .fnode.start { background: var(--strong); color: var(--on-strong); border-color: var(--strong); }
 .fnode.start .k, .fnode.start .s, .fnode.terminal.done .k, .fnode.terminal.done .s { color: color-mix(in srgb, var(--on-strong) 70%, transparent); }
 .fnode.data { background: var(--bg); border-color: var(--faint); }

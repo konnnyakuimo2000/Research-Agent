@@ -592,7 +592,7 @@ const STAGE_ORDER = ["ask", "search", "read", "images", "conflicts", "respond"];
 const ROW_DATA = { read: ["pages", "cov"], images: ["imgs"], respond: ["end"] };   // 作業の行に並べる、集まったもののノード
 const COL = { start: 0, feas: 210, infeasible: 210, hub: 420, stage: 740, data1: 1050, data2: 1350 };
 const FLOW_DEF = {
-  start:      { col: "start", w: 160, label: "依頼", cls: "start terminal" },
+  start:      { col: "start", w: 180, label: "依頼", cls: "start terminal" },
   feas:       { col: "feas", w: 170, label: "判定" },
   hub:        { col: "hub", w: 230, label: "判断", cls: "hub" },
   infeasible: { col: "infeasible", w: 190, label: "調べられないことの報告" },
@@ -602,7 +602,7 @@ const FLOW_DEF = {
   images:     { col: "stage", w: 240, label: "画像" },
   conflicts:  { col: "stage", w: 240, label: "食い違い" },
   respond:    { col: "stage", w: 240, label: "報告" },
-  end:        { col: "data1", w: 160, label: "終わり", cls: "terminal" },
+  end:        { col: "data1", w: 180, label: "終わり", cls: "terminal" },
   pages:      { col: "data1", w: 250, label: "読んだページ", cls: "data" },
   cov:        { col: "data2", w: 250, label: "網羅表", cls: "data" },
   imgs:       { col: "data1", w: 250, label: "確かめた画像", cls: "data" },
