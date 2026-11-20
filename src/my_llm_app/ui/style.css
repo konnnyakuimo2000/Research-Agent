@@ -244,7 +244,10 @@ button:focus-visible, .node:focus-visible, input:focus-visible { outline: 2px so
   font-size: 9px; color: var(--muted); animation: pop .45s cubic-bezier(.3,1.6,.5,1); position: relative; }
 .thumbs .th img { width: 100%; height: 100%; object-fit: cover; }
 .thumbs .th.llm { border-color: var(--ink); } .thumbs .th.llm::after { content: ""; position: absolute; inset: 0; border: 2px solid var(--ink); border-radius: 6px; animation: pulse 1s infinite; }
-.thumbs .th.ng { color: var(--muted); border-style: dashed; } .thumbs .th.lock { font-size: 8px; text-align: center; line-height: 1.1; }
+.thumbs .th.ng { color: var(--muted); border-style: dashed; }
+.thumbs .th.unchecked { border-style: dashed; }
+.thumbs .th.unchecked img { opacity: .4; filter: grayscale(1); }
+.thumbs .th .un { position: absolute; inset: auto 0 0 0; font-size: 8.5px; text-align: center; background: color-mix(in srgb, var(--bg) 75%, transparent); color: var(--ink); } .thumbs .th.lock { font-size: 8px; text-align: center; line-height: 1.1; }
 .gedge { fill: none; stroke: var(--muted); stroke-width: 1.5; }
 .gedge.used, .gedge.hot, .gedge.ghost { opacity: 1; }
 .gedge.back { stroke-dasharray: 1 0; }

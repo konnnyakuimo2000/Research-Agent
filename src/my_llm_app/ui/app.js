@@ -83,7 +83,7 @@ function add(id, parent, depth, html, details, cls = "", first = false) {
   return el;
 }
 function layout() {
-  const root = N.req; if (!root) return;
+  const root = N.req; if (!root || canvas.hidden) return;   // 非表示の間は高さが測れない
   const colX = []; let x = PAD; COLW.forEach((w, i) => { colX[i] = x; x += w + GAPX; });
   let y = PAD;
   function place(id, hide) {
@@ -134,9 +134,11 @@ let view = "flow";
 function setView(v) {
   view = v;
   $("graph").hidden = v !== "flow"; canvas.hidden = v !== "tree";
+  if (v === "flow") { FLOW.layout(); Object.values(FLOW.n).forEach((n) => { n.cur = { ...n.tgt }; }); }
+  else { layout(); order.forEach((id) => { N[id].cur = { ...N[id].tgt }; }); }
   $("flowEmpty").hidden = v === "flow" ? Object.keys(FLOW.n).length > 0 : order.length > 0;
   document.querySelectorAll("[data-view]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === v)));
-  fitMode(true);
+  fitMode(true); fitTarget(); cam = { ...camT };   // 切り替えたら、カメラもすぐ全体に合わせる
 }
 document.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
 
@@ -503,6 +505,10 @@ const HANDLERS = {
       ["画像で確かめた特徴", esc((e.features_seen || []).join("、"))], ["ライセンス", esc(license)]);
   },
   "image.final": (e) => {
+    order.filter((k) => k.startsWith("i:") && N[k].parent === work && N[k].el.classList.contains("running")).forEach((k) => {
+      setState(k, "planned"); setSub(k, "未確認（確認済みがそろった、または確かめる数の上限）"); step(k, 1, "ng"); step(k, 2, "ng");
+      N[k].el.querySelector(".thumb").textContent = "未確認";
+    });
     (e.withheld || []).forEach((w) => { const id = "i:" + w.src; if (!N[id]) return; N[id].el.classList.add("dropped"); setSub(id, "確認済み · 許可が必要なので載せない"); info[id].kv.push(["報告", esc(w.why)]); });
     if (N[work]) setSub(work, `確かめた ${order.filter((k) => k.startsWith("i:") && N[k].parent === work).length} · 載せる ${e.shown.length}`);
   },
@@ -607,7 +613,7 @@ const FLOW_DEF = {
   end:        { col: "data1", w: 180, label: "終わり", cls: "terminal" },
   pages:      { col: "data1", w: 250, label: "読んだページ", cls: "data" },
   cov:        { col: "data2", w: 250, label: "網羅表", cls: "data" },
-  imgs:       { col: "data1", w: 250, label: "確かめた画像", cls: "data" },
+  imgs:       { col: "data1", w: 250, label: "画像の候補", cls: "data" },
 };
 const FLOW = {
   reset() {
@@ -658,6 +664,7 @@ const FLOW = {
     return `<div class="thumbs"></div>`;
   },
   layout() {
+    if ($("graph").hidden) return;   // 非表示の間は高さが測れない。表示を切り替えたときに並べ直す
     const h = (id) => this.n[id]?.el.offsetHeight || 0;
     const rows = STAGE_ORDER.filter((s) => this.n[s]);
     let y = 0;
@@ -822,7 +829,7 @@ const FLOW = {
       case "image.llm": { const th = f.thumb[e.src]; if (th) th.classList.add("llm"); f.setText("images", undefined, "VLM が対象かどうか確かめている"); break; }
       case "image.done": {
         const th = f.thumb[e.src]; if (!th) break;
-        th.classList.remove("llm");
+        th.classList.remove("llm"); th.dataset.done = e.level;
         const ok = e.level !== "不採用";
         const show = () => {
           if (!ok) { th.classList.add("ng"); th.textContent = "✕"; }
@@ -833,7 +840,20 @@ const FLOW = {
         f.push("images", `${e.level}: ${e.description || e.reason || ""}`);
         break;
       }
-      case "image.final": f.setText("images", `載せる ${e.shown.length} 枚`, `確かめた ${Object.keys(f.thumb).length} 枚`); break;
+      case "image.final": {
+        // 取得はできたが、VLM で確かめずに打ち切った候補（確認済みが 2 枚そろった、または確かめる数の上限に達した）
+        const ths = Object.entries(f.thumb), checked = ths.filter(([, th]) => th.dataset.done);
+        const confirmed = checked.filter(([, th]) => th.dataset.done === "確認済み").length;
+        const why = confirmed >= 2 ? "確認済みの画像が 2 枚そろったので、残りは確かめていない" : "確かめる数の上限（6 枚）に達したので、残りは確かめていない";
+        ths.filter(([, th]) => !th.dataset.done).forEach(([src, th]) => {
+          th.classList.add("unchecked"); th.title = `未確認: ${why}`;
+          th.innerHTML = `<img src="${withKey(`/api/image?run=${encodeURIComponent(runId)}&src=${encodeURIComponent(src)}`)}" alt="" onerror="this.remove()"><span class="un">未確認</span>`;
+        });
+        f.unchecked = ths.length - checked.length; f.uncheckedWhy = why;
+        f.setText("images", `載せる ${e.shown.length} 枚`, `確かめた ${checked.length} 枚`);
+        f.setText("imgs", `採用 ${e.shown.length} 枚`, `確かめた ${checked.length} · 未確認 ${f.unchecked}`);
+        break;
+      }
       case "conflicts":
         f.setText("conflicts", `食い違い ${e.conflicts.length} 件`, `比べた観点 ${e.aspects.length}`);
         e.conflicts.forEach((c) => f.push("conflicts", c.topic));
@@ -951,6 +971,10 @@ const FLOW = {
     const kv = [["通った回数", this.visits[id] ? `${this.visits[id]} 回` : ""], ["かかった時間", this.seconds[id] ? `${Math.round(this.seconds[id])} 秒` : ""]];
     let list = n.hist.map((x) => esc(x));
     if (id === "pages") list = Object.keys(this.pageChip).map((u) => `${esc(host(u))} — ${link(u)}`);
+    if (id === "imgs") {
+      list = Object.entries(this.thumb).map(([u, th]) => `${esc(th.dataset.done || "未確認")} — ${link(u)}`);
+      if (this.unchecked) kv.push(["未確認", `${this.unchecked} 枚。${esc(this.uncheckedWhy)}`]);
+    }
     showDetails({ title: n.label, kv, list, note: id === "pages" ? "アイコンを押すと、そのページで確かめた事実と引用が出ます。" : "" });
   },
   pageDetails(url) { const d = info["p:" + url]; if (d) showDetails(d); },
