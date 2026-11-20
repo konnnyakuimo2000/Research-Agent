@@ -211,6 +211,24 @@ def api_answer(run_id: str, body: dict, authorization: str | None = Header(defau
         raise HTTPException(status_code=409, detail="この調査は答えを待っていません") from None
 
 
+@app.post("/api/runs/{run_id}/pause")
+def api_pause(run_id: str, authorization: str | None = Header(default=None)) -> dict:
+    _check_ui_key(authorization, None)
+    try:
+        return _runs.pause(run_id).summary()
+    except KeyError:
+        raise HTTPException(status_code=409, detail="この調査は動いていません") from None
+
+
+@app.post("/api/runs/{run_id}/resume")
+def api_resume(run_id: str, authorization: str | None = Header(default=None)) -> dict:
+    _check_ui_key(authorization, None)
+    try:
+        return _runs.resume(run_id).summary()
+    except KeyError:
+        raise HTTPException(status_code=409, detail="この調査は止まっていません") from None
+
+
 @app.get("/api/runs")
 def api_runs(authorization: str | None = Header(default=None), key: str | None = None) -> dict:
     _check_ui_key(authorization, key)

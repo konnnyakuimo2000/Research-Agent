@@ -4,6 +4,8 @@
 - イベントは Recorder に溜め、`runs/<ID>.events.jsonl` にも書く。画面は SSE で受け取る（途中から受け直せる）
 - 聞き返し（interrupt）で止まったら「答え待ち」にし、答えが来たら同じスレッドの続きから再開する
 - 終わった調査（サーバーを立ち上げ直した後も）は、jsonl から一覧と再生ができる
+- 一時停止: 今の作業（ノード）が終わったところで止め、再開すると次の作業から続ける
+  （LangGraph の stream は、次を受け取りに行くまで次の作業を始めないので、受け取る側で待つ）
 """
 
 from __future__ import annotations
@@ -29,10 +31,14 @@ class Run:
     request: str
     thread_id: str
     recorder: Recorder
-    status: str = "running"          # running / waiting / done / error
+    status: str = "running"          # running / paused / waiting / done / error
     question: str = ""
     created: float = field(default_factory=time.time)
     lock: threading.Lock = field(default_factory=threading.Lock)
+    gate: threading.Event = field(default_factory=threading.Event)   # 閉じている間は次の作業に進まない（一時停止）
+
+    def __post_init__(self) -> None:
+        self.gate.set()
 
     def summary(self) -> dict:
         return {"id": self.id, "request": self.request, "status": self.status, "question": self.question,
@@ -63,6 +69,24 @@ class RunManager:
         self._spawn(run, Command(resume=text))
         return run
 
+    def pause(self, run_id: str) -> Run:
+        run = self.runs.get(run_id)
+        if not run or run.status != "running":
+            raise KeyError(run_id)
+        run.gate.clear()
+        run.status = "paused"
+        run.recorder.add({"type": "run.paused"})
+        return run
+
+    def resume(self, run_id: str) -> Run:
+        run = self.runs.get(run_id)
+        if not run or run.status != "paused":
+            raise KeyError(run_id)
+        run.status = "running"
+        run.recorder.add({"type": "run.resumed"})
+        run.gate.set()
+        return run
+
     def _spawn(self, run: Run, payload: object) -> None:
         threading.Thread(target=self._drive, args=(run, payload), daemon=True, name=f"run-{run.id}").start()
 
@@ -77,6 +101,7 @@ class RunManager:
                         continue
                     if "__interrupt__" in chunk:
                         question = chunk["__interrupt__"][0].value["question"]
+                    run.gate.wait()   # 一時停止中は、次の作業を始めない
             except Exception as e:  # noqa: BLE001 - 原因を画面に出す
                 log.exception("run %s failed", run.id)
                 run.status = "error"
@@ -128,7 +153,7 @@ class RunManager:
             first, last = _first_last(path)
             if not first:
                 continue
-            status = {"run.end": "done", "run.error": "error", "run.waiting": "stopped"}.get(last.get("type"), "stopped")
+            status = {"run.end": "done", "run.error": "error"}.get(last.get("type"), "stopped")
             items[run_id] = {"id": run_id, "request": first.get("request", ""), "status": status, "question": "",
                              "created": path.stat().st_mtime, "events": last.get("seq", 0), "seconds": last.get("t", 0)}
         return sorted(items.values(), key=lambda x: x["id"], reverse=True)[:limit]

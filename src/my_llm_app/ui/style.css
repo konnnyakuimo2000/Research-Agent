@@ -71,7 +71,9 @@ button:focus-visible, .node:focus-visible, input:focus-visible { outline: 2px so
 .composer { border: 1px solid var(--line); border-radius: 24px; padding: 6px 6px 6px 16px; display: flex; gap: 8px; align-items: center; }
 .composer.answer { border-color: var(--ink); }
 .composer input { flex: 1; min-width: 0; border: none; background: none; color: var(--ink); font: inherit; outline: none; }
-.composer button { width: 30px; height: 30px; border-radius: 50%; border: none; background: var(--strong); color: var(--on-strong); cursor: pointer; }
+.composer button { width: 30px; height: 30px; border-radius: 50%; border: none; background: var(--strong); color: var(--on-strong); cursor: pointer;
+  font-size: 13px; line-height: 1; transition: background .2s; }
+.composer button.pause { font-size: 10px; letter-spacing: -1px; }
 
 /* ノードの窓（全面）。中の canvas を拡大・縮小・移動する */
 .tele { position: relative; min-height: 0; min-width: 0; overflow: hidden; }

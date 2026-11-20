@@ -527,10 +527,12 @@ const HANDLERS = {
     setState("req", "done");
     const body = renderReport(e.answer || "");
     const el = statusEl || chatAgent("");
-    el.querySelector(".body").innerHTML = body; wireCites(el); statusEl = null; setComposer(false);
+    el.querySelector(".body").innerHTML = body; wireCites(el); statusEl = null; liveState = ""; setComposer(false);
     loadRuns();
   },
-  "run.error": (e) => { chatAgent(`<p>エラーで調査を続けられませんでした: ${esc(e.error)}</p>`); statusEl = null; },
+  "run.error": (e) => { chatAgent(`<p>エラーで調査を続けられませんでした: ${esc(e.error)}</p>`); statusEl = null; liveState = ""; updateSend(); },
+  "run.paused": () => { if (!replay) liveState = "paused"; now("一時停止している（今の作業が終わったところで止まる）"); updateSend(); },
+  "run.resumed": () => { if (!replay) liveState = "running"; now("再開した"); updateSend(); },
 };
 function sameUrl(a, b) { const n = (u) => u.replace(/[?#].*$/, "").replace(/\/$/, ""); return n(a) === n(b); }
 function pageNode(e, state) {
@@ -960,11 +962,27 @@ function bezierPoint(p0, p1, p2, p3, t) {
 }
 
 // ---- 調査の開始・答え・一覧 ----
-let source = null, waitingRun = null;
+let source = null, waitingRun = null, liveState = "";   // liveState: 動いている調査の状態（running / paused / ""）
 function setComposer(answerMode) {
   waitingRun = answerMode ? runId : null;
   $("composer").classList.toggle("answer", answerMode);
   $("input").placeholder = answerMode ? "質問への答えを入力（番号でも可）" : "調べたいことを入力";
+  updateSend();
+}
+// 送信ボタンは、調査が動いている間（再生中も）は一時停止 / 再開のボタンになる
+function busy() { return !waitingRun && (replay ? queue.length > 0 || !!source : liveState !== ""); }
+function paused() { return replay ? !playing : liveState === "paused"; }
+function updateSend() {
+  const b = $("sendBtn"), stop = busy();
+  b.textContent = stop ? (paused() ? "▶" : "❚❚") : "↑";
+  b.setAttribute("aria-label", stop ? (paused() ? "再開" : "一時停止") : "送る");
+  b.classList.toggle("pause", stop);
+}
+async function togglePause() {
+  if (replay) { playing = !playing; updateSend(); now(playing ? "再生している" : "一時停止している"); return; }
+  const action = liveState === "paused" ? "resume" : "pause";
+  try { await api(`/api/runs/${runId}/${action}`, {}); }
+  catch (err) { chatAgent(`<p>${action === "pause" ? "止められませんでした" : "再開できませんでした"}: ${esc(err.message)}</p>`); }
 }
 async function sendAnswer(text) {
   if (!waitingRun || !text) return;
@@ -973,6 +991,7 @@ async function sendAnswer(text) {
 }
 $("composer").addEventListener("submit", async (ev) => {
   ev.preventDefault();
+  if (busy()) { togglePause(); return; }
   const text = $("input").value.trim(); if (!text) return;
   $("input").value = "";
   if (waitingRun) { sendAnswer(text); return; }
@@ -981,7 +1000,7 @@ $("composer").addEventListener("submit", async (ev) => {
 });
 $("newBtn").addEventListener("click", () => {
   closeSource(); reset(); runId = null; $("chat").innerHTML = ""; $("chat").appendChild(emptyChat); emptyChat.hidden = false;
-  $("replayCtl").hidden = true; setComposer(false); highlightRun(); $("input").focus();
+  replay = false; liveState = ""; setComposer(false); highlightRun(); $("input").focus();
 });
 
 // 再生: 終わった調査は、記録の時刻どおりに（速さを掛けて）流す。動いている調査は届いたらすぐ描く
@@ -989,17 +1008,13 @@ let queue = [], clock = 0, speed = 8, playing = true, replay = false, lastTs = n
 function closeSource() { if (source) { source.close(); source = null; } queue = []; }
 function open(id, live) {
   closeSource(); reset(); runId = id; $("chat").innerHTML = "";
-  replay = !live; clock = 0; playing = true; $("playBtn").textContent = "一時停止";
-  $("replayCtl").hidden = live; setComposer(false); highlightRun();
+  replay = !live; clock = 0; playing = true; liveState = live ? "running" : "";
+  setComposer(false); highlightRun();
   source = new EventSource(withKey(`/api/runs/${encodeURIComponent(id)}/events`));
   source.onmessage = (m) => { const e = JSON.parse(m.data); if (replay) queue.push(e); else handle(e); };
-  source.addEventListener("end", () => { if (source) { source.close(); source = null; } });
+  source.addEventListener("end", () => { if (source) { source.close(); source = null; } updateSend(); });
   source.addEventListener("missing", () => { if (source) { source.close(); source = null; } chatAgent("<p>この調査の記録が見つかりません。</p>"); });
 }
-$("playBtn").addEventListener("click", () => { playing = !playing; $("playBtn").textContent = playing ? "一時停止" : "再生"; });
-document.querySelectorAll("[data-speed]").forEach((b) => b.addEventListener("click", () => {
-  speed = +b.dataset.speed; document.querySelectorAll("[data-speed]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
-}));
 function frame(ts) {
   if (lastTs === null) lastTs = ts;
   const dt = Math.min(0.1, (ts - lastTs) / 1000); lastTs = ts;
@@ -1010,6 +1025,7 @@ function frame(ts) {
       if (queue[0].t - clock > 20) clock = queue[0].t;   // 利用者の答えを待った時間などの長い空白は飛ばす
       while (queue.length && queue[0].t <= clock) handle(queue.shift());
     }
+    if (!queue.length && !source) updateSend();   // 再生し終えたら、送信ボタンに戻す
   }
   animate(dt);
   requestAnimationFrame(frame);
@@ -1018,8 +1034,8 @@ function frame(ts) {
 async function loadRuns() {
   try {
     const { runs } = await api(withKey("/api/runs"));
-    const label = { running: "調べている", waiting: "答え待ち", done: "完了", error: "エラー", stopped: "途中で止まった" };
-    $("runs").innerHTML = runs.map((r) => `<button type="button" class="run" data-id="${esc(r.id)}" data-live="${r.status === "running" || r.status === "waiting"}">
+    const label = { running: "調べている", paused: "一時停止中", waiting: "答え待ち", done: "完了", error: "エラー", stopped: "途中で止まった" };
+    $("runs").innerHTML = runs.map((r) => `<button type="button" class="run" data-id="${esc(r.id)}" data-live="${["running", "waiting", "paused"].includes(r.status)}">
       <span class="r1">${esc(r.request || "(依頼なし)")}</span><span class="r2">${esc(r.id.slice(0, 13).replace(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2}).*/, "$2/$3 $4:$5"))} · ${label[r.status] || r.status}</span></button>`).join("")
       || `<p class="r2" style="padding:8px;color:var(--muted)">まだ調査はありません</p>`;
     $("runs").querySelectorAll(".run").forEach((b) => b.addEventListener("click", () => open(b.dataset.id, b.dataset.live === "true")));
@@ -1031,14 +1047,11 @@ function highlightRun() { $("runs").querySelectorAll(".run").forEach((b) => b.cl
 window.addEventListener("resize", () => N && layout());
 reset(); loadRuns(); requestAnimationFrame(frame);
 const params = new URLSearchParams(location.search);
-if (params.has("speed")) {   // 再生の速さ（0 = すぐ全部を出す）。共有するリンクで使う
-  speed = +params.get("speed") || 0;
-  document.querySelectorAll("[data-speed]").forEach((x) => x.setAttribute("aria-pressed", String(+x.dataset.speed === speed)));
-}
+if (params.has("speed")) speed = +params.get("speed") || 0;   // 再生の速さ（0 = すぐ全部を出す。確認用）
 if (params.has("at")) stopAt = +params.get("at");   // この時刻（秒）の状態で止める
 const first = params.get("run");
 if (first) api(withKey("/api/runs")).then(({ runs }) => {
   const r = runs.find((x) => x.id === first);
-  open(first, !!r && (r.status === "running" || r.status === "waiting"));
+  open(first, !!r && ["running", "waiting", "paused"].includes(r.status));
 }).catch(() => open(first, false));
 })();

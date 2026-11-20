@@ -63,3 +63,43 @@ def test_answer_is_refused_when_not_waiting_and_unsafe_ids_are_ignored(tmp_path)
     except KeyError:
         pass
     assert m.events_on_disk("../etc/passwd") == []
+
+
+class SlowGraph:
+    """1 つ目の作業の後で止められるか確かめるための偽物。ready が立つまで最初の作業を返さない。"""
+
+    def __init__(self):
+        import threading
+        self.ready = threading.Event()
+        self.steps = 0
+
+    def stream(self, payload, config, stream_mode):
+        self.ready.wait(5)
+        for i in range(3):
+            self.steps += 1
+            yield "updates", {f"step{i}": {}}
+
+    def get_state(self, config):
+        return SimpleNamespace(values={"answer": "報告"})
+
+
+def test_pause_stops_before_the_next_step_and_resume_finishes(tmp_path):
+    g = SlowGraph()
+    m = RunManager(g, tmp_path)
+    run = m.start("水星")
+    m.pause(run.id)
+    assert run.status == "paused"
+    g.ready.set()
+    assert wait_for(lambda: g.steps == 1)
+    time.sleep(0.2)
+    assert g.steps == 1 and run.status == "paused"          # 1 つ目の作業の後で止まっている
+    m.resume(run.id)
+    assert wait_for(lambda: run.status == "done")
+    assert g.steps == 3
+    types = [e["type"] for e in run.recorder.events]
+    assert types == ["run.start", "run.paused", "run.resumed", "run.end"]
+    try:
+        m.resume(run.id)
+        raise AssertionError("止まっていない調査は再開できない")
+    except KeyError:
+        pass
