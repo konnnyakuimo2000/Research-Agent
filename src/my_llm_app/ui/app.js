@@ -9,7 +9,8 @@
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("canvas"), svg = $("edges"), flow = $("flow");
-const emptyChat = $("emptyChat");   // チャットを空にしても、最初の案内は取っておいて使い直す
+// チャットが空のときは、見出しと入力欄を真ん中に置く（会話が始まったら入力欄を下に移す）
+const setEmpty = (on) => $("chatpane").classList.toggle("empty", on);
 const COLW = [170, 250, 236, 236, 236];   // 深さごとの列の幅（依頼・判断・作業・ページ・データベースの記録）
 const GAPX = 44, GAPY = 12, PAD = 24;
 const MIN_ZOOM = 0.22, MAX_ZOOM = 2.5, FIT_MAX = 1;
@@ -251,9 +252,9 @@ function animate(dt) {
 
 // ---- チャット ----
 function now(text) { const txt = statusEl && statusEl.querySelector(".txt"); if (txt) txt.textContent = text; }
-function chatUser(text) { emptyChat.hidden = true; const d = document.createElement("div"); d.className = "u"; d.textContent = text; $("chat").appendChild(d); scrollChat(); }
+function chatUser(text) { setEmpty(false); const d = document.createElement("div"); d.className = "u"; d.textContent = text; $("chat").appendChild(d); scrollChat(); }
 function chatAgent(html) {
-  emptyChat.hidden = true;
+  setEmpty(false);
   const d = document.createElement("div"); d.className = "a"; d.innerHTML = `<div class="avatar">R</div><div class="body">${html}</div>`;
   $("chat").appendChild(d); scrollChat(); return d;
 }
@@ -997,10 +998,9 @@ function setComposer(answerMode) {
 function busy() { return !waitingRun && (replay ? queue.length > 0 || !!source : liveState !== ""); }
 function paused() { return replay ? !playing : liveState === "paused"; }
 function updateSend() {
-  const b = $("sendBtn"), stop = busy();
-  b.textContent = stop ? (paused() ? "▶" : "❚❚") : "↑";
-  b.setAttribute("aria-label", stop ? (paused() ? "再開" : "一時停止") : "送る");
-  b.classList.toggle("pause", stop);
+  const b = $("sendBtn"), stop = busy(), p = paused();
+  b.setAttribute("aria-label", stop ? (p ? "再開" : "一時停止") : "送る"); b.title = b.getAttribute("aria-label");
+  b.classList.toggle("pause", stop && !p); b.classList.toggle("resume", stop && p);
 }
 async function togglePause() {
   if (replay) { playing = !playing; updateSend(); now(playing ? "再生している" : "一時停止している"); return; }
@@ -1016,16 +1016,40 @@ async function sendAnswer(text) {
 $("composer").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   if (busy()) { togglePause(); return; }
-  const text = $("input").value.trim(); if (!text) return;
-  $("input").value = "";
+  const text = input.value.trim(); if (!text) return;
+  input.value = ""; growInput();
   if (waitingRun) { sendAnswer(text); return; }
   try { const r = await api("/api/runs", { request: text }); open(r.id, true); loadRuns(); }
   catch (err) { chatAgent(`<p>調査を始められませんでした: ${esc(err.message)}</p>`); }
 });
-$("newBtn").addEventListener("click", () => {
-  closeSource(); reset(); runId = null; $("chat").innerHTML = ""; $("chat").appendChild(emptyChat); emptyChat.hidden = false;
+function newResearch() {
+  closeSource(); reset(); runId = null; $("chat").innerHTML = ""; setEmpty(true);
   replay = false; liveState = ""; setComposer(false); highlightRun(); $("input").focus();
+}
+$("newBtn").addEventListener("click", newResearch);
+$("plusBtn").addEventListener("click", newResearch);
+$("runsBtn").addEventListener("click", () => { document.querySelector(".app").classList.toggle("noside"); setTimeout(() => fitMode(true), 50); });
+
+// 入力欄: Enter で送る（Shift+Enter は改行。日本語の変換を確定する Enter では送らない）。行が増えたら高さを伸ばす
+const input = $("input");
+function growInput() { input.style.height = "auto"; input.style.height = Math.min(180, input.scrollHeight) + "px"; }
+input.addEventListener("input", growInput);
+input.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); $("composer").requestSubmit(); }
 });
+
+// 研究室の LLM サーバーと検索につながるか（入力欄の下に出す）
+async function checkConnection() {
+  try {
+    const st = await api("/api/status");
+    $("modelName").textContent = st.model; $("modelName").title = `調査エージェント（research-agent）が使っているモデル: ${st.model}`;
+    const ok = st.llm.ok && st.search.ok;
+    $("conn").className = "conn " + (ok ? "ok" : "ng");
+    $("connText").textContent = ok ? "接続中" : !st.llm.ok ? "LLM サーバーにつながらない（VPN を確認）" : "検索（SearXNG）につながらない";
+    $("conn").title = `LLM: ${st.llm.ok ? `応答 ${st.llm.seconds} 秒` : st.llm.error || "応答なし"} / 検索: ${st.search.ok ? "応答あり" : st.search.error || "応答なし"}`;
+  } catch (err) { $("conn").className = "conn ng"; $("connText").textContent = "エージェントにつながらない"; }
+}
+checkConnection(); setInterval(checkConnection, 30000);
 
 // 再生: 終わった調査は、記録の時刻どおりに（速さを掛けて）流す。動いている調査は届いたらすぐ描く
 let queue = [], clock = 0, speed = 8, playing = true, replay = false, lastTs = null, stopAt = Infinity;

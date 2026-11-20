@@ -290,6 +290,31 @@ def api_image(run: str, src: str, key: str | None = None, authorization: str | N
     return Response(data, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
 
 
+_status_cache: dict = {}
+
+
+@app.get("/api/status")
+def api_status() -> dict:
+    """研究室の LLM サーバーと検索（SearXNG）につながるか。画面の入力欄の下に出す（20 秒覚えておく）。"""
+    if _status_cache and time.time() - _status_cache["at"] < 20:
+        return _status_cache["value"]
+    from my_llm_app.tools import http as http_tools
+
+    def check(url: str) -> dict:
+        started = time.time()
+        try:
+            r = http_tools.get(url, timeout=4, cache=False)
+            return {"ok": r.status_code == 200, "seconds": round(time.time() - started, 1)}
+        except Exception as e:  # noqa: BLE001 - つながらない理由を画面に出す
+            return {"ok": False, "error": type(e).__name__}
+
+    value = {"model": _settings.llm_model,
+             "llm": check(_settings.llm_base_url.rstrip("/") + "/models"),
+             "search": check(_settings.searxng_url.rstrip("/") + "/healthz")}
+    _status_cache.update(at=time.time(), value=value)
+    return value
+
+
 @app.get("/")
 def root() -> RedirectResponse:
     return RedirectResponse("/ui/")

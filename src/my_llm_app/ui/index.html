@@ -16,17 +16,34 @@
     <div class="runs" id="runs"></div>
   </aside>
 
-  <section class="chatpane" aria-label="チャット">
-    <div class="chat" id="chat">
-      <div class="empty-chat" id="emptyChat">
-        <h1>何を調べますか？</h1>
-        <p>依頼を送ると、エージェントが調べている様子が右に木の形で伸びていきます。左の一覧から、これまでの調査を再生できます。</p>
+  <section class="chatpane empty" id="chatpane" aria-label="チャット">
+    <div class="chat" id="chat"></div>
+    <div class="dock">
+      <h1 class="hello">何を調べましょうか？</h1>
+      <form class="composer" id="composer">
+        <textarea id="input" rows="1" autocomplete="off" placeholder="調べたいことを入力" aria-label="依頼"></textarea>
+        <div class="crow">
+          <button type="button" class="cbtn" id="plusBtn" aria-label="新しい調査" title="新しい調査">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+          <span class="cspace"></span>
+          <span class="model" id="modelName" title="使っているモデル"></span>
+          <button type="submit" class="send" id="sendBtn" aria-label="送る">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path class="i-send" d="M12 19V5M6 11l6-6 6 6"/><path class="i-pause" d="M9 6v12M15 6v12"/><path class="i-play" d="M8 5l11 7-11 7z"/></svg>
+          </button>
+        </div>
+      </form>
+      <div class="tray">
+        <button type="button" class="tbtn" id="runsBtn" aria-label="調査の一覧" title="調査の一覧を出す・隠す">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+        </button>
+        <span class="cspace"></span>
+        <span class="conn" id="conn" title="研究室の LLM サーバーと検索への接続">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 18h10a4 4 0 0 0 .6-7.96A6 6 0 0 0 6.1 9.1 4.5 4.5 0 0 0 7 18z"/></svg>
+          <span id="connText">確かめている</span>
+        </span>
       </div>
     </div>
-    <form class="composer" id="composer">
-      <input id="input" autocomplete="off" placeholder="調べたいことを入力">
-      <button type="submit" id="sendBtn" aria-label="送る">↑</button>
-    </form>
   </section>
 
   <section class="tele" aria-label="作業の流れ">
