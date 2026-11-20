@@ -1,5 +1,8 @@
 // テレメトリー画面（docs/telemetry_design.md）。
 // サーバーから届くイベント（/api/runs/{id}/events）を受け取り、作業の流れを左から右へ伸びる木として描く。
+// - ノードは、親から枝が伸びた先に、実がなるように膨らんで現れる
+// - 網羅表もノード（依頼 → 網羅表 → 観点）。ページで確かめた事実は、観点のノードへ飛んで溜まる
+// - 木が広がると、全体が収まるよう滑らかに縮小する。ホイール・ピンチで拡大、ドラッグで移動（そのときは自動をやめる）
 // 動いている調査はそのまま、終わった調査は記録を再生する（速さを選べる）。
 (() => {
 "use strict";
@@ -8,7 +11,9 @@ const $ = (id) => document.getElementById(id);
 const canvas = $("canvas"), svg = $("edges"), flow = $("flow");
 const emptyChat = $("emptyChat");   // チャットを空にしても、最初の案内は取っておいて使い直す
 const COLW = [170, 250, 236, 236, 236];   // 深さごとの列の幅（依頼・判断・作業・ページ・データベースの記録）
-const GAPX = 44, GAPY = 12, PAD = 24, LIMIT = 900;
+const GAPX = 44, GAPY = 12, PAD = 24;
+const MIN_ZOOM = 0.22, MAX_ZOOM = 2.5, FIT_MAX = 1;
+const STEM = 0.45, RIPEN = 0.6;      // 枝が伸びる秒数、実が膨らむ秒数
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const ACTION = { search: "検索する", read_pages: "ページを読む", find_images: "画像を探す", check_conflicts: "食い違いを調べる",
   respond: "回答する", ask_user: "聞き返す" };
@@ -29,49 +34,47 @@ async function api(path, body) {
 }
 
 // ---- 状態 ----
-let N, order, info, cov, pagesOk, follow, aim, jump, selected, round, work, dbNode, failGroup, spans, maxT, runId, statusEl, questions,
-    sources, instant, rounds;
+let N, order, info, selected, round, work, dbNode, runId, statusEl, questions, sources, instant, rounds, aim;
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch (e) { return u; } };
 const tier = (t) => t ? `<span class="tier${t === 1 ? " t1" : ""}">T${t}</span>` : "";
+const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
 function icon(h) {
   const letter = esc((h || "?").replace(/^www\./, "")[0]?.toUpperCase() || "?");
   return `<img class="ico" src="/api/favicon?host=${encodeURIComponent(h)}" alt="" onerror="this.outerHTML='<span class=&quot;ico letter&quot;>${letter}</span>'">`;
 }
 const card = (kind, title, sub, right = "", lead = "") =>
   `<div class="k"><span>${kind}</span><span class="row">${right}<span class="st"></span></span></div><div class="row">${lead}<span class="t">${esc(title)}</span></div><div class="s">${esc(sub)}</div>`;
+const toggleBtn = `<button type="button" class="toggle" hidden>畳む ▾</button>`;
 
 function reset() {
-  canvas.querySelectorAll(".node").forEach((e) => e.remove());
-  document.querySelectorAll(".fly").forEach((e) => e.remove());
-  $("gantt").querySelectorAll(".span").forEach((e) => e.remove());
-  svg.innerHTML = ""; $("cols").innerHTML = ""; $("boardSum").textContent = "";
-  N = {}; order = []; info = {}; cov = {}; pagesOk = 0; follow = true; aim = null; jump = null; selected = null; round = null; work = null;
-  dbNode = {}; failGroup = {}; spans = []; maxT = 0; statusEl = null; questions = new Set(); sources = []; instant = false; rounds = 0;
-  $("drawer").classList.remove("open"); $("backTo").hidden = true; $("flowEmpty").hidden = false;
-  $("pageTxt").textContent = "0"; $("pageBar").style.width = "0%"; $("timeBar").style.width = "0%"; $("timeTxt").textContent = "0";
-  $("ganttTotal").textContent = ""; now("待機中", false); flow.scrollLeft = 0; flow.scrollTop = 0;
+  canvas.querySelectorAll(".node, .fly").forEach((e) => e.remove());
+  svg.innerHTML = "";
+  N = {}; order = []; info = {}; selected = null; round = null; work = null; dbNode = {}; statusEl = null;
+  questions = new Set(); sources = []; instant = false; rounds = 0; aim = null;
+  $("drawer").classList.remove("open"); $("flowEmpty").hidden = false;
+  fitMode(true); cam = { x: 0, y: 0, s: 1 }; camT = { ...cam };
 }
 
 // ---- 木 ----
-function add(id, parent, depth, html, details, cls = "") {
+function add(id, parent, depth, html, details, cls = "", first = false) {
   if (N[id]) return N[id].el;
   $("flowEmpty").hidden = true;
   const el = document.createElement("div");
-  el.className = `node born ${cls}`; el.style.setProperty("--w", COLW[depth] + "px"); el.innerHTML = html;
+  el.className = `node ${cls}`; el.style.setProperty("--w", COLW[depth] + "px"); el.innerHTML = html;
   el.tabIndex = 0; el.setAttribute("role", "button");
   el.addEventListener("click", (e) => { if (!e.target.closest(".toggle")) select(id); });
   el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(id); } });
+  const tg = el.querySelector(".toggle"); if (tg) tg.addEventListener("click", () => collapse(id, !N[id].collapsed));
   canvas.appendChild(el);
   const p = N[parent];
-  const start = p ? { x: p.cur.x + COLW[p.depth] - 20, y: p.cur.y + 4 } : { x: PAD, y: PAD };
-  N[id] = { id, parent, depth, el, kids: [], cur: { ...start }, tgt: { ...start }, collapsed: false, hidden: false, extra: [] };
-  if (p) p.kids.push(id);
+  N[id] = { id, parent, depth, el, kids: [], cur: { x: 0, y: 0 }, tgt: { x: 0, y: 0 }, collapsed: false, hidden: false, extra: [],
+            born: instant || reduce ? -1e9 : performance.now() };
+  if (p) { first ? p.kids.unshift(id) : p.kids.push(id); const t = p.el.querySelector(".toggle"); if (t) t.hidden = false; }
   order.push(id); info[id] = details || { title: id };
   layout();
-  if (instant || reduce) el.classList.remove("born"); else requestAnimationFrame(() => el.classList.remove("born"));
-  if (follow) aim = id;
-  slots();
+  N[id].cur = { ...N[id].tgt };   // 生まれるノードは、その場所で実るように膨らむ（動いてくるのではない）
+  aim = id;
   return el;
 }
 function layout() {
@@ -86,83 +89,145 @@ function layout() {
     if (!kids.length) { n.tgt = { x: colX[n.depth], y }; y += h + GAPY; n.kids.forEach((k) => place(k, true)); return; }
     const top = y;
     kids.forEach((k) => place(k, false));
-    const first = N[kids[0]], last = N[kids[kids.length - 1]];
-    const mid = (first.tgt.y + last.tgt.y + (last.el.offsetHeight || 50)) / 2;
+    const f = N[kids[0]], l = N[kids[kids.length - 1]];
+    const mid = (f.tgt.y + l.tgt.y + (l.el.offsetHeight || 50)) / 2;
     n.tgt = { x: colX[n.depth], y: Math.max(top, mid - h / 2) };
     if (n.tgt.y + h + GAPY > y) y = n.tgt.y + h + GAPY;
   }
   root.kids.forEach((k) => place(k, false));
   root.tgt = { x: colX[0], y: PAD };
-  const vis = order.filter((id) => !N[id].hidden);
-  const maxY = Math.max(...vis.map((id) => N[id].tgt.y + N[id].el.offsetHeight));
-  const maxX = Math.max(...vis.map((id) => N[id].tgt.x + COLW[N[id].depth]));
-  canvas.style.width = maxX + PAD * 4 + "px"; canvas.style.height = maxY + PAD * 3 + "px";
-  svg.setAttribute("width", maxX + PAD * 4); svg.setAttribute("height", maxY + PAD * 3);
   if (instant) order.forEach((id) => { N[id].cur = { ...N[id].tgt }; });
 }
 function setState(id, st) {
   const n = N[id]; if (!n) return;
   n.el.classList.remove("planned", "running", "llm", "waiting", "done", "failed");
   if (st) n.el.classList.add(st);
-  slots();
 }
 function setSub(id, text) { const s = N[id]?.el.querySelector(".s"); if (s) s.textContent = text; }
 function setTitle(id, text) { const s = N[id]?.el.querySelector(".t"); if (s) s.textContent = text; }
 function step(id, i, cls) { const s = N[id]?.el.querySelectorAll(".steps span")[i]; if (s) s.className = cls; }
-function slots() {
-  const busy = order.filter((id) => N[id].el.classList.contains("llm")).length;
-  $("slot0").classList.toggle("on", busy >= 1); $("slot1").classList.toggle("on", busy >= 2);
-}
 function collapse(id, yes) {
   const n = N[id]; if (!n) return; n.collapsed = yes;
-  const t = n.el.querySelector(".toggle"); if (t) { t.hidden = !n.kids.length; t.textContent = yes ? `${n.kids.length} 件 ▸` : "畳む ▾"; }
+  const t = n.el.querySelector(".toggle"); if (t) t.textContent = yes ? `${n.kids.length} 件 ▸` : "畳む ▾";
   layout();
 }
 function reveal(id) { let p = N[id]?.parent; while (p) { if (N[p].collapsed) collapse(p, false); p = N[p].parent; } }
 
-// 毎フレーム: 目標の位置へ滑らかに近づけ、線を引き直す
+// 3 次ベジェ曲線を途中（t）までで切る（枝が伸びていく途中を描く）
+function bezierTo(p0, p1, p2, p3, t) {
+  const L = (a, b) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+  const a = L(p0, p1), b = L(p1, p2), c = L(p2, p3), d = L(a, b), e = L(b, c), f = L(d, e);
+  return [p0, a, d, f];
+}
+const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+const easeBack = (t) => { const c = 1.7; return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); };   // 少し行き過ぎて戻る（実が膨らむ）
+
+// ---- カメラ（拡大・縮小・移動） ----
+let cam = { x: 0, y: 0, s: 1 }, camT = { ...cam }, auto = true;
+function fitMode(on) { auto = on; $("zoomFit").setAttribute("aria-pressed", String(on)); }
+function fitTarget() {
+  const vis = order.filter((id) => !N[id].hidden);
+  if (!vis.length) return;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const id of vis) {
+    const n = N[id];
+    x0 = Math.min(x0, n.tgt.x); y0 = Math.min(y0, n.tgt.y);
+    x1 = Math.max(x1, n.tgt.x + n.el.offsetWidth); y1 = Math.max(y1, n.tgt.y + n.el.offsetHeight);
+  }
+  const W = flow.clientWidth, H = flow.clientHeight, m = 36, bottom = 64;
+  const bw = x1 - x0, bh = y1 - y0;
+  const s = clamp(Math.min((W - 2 * m) / bw, (H - m - bottom) / bh), MIN_ZOOM, FIT_MAX);
+  let x = (W - bw * s) / 2 - x0 * s, y = m + Math.max(0, (H - m - bottom - bh * s) / 2) - y0 * s;
+  // 縮小しきっても収まらないときは、いちばん新しいノードのあたりを見せる
+  if (bw * s > W - 2 * m && aim && N[aim]) x = clamp(W * 0.62 - (N[aim].tgt.x + COLW[N[aim].depth]) * s, W - 2 * m - x1 * s, m - x0 * s);
+  if (bh * s > H - m - bottom && aim && N[aim]) y = clamp(H * 0.5 - N[aim].tgt.y * s, H - bottom - y1 * s, m - y0 * s);
+  camT = { x, y, s };
+}
+function zoomAt(mx, my, factor) {
+  fitMode(false);
+  const s = clamp(camT.s * factor, MIN_ZOOM * 0.7, MAX_ZOOM);
+  camT = { x: mx - (mx - camT.x) * (s / camT.s), y: my - (my - camT.y) * (s / camT.s), s };
+}
+function jumpTo(id) {
+  const n = N[id]; if (!n) return;
+  fitMode(false);
+  const s = Math.max(camT.s, 0.95);
+  camT = { s, x: flow.clientWidth * 0.4 - (n.tgt.x + n.el.offsetWidth / 2) * s, y: flow.clientHeight * 0.45 - (n.tgt.y + n.el.offsetHeight / 2) * s };
+}
+flow.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const r = flow.getBoundingClientRect();
+  zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0018)));
+}, { passive: false });
+const pointers = new Map(); let pinch = null;
+flow.addEventListener("pointerdown", (e) => {
+  if (e.target.closest(".node, .hud, .drawer")) return;
+  flow.setPointerCapture(e.pointerId); pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  flow.classList.add("dragging"); fitMode(false);
+  if (pointers.size === 2) { const [a, b] = [...pointers.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) }; }
+});
+flow.addEventListener("pointermove", (e) => {
+  const prev = pointers.get(e.pointerId); if (!prev) return;
+  const now = { x: e.clientX, y: e.clientY }; pointers.set(e.pointerId, now);
+  if (pointers.size === 1) {
+    const dx = now.x - prev.x, dy = now.y - prev.y;
+    camT.x += dx; camT.y += dy; cam.x += dx; cam.y += dy;   // ドラッグは遅れなく動かす
+  } else if (pointers.size === 2 && pinch) {
+    const [a, b] = [...pointers.values()], d = Math.hypot(a.x - b.x, a.y - b.y), r = flow.getBoundingClientRect();
+    zoomAt((a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top, d / pinch.d); pinch.d = d;
+  }
+});
+const endPointer = (e) => { pointers.delete(e.pointerId); if (pointers.size < 2) pinch = null; if (!pointers.size) flow.classList.remove("dragging"); };
+flow.addEventListener("pointerup", endPointer); flow.addEventListener("pointercancel", endPointer);
+$("zoomIn").addEventListener("click", () => zoomAt(flow.clientWidth / 2, flow.clientHeight / 2, 1.3));
+$("zoomOut").addEventListener("click", () => zoomAt(flow.clientWidth / 2, flow.clientHeight / 2, 1 / 1.3));
+$("zoomFit").addEventListener("click", () => fitMode(true));
+
+// 毎フレーム: ノードを目標の位置へ近づけ、生まれたばかりのノードは枝を伸ばしてから膨らませ、線とカメラを動かす
 function animate(dt) {
   if (!N) return;
+  const t = performance.now();
   const k = instant || reduce ? 1 : 1 - Math.pow(0.0008, dt);
   for (const id of order) {
     const n = N[id];
     n.cur.x += (n.tgt.x - n.cur.x) * k; n.cur.y += (n.tgt.y - n.cur.y) * k;
-    n.el.style.transform = `translate(${n.cur.x.toFixed(1)}px, ${n.cur.y.toFixed(1)}px)`;
+    const age = (t - n.born) / 1000;
+    const g = n.parent ? clamp((age - STEM * 0.7) / RIPEN) : clamp(age / RIPEN);
+    const scale = g >= 1 ? 1 : 0.04 + 0.96 * easeBack(g);
+    n.el.style.transform = `translate(${n.cur.x.toFixed(1)}px, ${n.cur.y.toFixed(1)}px) scale(${scale.toFixed(3)})`;
+    n.el.style.opacity = n.hidden ? 0 : clamp(g * 2.5).toFixed(2);
   }
-  let d = ""; const live = [], rep = [];
+  let d = ""; const live = [], growing = [], buds = [], rep = [];
   const anchorY = (n) => n.cur.y + Math.min(22, n.el.offsetHeight / 2);
-  const curve = (x1, y1, x2, y2) => { const mx = x1 + (x2 - x1) / 2; return `M${x1.toFixed(1)},${y1.toFixed(1)} C${mx.toFixed(1)},${y1.toFixed(1)} ${mx.toFixed(1)},${y2.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`; };
+  const fmt = (p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`;
   for (const id of order) {
     const n = N[id]; if (!n.parent || n.hidden) continue;
     const p = N[n.parent];
-    const path = curve(p.cur.x + p.el.offsetWidth, anchorY(p), n.cur.x, anchorY(n));
-    if (n.el.classList.contains("running") || n.el.classList.contains("llm")) live.push(path); else d += path;
+    const p0 = { x: p.cur.x + p.el.offsetWidth, y: anchorY(p) }, p3 = { x: n.cur.x, y: anchorY(n) };
+    const mx = p0.x + (p3.x - p0.x) / 2;
+    const age = (t - n.born) / 1000, e = clamp(age / STEM);
+    const [a, b, c, q] = e >= 1 ? [p0, { x: mx, y: p0.y }, { x: mx, y: p3.y }, p3] : bezierTo(p0, { x: mx, y: p0.y }, { x: mx, y: p3.y }, p3, easeOut(e));
+    const path = `M${fmt(a)} C${fmt(b)} ${fmt(c)} ${fmt(q)}`;
+    if (e < 1 || age < STEM + RIPEN * 0.5) { growing.push(path); if (e < 1) buds.push(q); }
+    else if (n.el.classList.contains("running") || n.el.classList.contains("llm")) live.push(path);
+    else d += path;
     for (const other of n.extra) {   // 転載: ほぼ同じ文章のページどうしを点線で結ぶ
       const o = N[other]; if (!o || o.hidden) continue;
-      rep.push(curve(n.cur.x + n.el.offsetWidth, anchorY(n) + 8, o.cur.x + o.el.offsetWidth, anchorY(o) + 8));
+      const s0 = { x: n.cur.x + n.el.offsetWidth, y: anchorY(n) + 8 }, s3 = { x: o.cur.x + o.el.offsetWidth, y: anchorY(o) + 8 };
+      rep.push(`M${fmt(s0)} C${fmt({ x: s0.x + 60, y: s0.y })} ${fmt({ x: s3.x + 60, y: s3.y })} ${fmt(s3)}`);
     }
   }
-  svg.innerHTML = `<path d="${d}"/>` + live.map((p) => `<path class="live" d="${p}"/>`).join("") + rep.map((p) => `<path class="rep" d="${p}"/>`).join("");
-  const target = follow ? aim : jump;
-  if (target && N[target]) {
-    const n = N[target];
-    const tx = Math.max(0, n.cur.x - flow.clientWidth * 0.42), ty = Math.max(0, n.cur.y - flow.clientHeight * 0.4);
-    const f = instant || reduce ? 1 : Math.min(1, dt * 4);
-    flow.scrollLeft += (tx - flow.scrollLeft) * f; flow.scrollTop += (ty - flow.scrollTop) * f;
-    if (!follow && Math.abs(tx - flow.scrollLeft) < 2 && Math.abs(ty - flow.scrollTop) < 2) jump = null;
-  }
+  svg.innerHTML = `<path d="${d}"/>` + live.map((p) => `<path class="live" d="${p}"/>`).join("")
+    + growing.map((p) => `<path class="grow" d="${p}"/>`).join("") + buds.map((q) => `<circle cx="${q.x.toFixed(1)}" cy="${q.y.toFixed(1)}" r="3"/>`).join("")
+    + rep.map((p) => `<path class="rep" d="${p}"/>`).join("");
+  if (auto) fitTarget();
+  const kc = instant || reduce ? 1 : 1 - Math.pow(0.02, dt);
+  cam.x += (camT.x - cam.x) * kc; cam.y += (camT.y - cam.y) * kc; cam.s += (camT.s - cam.s) * kc;
+  canvas.style.transform = `translate(${cam.x.toFixed(1)}px, ${cam.y.toFixed(1)}px) scale(${cam.s.toFixed(4)})`;
 }
-["wheel", "touchstart", "pointerdown"].forEach((ev) => flow.addEventListener(ev, (e) => {
-  if (e.target.closest(".node, .backto")) return;
-  follow = false; $("backTo").hidden = false;
-}, { passive: true }));
-$("backTo").addEventListener("click", () => { follow = true; $("backTo").hidden = true; aim = order[order.length - 1]; });
 
-// ---- 上の帯・チャット・網羅表・時間の帯 ----
-function now(text, busy = true) {
-  $("nowText").textContent = text; $("pulse").classList.toggle("idle", !busy);
-  const txt = statusEl && statusEl.querySelector(".txt"); if (txt) txt.textContent = text;
-}
+// ---- チャット ----
+function now(text) { const txt = statusEl && statusEl.querySelector(".txt"); if (txt) txt.textContent = text; }
 function chatUser(text) { emptyChat.hidden = true; const d = document.createElement("div"); d.className = "u"; d.textContent = text; $("chat").appendChild(d); scrollChat(); }
 function chatAgent(html) {
   emptyChat.hidden = true;
@@ -173,47 +238,50 @@ function scrollChat() { $("chat").scrollTop = $("chat").scrollHeight; }
 function statusBubble() {
   if (!statusEl) statusEl = chatAgent(`<div class="status"><span class="dots"><i></i><i></i><i></i></span><span class="txt">調べています</span></div>`);
 }
-function buildBoard(aspects) {
-  $("cols").innerHTML = aspects.map((a, i) => `<div class="col" id="col${i}"><div class="h"><span>${esc(a)}</span><span class="mono" id="cn${i}">0</span></div>
-    <div class="s2" id="cs${i}">未発見</div><div class="chips" id="cc${i}"></div></div>`).join("");
-  cov = {}; aspects.forEach((a, i) => (cov[a] = i));
+
+// ---- 網羅表のノード ----
+const aspectId = (name) => "a:" + name;
+function buildCoverage(e) {
+  add("cov", "req", 1, card("網羅表", `観点 ${e.aspects.length} つ`, `${e.subject_type} · ${e.origin}が作成`) + toggleBtn,
+    { title: "網羅表", kv: [["対象の種類", esc(e.subject_type)], ["観点を作ったもの", esc(e.origin)]],
+      note: "観点ごとに、確かめた事実の数と状態（未発見 · 出典不足 · 確認済み）をプログラムが集計する。" }, "done", true);
+  e.aspects.forEach((a) => add(aspectId(a), "cov", 2,
+    `<div class="k"><span>観点</span><span class="mono cnt">0</span></div><div class="t">${esc(a)}</div><div class="s">未発見</div><div class="facts"></div>`,
+    { title: `観点: ${a}`, kv: [["状態", "未発見"]], facts: [] }, "aspect"));
 }
-function flyFact(nodeId, f, t, delay) {
-  const i = cov[f.aspect]; if (i === undefined) return;
-  const drop = () => {
-    const sq = document.createElement("i"); if (t !== 1) sq.className = "t2"; sq.title = f.text; $("cc" + i)?.appendChild(sq);
-    const n = $("cn" + i); if (n) n.textContent = $("cc" + i).children.length;   // 状態（確認済みなど）は coverage のイベントで決まる
+function flyFact(pageId, f, t, delay) {
+  const target = N[aspectId(f.aspect)];
+  const land = () => {
+    if (!target) return;
+    const sq = document.createElement("i"); if (t !== 1) sq.className = "t2"; sq.title = f.text;
+    target.el.querySelector(".facts").appendChild(sq);
+    target.el.querySelector(".cnt").textContent = target.el.querySelectorAll(".facts i").length;
+    // 状態（確認済みなど）は、ページを読み終えたときにプログラムが集計する（coverage のイベント）
+    if (!target.el.classList.contains("ok") && !target.el.classList.contains("weak")) setSub(target.id, "集計を待っている");
+    info[target.id].facts.push(f);
+    layout();
   };
-  if (instant || reduce || !N[nodeId] || N[nodeId].hidden) { drop(); return; }
+  const from = N[pageId];
+  if (instant || reduce || !from || !target || from.hidden || target.hidden) { land(); return; }
   setTimeout(() => {
-    const from = N[nodeId].el.getBoundingClientRect(), to = $("col" + i).getBoundingClientRect();
     const chip = document.createElement("div"); chip.className = "fly"; chip.textContent = f.text.length > 13 ? f.text.slice(0, 13) + "…" : f.text;
-    chip.style.left = from.left + 12 + "px"; chip.style.top = from.top + 10 + "px"; document.body.appendChild(chip);
-    requestAnimationFrame(() => { chip.style.transform = `translate(${to.left - from.left}px, ${to.top - from.top + 26}px) scale(.6)`; chip.style.opacity = "0"; });
-    setTimeout(() => { chip.remove(); drop(); }, 900);
+    chip.style.transform = `translate(${from.cur.x + 14}px, ${from.cur.y + 10}px)`; canvas.appendChild(chip);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      chip.style.transform = `translate(${target.cur.x + 14}px, ${target.cur.y + 30}px) scale(.55)`; chip.style.opacity = "0";
+    }));
+    setTimeout(() => { chip.remove(); land(); }, 900);
   }, delay);
 }
 function coverage(rows) {
   rows.forEach((r) => {
-    const i = cov[r.aspect]; if (i === undefined) return;
-    $("cn" + i).textContent = r.facts;
-    $("col" + i).className = "col " + (r.status === "確認済み" ? "ok" : r.status === "出典不足" ? "weak" : "");
-    $("cs" + i).textContent = r.status === "確認済み" ? "✓ 確認済み" : r.status + (r.independent > 1 ? `（${r.independent} サイト）` : "");
+    const id = aspectId(r.aspect), n = N[id]; if (!n) return;
+    n.el.classList.toggle("ok", r.status === "確認済み"); n.el.classList.toggle("weak", r.status === "出典不足");
+    setSub(id, r.status === "確認済み" ? "✓ 確認済み" : r.status + (r.independent > 1 ? `（${r.independent} サイト）` : ""));
+    n.el.querySelector(".cnt").textContent = r.facts;
+    info[id].kv = [["状態", esc(r.status)], ["事実", `${r.facts} 件`], ["独立した出典のサイト", `${r.independent}`],
+      ["最も高い Tier", r.best_tier ? `T${r.best_tier}` : ""]];
   });
-  $("boardSum").textContent = `${rows.filter((r) => r.status === "確認済み").length} / ${rows.length} 観点を確認済み`;
-}
-function span(name, a, row) { const s = document.createElement("div"); s.className = "span" + (row ? " row2" : ""); s.textContent = name; $("gantt").appendChild(s); const o = { s, a, b: null, name }; spans.push(o); return o; }
-function drawGantt(t) {
-  maxT = Math.max(maxT, t);
-  const total = Math.max(maxT, 1);
-  for (const o of spans) {
-    const b = o.b ?? maxT;
-    o.s.style.left = (o.a / total) * 100 + "%"; o.s.style.width = Math.max(0.3, ((b - o.a) / total) * 100) + "%";
-    o.s.textContent = (b - o.a) / total > 0.05 ? o.name : ""; o.s.title = `${o.name}: ${(b - o.a).toFixed(1)} 秒`;
-  }
-  $("cursor").style.left = "100%";
-  $("timeTxt").textContent = Math.round(maxT); $("timeBar").style.width = Math.min(100, (maxT / LIMIT) * 100) + "%";
-  $("ganttTotal").textContent = `${Math.round(maxT)} 秒`;
+  if (N.cov) setSub("cov", `${rows.filter((r) => r.status === "確認済み").length} / ${rows.length} 観点を確認済み`);
 }
 
 // ---- 詳細 ----
@@ -237,11 +305,7 @@ $("dClose").addEventListener("click", () => { $("drawer").classList.remove("open
 const link = (u) => `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer" class="mono">${esc(u)}</a>`;
 
 // ---- イベント → 画面 ----
-const stepStart = {};
-function handle(e) {
-  drawGantt(e.t || 0);
-  const H = HANDLERS[e.type]; if (H) H(e);
-}
+function handle(e) { const H = HANDLERS[e.type]; if (H) H(e); }
 const HANDLERS = {
   "run.start": (e) => {
     chatUser(e.request); statusBubble();
@@ -250,28 +314,24 @@ const HANDLERS = {
     now("調査を始めた");
   },
   "step.start": (e) => {
-    stepStart[e.step] = e.t;
     if (e.node === "decide") {
       rounds++; const id = "d" + e.step; round = id;
       add(id, "req", 1, `<div class="row"><span class="num">判断 ${rounds}</span><span class="choice">LLM が考えている</span><span class="st"></span></div>`,
         { title: `判断 ${rounds}` }, "round llm");
-      setState(id, "llm"); span("判断", e.t, 0); now(`判断 ${rounds} · 次に何をするかを LLM が考えている`);
+      now(`判断 ${rounds} · 次に何をするかを LLM が考えている`);
       return;
     }
     if (e.node === "check_feasibility") {
       add("w" + e.step, "req", 1, `<div class="row"><span class="num">判定</span><span class="choice">調べられるか</span><span class="st"></span></div>`,
-        { title: "公開情報で調べられるか" }, "round llm");
-      span("判定", e.t, 0); now("依頼が公開情報で調べられるかを、LLM が判定している");
+        { title: "公開情報で調べられるか" }, "round llm feas");
+      now("依頼が公開情報で調べられるかを、LLM が判定している");
       return;
     }
     const id = "w" + e.step;
     if (N[id]) { setState(id, "running"); return; }   // 聞き返しの答えで再開した
     work = id;
-    add(id, round || "req", 2, card(WORK[e.node] || e.node, WORK[e.node] || e.node, "始めた") + `<button type="button" class="toggle" hidden>畳む ▾</button>`,
+    add(id, round || "req", 2, card(WORK[e.node] || e.node, WORK[e.node] || e.node, "始めた") + toggleBtn,
       { title: WORK[e.node] || e.node }, e.node === "respond" || e.node === "check_conflicts" ? "llm" : "running");
-    N[id].el.querySelector(".toggle").addEventListener("click", () => collapse(id, !N[id].collapsed));
-    order.filter((x) => N[x].depth === 2 && x !== id && N[x].kids.length).forEach((x) => collapse(x, true));   // 前の巡回の作業は畳む
-    N[id].span = span(WORK[e.node] || e.node, e.t, 1);
     if (e.node === "respond") now("確かめた事実と出典番号から、LLM が報告を書いている");
     if (e.node === "check_conflicts") now("観点ごとに、別々のサイトの事実が食い違っていないか確かめている");
   },
@@ -279,13 +339,10 @@ const HANDLERS = {
     const id = e.node === "decide" ? "d" + e.step : "w" + e.step;
     if (e.error) { setState(id, "failed"); setSub(id, e.error); }
     else if (!N[id]?.el.classList.contains("failed")) setState(id, "done");
-    const sp = spans.filter((o) => o.b === null && Math.abs(o.a - (stepStart[e.step] ?? o.a)) < 0.01).pop();
-    if (sp) sp.b = e.t;
     if (info[id]) info[id].kv = [...(info[id].kv || []), ["所要時間", `${e.seconds} 秒${e.llm_wait ? `（うち LLM サーバーの待ち ${e.llm_wait} 秒）` : ""}`]];
-    const tg = N[id]?.el.querySelector(".toggle"); if (tg && N[id].kids.length) tg.hidden = false;
   },
   "feasibility": (e) => {
-    const id = Object.keys(N).find((k) => N[k].el.querySelector(".num")?.textContent === "判定");
+    const id = order.find((k) => N[k].el.classList.contains("feas"));
     if (!id) return;
     N[id].el.querySelector(".choice").textContent = { yes: "調べられる", partial: "一部は調べられない", no: "調べられない", unsure: "調べてみる" }[e.verdict] || e.verdict;
     info[id].kv = [["判定", esc(e.verdict)], ["理由", esc(e.reason)], ["調べられない部分", esc((e.infeasible_parts || []).join("、"))]];
@@ -330,22 +387,22 @@ const HANDLERS = {
       add(w + "-res", w, 3, card("検索結果", `${e.results.length} 件 · 対象を含む ${rel} 件`, "Tier の高い順に読む") + `<div class="icons">${hosts.map(icon).join("")}</div>`,
         { title: `検索結果（${e.results.length} 件）`, list: e.results.map((r) => `${r.relevant ? "" : "（対象の名前なし）"}${esc(r.title)} — ${link(r.url)} · T${r.tier}`) }, "done");
     }
-    if (e.summary_url && !N["sum"]) {
+    if (e.summary_url && !N.sum) {
       add("sum", w, 3, card("概要", host(e.summary_url), "対象の概要（報告の冒頭に使う）", tier(2), icon(host(e.summary_url))),
         { title: "概要", kv: [["URL", link(e.summary_url)]] }, "done");
       N.sum.url = e.summary_url;
     }
   },
   "aspects": (e) => {
-    buildBoard(e.aspects);
-    if (N[work]) { setSub(work, `${e.subject_type} · 観点 ${e.aspects.length} つ（${e.origin}が作成）`); info[work].kv = [["対象の種類", esc(e.subject_type)], ["観点", esc(e.aspects.join("、"))], ["観点を作ったもの", esc(e.origin)]]; }
+    buildCoverage(e);
+    if (N[work]) { setSub(work, `${e.subject_type} · 観点 ${e.aspects.length} つ`); info[work].kv = [["対象の種類", esc(e.subject_type)], ["観点", esc(e.aspects.join("、"))]]; }
     now("対象の種類を判定し、網羅表の観点を作った");
   },
   "databases": (e) => {
     if (!N[work]) return;
     const id = work + "-db"; dbNode[work] = id;
     add(id, work, 3, card("分野別データベース · L3", e.used.join(" → ") || "この種類に使えるものがない", `記録 ${e.records.length} 件（${e.seconds} 秒）${e.failures.length ? " · 失敗あり" : ""}`,
-      "", e.records[0] ? icon(host(e.records[0].url)) : ""),
+      "", e.records[0] ? icon(host(e.records[0].url)) : "") + toggleBtn,
       { title: "分野別データベース（L3）", kv: [["引いたもの", esc(e.used.join("、"))], ["使えなかったもの", esc(e.failures.join("、"))]],
         list: e.records.map((r) => `${esc(r.database)}: ${link(r.url)}`) }, e.failures.length && !e.records.length ? "failed" : "done");
   },
@@ -368,7 +425,6 @@ const HANDLERS = {
     const moved = e.tier !== e.base_tier ? ` · T${e.base_tier}→T${e.tier}` : "";
     setSub(id, `事実 ${e.facts.length} 件 · 捨てた ${e.dropped.length} 件${moved}`);
     if (moved) N[id].el.querySelector(".tier").outerHTML = tier(e.tier);
-    pagesOk++; $("pageTxt").textContent = pagesOk; $("pageBar").style.width = Math.min(100, (pagesOk / 12) * 100) + "%";
     Object.assign(info[id], { facts: e.facts, dropped: e.dropped });
     info[id].kv.push(["Tier の調整", e.tier_reason ? esc(`T${e.base_tier}→T${e.tier}（${e.tier_reason}）`) : ""],
       ["見分ける特徴", esc((e.features || []).join("、"))], ["別の呼び方", esc((e.new_terms || []).join("、"))],
@@ -376,8 +432,8 @@ const HANDLERS = {
     e.facts.forEach((f, i) => flyFact(id, f, e.tier, i * 160));
   },
   "page.reprint": (e) => {
-    const id = Object.keys(N).find((k) => k.startsWith("p:") && sameUrl(k.slice(2), e.url));
-    const orig = Object.keys(N).find((k) => k.startsWith("p:") && sameUrl(k.slice(2), e.original));
+    const id = order.find((k) => k.startsWith("p:") && sameUrl(k.slice(2), e.url));
+    const orig = order.find((k) => k.startsWith("p:") && sameUrl(k.slice(2), e.original));
     if (!id) return;
     setSub(id, `ほぼ同じ文章: ${host(e.original)}（独立した出典に数えない）`);
     if (orig) N[id].extra.push(orig);
@@ -425,7 +481,7 @@ const HANDLERS = {
   },
   "image.final": (e) => {
     (e.withheld || []).forEach((w) => { const id = "i:" + w.src; if (!N[id]) return; N[id].el.classList.add("dropped"); setSub(id, "確認済み · 許可が必要なので載せない"); info[id].kv.push(["報告", esc(w.why)]); });
-    if (N[work]) setSub(work, `確かめた ${order.filter((k) => k.startsWith("i:")).length} · 載せる ${e.shown.length}`);
+    if (N[work]) setSub(work, `確かめた ${order.filter((k) => k.startsWith("i:") && N[k].parent === work).length} · 載せる ${e.shown.length}`);
   },
   "conflicts": (e) => {
     if (!N[work]) return;
@@ -437,22 +493,21 @@ const HANDLERS = {
     if (N[work]) { setState(work, "waiting"); setTitle(work, "利用者の答えを待っている"); setSub(work, e.question.split("\n")[0]); }
     if (questions.has(e.question)) return;
     questions.add(e.question); showQuestion(e.question);
-    now("利用者の答えを待っている", false);
   },
-  "answer": (e) => { if (!questions.has("a:" + e.answer + e.question)) { questions.add("a:" + e.answer + e.question); chatUser(e.answer); } setComposer(false); statusBubble(); },
-  "run.waiting": (e) => { if (!questions.has(e.question)) { questions.add(e.question); showQuestion(e.question); } setComposer(true); now("利用者の答えを待っている", false); },
+  "answer": (e) => { const key = "a:" + e.answer + e.question; if (!questions.has(key)) { questions.add(key); chatUser(e.answer); } setComposer(false); statusBubble(); },
+  "run.waiting": (e) => { if (!questions.has(e.question)) { questions.add(e.question); showQuestion(e.question); } setComposer(true); },
   "report": (e) => {
     sources = e.sources || [];
     if (N[work]) { setSub(work, `出典 ${sources.length} 件`); info[work].list = sources.map((s, i) => `[${i + 1}] ${esc(s.title)} — ${link(s.url)} · T${s.tier}`); }
   },
   "run.end": (e) => {
-    setState("req", "done"); now(`完了 · ${Math.round(e.t)} 秒`, false);
+    setState("req", "done");
     const body = renderReport(e.answer || "");
-    if (statusEl) { statusEl.querySelector(".body").innerHTML = body; } else chatAgent(body);
-    wireCites(statusEl || $("chat").lastElementChild); statusEl = null; setComposer(false);
+    const el = statusEl || chatAgent("");
+    el.querySelector(".body").innerHTML = body; wireCites(el); statusEl = null; setComposer(false);
     loadRuns();
   },
-  "run.error": (e) => { now("エラーで止まった", false); chatAgent(`<p>エラーで調査を続けられませんでした: ${esc(e.error)}</p>`); statusEl = null; },
+  "run.error": (e) => { chatAgent(`<p>エラーで調査を続けられませんでした: ${esc(e.error)}</p>`); statusEl = null; },
 };
 function sameUrl(a, b) { const n = (u) => u.replace(/[?#].*$/, "").replace(/\/$/, ""); return n(a) === n(b); }
 function pageNode(e, state) {
@@ -462,8 +517,7 @@ function pageNode(e, state) {
   if (!N[parent]) return;
   add(id, parent, N[parent].depth + 1, card(e.db ? "記録 · " + e.db : "ページ", e.host, state === "planned" ? "読む順番を待っている" : "取得している", tier(e.tier), icon(e.host)) +
     `<div class="steps"><span></span><span></span><span></span></div>`,
-    { title: e.host, kv: [["URL", link(e.url)], ["Tier", `${e.tier}`]],
-      note: "本文に一字一句ある引用の事実だけを残す（引用の照合）。" }, state);
+    { title: e.host, kv: [["URL", link(e.url)], ["Tier", `${e.tier}`]], note: "本文に一字一句ある引用の事実だけを残す（引用の照合）。" }, state);
 }
 function showQuestion(q) {
   const lines = q.split("\n"), opts = lines.filter((l) => /^\d+\.\s/.test(l));
@@ -493,9 +547,9 @@ function renderReport(md) {
 function wireCites(el) {
   el?.querySelectorAll(".cite").forEach((b) => b.addEventListener("click", () => {
     const s = sources[b.dataset.src - 1]; if (!s) return;
-    const id = Object.keys(N).find((k) => k.startsWith("p:") && sameUrl(k.slice(2), s.url)) || (N.sum && sameUrl(N.sum.url, s.url) ? "sum" : null);
+    const id = order.find((k) => k.startsWith("p:") && sameUrl(k.slice(2), s.url)) || (N.sum && sameUrl(N.sum.url, s.url) ? "sum" : null);
     if (!id) return;
-    reveal(id); follow = false; $("backTo").hidden = false; jump = id; select(id);
+    reveal(id); jumpTo(id); select(id);
   }));
 }
 
@@ -508,7 +562,7 @@ function setComposer(answerMode) {
 }
 async function sendAnswer(text) {
   if (!waitingRun || !text) return;
-  try { await api(`/api/runs/${waitingRun}/answer`, { answer: text }); setComposer(false); now("答えを受け取った。調査を続けている"); }
+  try { await api(`/api/runs/${waitingRun}/answer`, { answer: text }); setComposer(false); }
   catch (err) { chatAgent(`<p>答えを送れませんでした: ${esc(err.message)}</p>`); }
 }
 $("composer").addEventListener("submit", async (ev) => {
@@ -519,24 +573,23 @@ $("composer").addEventListener("submit", async (ev) => {
   try { const r = await api("/api/runs", { request: text }); open(r.id, true); loadRuns(); }
   catch (err) { chatAgent(`<p>調査を始められませんでした: ${esc(err.message)}</p>`); }
 });
-$("newBtn").addEventListener("click", () => { closeSource(); reset(); runId = null; $("chat").innerHTML = ""; $("chat").appendChild(emptyChat); emptyChat.hidden = false;
-  $("replayCtl").hidden = true; setComposer(false); highlightRun(); $("input").focus(); });
-
-function closeSource() { if (source) { source.close(); source = null; } queue = []; }
+$("newBtn").addEventListener("click", () => {
+  closeSource(); reset(); runId = null; $("chat").innerHTML = ""; $("chat").appendChild(emptyChat); emptyChat.hidden = false;
+  $("replayCtl").hidden = true; setComposer(false); highlightRun(); $("input").focus();
+});
 
 // 再生: 終わった調査は、記録の時刻どおりに（速さを掛けて）流す。動いている調査は届いたらすぐ描く
 let queue = [], clock = 0, speed = 8, playing = true, replay = false, lastTs = null, stopAt = Infinity;
+function closeSource() { if (source) { source.close(); source = null; } queue = []; }
 function open(id, live) {
   closeSource(); reset(); runId = id; $("chat").innerHTML = "";
   replay = !live; clock = 0; playing = true; $("playBtn").textContent = "一時停止";
   $("replayCtl").hidden = live; setComposer(false); highlightRun();
   source = new EventSource(withKey(`/api/runs/${encodeURIComponent(id)}/events`));
   source.onmessage = (m) => { const e = JSON.parse(m.data); if (replay) queue.push(e); else handle(e); };
-  source.addEventListener("end", () => closeSource0());
-  source.addEventListener("missing", () => { closeSource0(); chatAgent("<p>この調査の記録が見つかりません。</p>"); });
-  source.onerror = () => { /* EventSource が自動で受け直す（Last-Event-ID） */ };
+  source.addEventListener("end", () => { if (source) { source.close(); source = null; } });
+  source.addEventListener("missing", () => { if (source) { source.close(); source = null; } chatAgent("<p>この調査の記録が見つかりません。</p>"); });
 }
-function closeSource0() { if (source) { source.close(); source = null; } }
 $("playBtn").addEventListener("click", () => { playing = !playing; $("playBtn").textContent = playing ? "一時停止" : "再生"; });
 document.querySelectorAll("[data-speed]").forEach((b) => b.addEventListener("click", () => {
   speed = +b.dataset.speed; document.querySelectorAll("[data-speed]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
@@ -548,8 +601,7 @@ function frame(ts) {
     if (speed === 0) { instant = true; while (queue.length && queue[0].t <= stopAt) handle(queue.shift()); layout(); instant = false; }
     else {
       clock += dt * speed;
-      // 利用者の答えを待った時間などの長い空白は飛ばす
-      if (queue[0].t - clock > 20) clock = queue[0].t;
+      if (queue[0].t - clock > 20) clock = queue[0].t;   // 利用者の答えを待った時間などの長い空白は飛ばす
       while (queue.length && queue[0].t <= clock) handle(queue.shift());
     }
   }

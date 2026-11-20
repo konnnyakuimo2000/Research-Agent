@@ -20,7 +20,7 @@
     <div class="chat" id="chat">
       <div class="empty-chat" id="emptyChat">
         <h1>何を調べますか？</h1>
-        <p>依頼を送ると、エージェントが調べている様子が右に出ます。左の一覧から、これまでの調査を再生できます。</p>
+        <p>依頼を送ると、エージェントが調べている様子が右に木の形で伸びていきます。左の一覧から、これまでの調査を再生できます。</p>
       </div>
     </div>
     <form class="composer" id="composer">
@@ -29,36 +29,22 @@
     </form>
   </section>
 
-  <section class="tele" aria-label="テレメトリー">
-    <div class="now" aria-live="polite">
-      <div class="now-text"><span class="pulse idle" id="pulse"></span><span id="nowText">待機中</span></div>
-      <div class="meters">
-        <div class="meter"><span>経過 <b class="mono" id="timeTxt">0</b> 秒</span><div class="track"><i id="timeBar"></i><b style="left:66.6%"></b></div></div>
-        <div class="meter"><span>読んだページ <b class="mono" id="pageTxt">0</b> / 12</span><div class="track"><i id="pageBar"></i></div></div>
-        <div class="meter"><span>LLM 同時実行</span><div class="slots"><span class="slot" id="slot0"></span><span class="slot" id="slot1"></span></div></div>
-      </div>
-      <div class="ctl" id="replayCtl" hidden role="group" aria-label="再生">
-        <button type="button" id="playBtn" class="solid">一時停止</button>
+  <section class="tele" aria-label="作業の流れ">
+    <div class="flow" id="flow">
+      <div class="canvas" id="canvas"><svg class="edges" id="edges"></svg></div>
+      <p class="flow-empty" id="flowEmpty">調査を始めると、ここに作業の流れが木の形で伸びていきます。<br>ホイールやピンチで拡大、ドラッグで移動できます。</p>
+
+      <div class="hud hud-left" id="replayCtl" hidden role="group" aria-label="再生">
+        <button type="button" id="playBtn">一時停止</button>
         <button type="button" data-speed="8" aria-pressed="true">8×</button>
         <button type="button" data-speed="30" aria-pressed="false">30×</button>
         <button type="button" data-speed="0" aria-pressed="false">すぐ</button>
       </div>
-    </div>
-
-    <div class="flow" id="flow">
-      <button class="backto" id="backTo" type="button" hidden>今に戻る</button>
-      <div class="canvas" id="canvas"><svg class="edges" id="edges"></svg></div>
-      <p class="flow-empty" id="flowEmpty">調査を始めると、ここに作業の流れが木の形で伸びていきます。</p>
-    </div>
-
-    <div class="board">
-      <div class="board-h"><span>網羅表 · 観点ごとに確かめた事実（■ Tier 1　■ Tier 2 以下）</span><span class="mono" id="boardSum"></span></div>
-      <div class="cols" id="cols"></div>
-    </div>
-
-    <div class="gantt">
-      <div class="gantt-h"><span>時間の帯 · 上: 判断（LLM）　下: 作業</span><span class="mono" id="ganttTotal"></span></div>
-      <div class="gantt-track" id="gantt"><div class="cursor" id="cursor"></div></div>
+      <div class="hud hud-right" role="group" aria-label="表示の大きさ">
+        <button type="button" id="zoomOut" aria-label="縮小">−</button>
+        <button type="button" id="zoomFit" aria-pressed="true">全体</button>
+        <button type="button" id="zoomIn" aria-label="拡大">＋</button>
+      </div>
     </div>
 
     <aside class="drawer" id="drawer" aria-label="詳細">
