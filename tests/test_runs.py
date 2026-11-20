@@ -1,0 +1,65 @@
+"""テレメトリー画面のための調査の実行（RunManager）。グラフは偽物に差し替える。"""
+
+import time
+from types import SimpleNamespace
+
+from langgraph.types import Command
+
+from my_llm_app.runs import RunManager
+
+
+class FakeGraph:
+    """1 回目は質問で止まり、答えで再開すると報告して終わる。"""
+
+    def __init__(self):
+        self.answered = None
+
+    def stream(self, payload, config, stream_mode):
+        if isinstance(payload, Command):
+            self.answered = payload.resume
+            yield "custom", {"type": "answer", "answer": payload.resume, "wall": time.time()}
+            yield "updates", {"respond": {"answer": "報告"}}
+            return
+        yield "custom", {"type": "step.start", "node": "ask_user", "step": 1, "wall": time.time()}
+        yield "updates", {"__interrupt__": [SimpleNamespace(value={"question": "どれですか？\n1. 水星\n2. 歌手"})]}
+
+    def get_state(self, config):
+        return SimpleNamespace(values={"answer": "水星は太陽系の惑星です。"})
+
+
+def wait_for(cond, timeout=5):
+    end = time.time() + timeout
+    while time.time() < end:
+        if cond():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_run_waits_for_answer_then_finishes_and_is_listed(tmp_path):
+    m = RunManager(FakeGraph(), tmp_path)
+    run = m.start("マーキュリーについて")
+    assert wait_for(lambda: run.status == "waiting")
+    assert run.question.startswith("どれですか")
+    m.answer(run.id, "1")
+    assert wait_for(lambda: run.status == "done")
+    types = [e["type"] for e in run.recorder.events]
+    assert types == ["run.start", "step.start", "run.waiting", "answer", "run.end"]
+    assert run.recorder.events[-1]["answer"] == "水星は太陽系の惑星です。"
+    assert (tmp_path / f"{run.id}.events.jsonl").exists() and (tmp_path / f"{run.id}.json").exists()
+
+    # サーバーを立ち上げ直した後も、記録から一覧と再生ができる
+    fresh = RunManager(FakeGraph(), tmp_path)
+    listed = fresh.listing()
+    assert listed[0]["id"] == run.id and listed[0]["status"] == "done" and listed[0]["request"] == "マーキュリーについて"
+    assert [e["type"] for e in fresh.events(run.id)] == types
+
+
+def test_answer_is_refused_when_not_waiting_and_unsafe_ids_are_ignored(tmp_path):
+    m = RunManager(FakeGraph(), tmp_path)
+    try:
+        m.answer("no-such-run", "1")
+        raise AssertionError("答えを待っていない調査には答えられない")
+    except KeyError:
+        pass
+    assert m.events_on_disk("../etc/passwd") == []

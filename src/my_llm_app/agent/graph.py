@@ -15,8 +15,10 @@ import time
 from collections.abc import Callable
 
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.errors import GraphBubbleUp
 from langgraph.graph import END, START, StateGraph
 
+from my_llm_app.agent import telemetry
 from my_llm_app.agent.nodes import Nodes, route, route_feasibility
 from my_llm_app.agent.state import AgentState
 from my_llm_app.config import Settings, load_settings
@@ -34,10 +36,19 @@ def timed(name: str, fn: Callable[[AgentState], dict], llm: LLM | None = None) -
     def run(state: AgentState) -> dict:
         started = time.perf_counter()
         waited = getattr(llm, "waited", 0.0)
-        out = fn(state)
+        ev = telemetry.emitter()
+        step = len([t for t in state.get("trace", []) if "seconds" in t]) + 1
+        ev("step.start", node=name, step=step, decision=(state.get("decision") or {}).get("action", ""))
+        try:
+            out = fn(state)
+        except Exception as e:
+            if not isinstance(e, GraphBubbleUp):   # 聞き返し（interrupt）は失敗ではない
+                ev("step.end", node=name, step=step, error=f"{type(e).__name__}: {e}")
+            raise
         seconds = round(time.perf_counter() - started, 1)
         # 並列に読むノードでは待ちが重なって数えられるので、ノードの時間を超えないようにする
         wait = round(min(seconds, getattr(llm, "waited", 0.0) - waited), 1)
+        ev("step.end", node=name, step=step, seconds=seconds, llm_wait=max(wait, 0))
         entry = {"node": name, "seconds": seconds} | ({"llm_wait": wait} if wait > 0 else {})
         out = {**out, "trace": out.get("trace", []) + [entry]}
         if wait > 0:

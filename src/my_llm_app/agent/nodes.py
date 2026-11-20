@@ -21,6 +21,7 @@ from my_llm_app.agent import imaging
 from my_llm_app.agent import prompts
 from my_llm_app.agent import query_plan
 from my_llm_app.agent import reprints
+from my_llm_app.agent import telemetry
 from my_llm_app.agent.guard import check_decision, is_ambiguous
 from my_llm_app.agent.names import mentions, same_name
 from my_llm_app.agent.quotes import normalize, quote_in_text
@@ -58,6 +59,7 @@ class Nodes:
             "suggestions": out.get("suggestions", []),
         }
         log.info("feasibility: %s (%s)", feasibility["verdict"], feasibility["reason"])
+        telemetry.emitter()("feasibility", **feasibility)
         return {"feasibility": feasibility, "wants_images": imaging.wants_images(state["request"]),
                 "trace": [{"node": "check_feasibility", "llm": out}]}
 
@@ -69,6 +71,9 @@ class Nodes:
     def decide(self, state: AgentState) -> dict:
         raw = self.llm.chat_json(prompts.DECIDE_SYSTEM, prompts.decide_user(state), prompts.DECIDE_SCHEMA)
         decision = check_decision(state, raw)
+        telemetry.emitter()("decision", llm={k: raw.get(k) for k in ("action", "reason", "query")},
+                            action=decision["action"], query=decision.get("query", ""), guard=decision.get("guard", ""),
+                            aspect=decision.get("aspect", ""), site=decision.get("site", ""), plan=decision.get("plan"))
         log.info("decide: %s (%s)%s", decision["action"], decision.get("reason", ""),
                  f" [guard: {decision['guard']}]" if decision.get("guard") else "")
         return {
@@ -82,6 +87,11 @@ class Nodes:
         query = decision["query"]
         started = time.perf_counter()
         errors: list[str] = []
+        ev = telemetry.emitter()
+        kind = ("site" if decision.get("site") else "aspect" if decision.get("aspect")
+                else "conflict" if decision.get("conflict_topic") else "free")
+        ev("search.start", query=query, kind=kind, aspect=decision.get("aspect", ""), site=decision.get("site", ""))
+        relevant: list = []
 
         # Wikidata は名前の前方一致で引くため、長い検索文ではなく短い名前で引く（横の展開はプログラム）
         names = [n.strip() for n in decision.get("names", []) if n.strip()] or [query.split()[0]]
@@ -261,6 +271,14 @@ class Nodes:
 
         log.info("search: %r names=%s -> wikidata %d, web %d (%.1fs)", query, names, len(entities),
                  len(web.results), time.perf_counter() - started)
+        tstate = {**state, **result}
+        hits = {w.url for w in relevant}
+        ev("search.done", query=query, kind=kind, failed=web_failed, retried=web.retried, unresponsive=web.unresponsive,
+           results=[{**telemetry.page_info(w.url, tstate), "title": w.title, "relevant": w.url in hits}
+                    for w in web.results],
+           candidates=[{"id": c["id"], "label": c["label"], "description": c["description"]} for c in candidates],
+           target=result.get("target"), summary_url=result.get("summary_url", ""),
+           official=result.get("official_hosts", []), variants=sorted(result.get("name_variants", {}))[:8])
         result["trace"] = [{
             "node": "search", "query": query, "names": names, "errors": errors,
             "wikidata": [e.__dict__ for e in entities],
@@ -272,6 +290,7 @@ class Nodes:
     def read_pages(self, state: AgentState) -> dict:
         """ページを 1 つずつ読み、引用付きで事実を抜き出し、引用を本文と照合する（縦の調査）。"""
         extra: dict = {}
+        ev = telemetry.emitter()
         if not state.get("aspects"):
             # 観点は LLM が依頼に合わせて作る（種類のチェックリストがお手本）。
             # 確かめるのはプログラム。使えない出力ならチェックリストに戻す（設計書 6.1）
@@ -284,9 +303,10 @@ class Nodes:
             extra = {"subject_type": subject_type, "aspects": aspects, "aspects_origin": origin,
                      "coverage": cov.build_coverage(aspects, state.get("verified", []), state)}
             log.info("subject_type: %s -> aspects (%s) %s", subject_type, origin, [a["name"] for a in aspects])
+            ev("aspects", subject_type=subject_type, origin=origin, aspects=[a["name"] for a in aspects])
             state = {**state, **extra}
         if state.get("target") and state.get("subject_type") and not state.get("databases_checked"):
-            extra.update(self._lookup_databases(state))
+            extra.update(self._lookup_databases(state, ev))
             state = {**state, **extra}
 
         done = {canonical(p["url"]) for p in state.get("pages_read", [])}
@@ -297,8 +317,11 @@ class Nodes:
                 urls.append(u)
         urls = urls[:PAGES_PER_READ]
         started = time.perf_counter()
+        for u in urls:   # 読む順番が来たページ（2 つずつ並行に読むので、残りは「予定」）
+            ev("page.planned", **telemetry.page_info(u, state),
+               db=state.get("db_records", {}).get(canonical(u), {}).get("database", ""))
         with ThreadPoolExecutor(max_workers=2) as pool:   # LLM 側の同時実行数の上限と合わせる
-            results = list(pool.map(lambda u: self._read_one(state, u), urls))
+            results = list(pool.map(lambda u: self._read_one(state, u, ev), urls))
 
         pages = dict(state.get("pages", {}))
         verified = list(state.get("verified", []))
@@ -348,6 +371,13 @@ class Nodes:
                  sum(r["verified"] for r in reads), time.perf_counter() - started)
         tiers_state = {**state, "page_tiers": page_tiers, "reprints": copies}
         coverage = cov.build_coverage(state["aspects"], verified, tiers_state)
+        for url, original in copies.items():
+            if url not in state.get("reprints", {}):
+                ev("page.reprint", url=url, original=original)
+        if new_links:
+            ev("links.followed", urls=new_links)
+        ev("coverage", rows=[{k: r[k] for k in ("aspect", "facts", "status", "best_tier", "independent")}
+                             for r in coverage])
         gained = len(verified) - len(state.get("verified", []))
         if (others and not state.get("ambiguity_asked") and state.get("assumptions")
                 and not state.get("clarifications")):
@@ -372,7 +402,7 @@ class Nodes:
                        "other_entities": others}],
         }
 
-    def _lookup_databases(self, state: AgentState) -> dict:
+    def _lookup_databases(self, state: AgentState, ev: telemetry.Emitter | None = None) -> dict:
         """L3: 対象の種類に合う分野別データベースを引き、見つかった記録を先に読むページにする（設計書 8.1、6.6）。"""
         name = state["target"]["label"]
         started = time.perf_counter()
@@ -388,6 +418,10 @@ class Nodes:
         log.info("databases: %s -> %d records %s (%.1fs)", state["subject_type"], len(records), failed,
                  time.perf_counter() - started)
         sites = [s for s in databases.sites_for(state["subject_type"]) if s not in state.get("seen_sites", [])]
+        (ev or telemetry.Emitter())("databases", used=used, failures=failed,
+                                    seconds=round(time.perf_counter() - started, 1),
+                                    records=[{"url": r.url, "title": r.title, "database": r.database,
+                                              "images": len(r.images)} for r in records])
         return {
             "databases_checked": True,
             "db_records": db_records,
@@ -402,18 +436,23 @@ class Nodes:
                                            + [f"分野別データベースに問い合わせられなかった: {f}" for f in failed])),
         }
 
-    def _read_one(self, state: AgentState, url: str):
+    def _read_one(self, state: AgentState, url: str, ev: telemetry.Emitter | None = None):
+        ev = ev or telemetry.Emitter()
         record = state.get("db_records", {}).get(canonical(url))
+        ev("page.start", **telemetry.page_info(url, state), db=record["database"] if record else "")
         if record:
             # 分野別データベースの記録は、API の値から作った文章を本文として読む（ページを取りに行かない）
             page = fetch.Page(url, title=record["title"], text=record["text"], ok=True)
         else:
             page = fetch.fetch_page(url)
+        ev("page.fetched", url=url, ok=page.ok, reason=getattr(page, "reason", ""), title=page.title,
+           chars=len(page.text or ""), images=len(getattr(page, "images", []) or []))
         if not page.ok:
             return page, [], [], "", {}
         text = page.text[:MAX_PAGE_CHARS]
         names = [a["name"] for a in state.get("aspects", [])]
         base = page_tier(url, state)
+        ev("page.llm", url=url)
         out = self.llm.chat_json(prompts.EXTRACT_SYSTEM, prompts.extract_user(state, page.title, text, base),
                                  prompts.extract_schema(names))
         facts, dropped = [], []
@@ -427,6 +466,12 @@ class Nodes:
             else:
                 dropped.append(f)
         meta = page_meta(out, text, url, base, from_database=bool(record))
+        ev("page.done", url=url, title=page.title, base_tier=base, tier=meta.get("tier", base),
+           tier_reason=meta.get("tier_reason", ""), other_entity=out.get("other_entity", "").strip(),
+           facts=[{k: f[k] for k in ("text", "aspect", "quote")} for f in facts],
+           dropped=[{"text": f.get("text", ""), "quote": f.get("quote", ""),
+                     "why": f.get("dropped", "引用が本文にない")} for f in dropped],
+           features=[f["text"] for f in meta.get("features", [])], new_terms=meta.get("new_terms", []))
         return page, facts, dropped, out.get("other_entity", "").strip(), meta
 
     @staticmethod
@@ -451,6 +496,9 @@ class Nodes:
                 if len(picked) >= 2 and cov.different_sites(picked):
                     conflicts.append({"aspect": aspect, "topic": c.get("topic", ""), "facts": picked})
         conflicts = cov.merge_conflicts(conflicts)
+        telemetry.emitter()("conflicts", aspects=list(groups), conflicts=[
+            {"aspect": c["aspect"], "topic": c["topic"],
+             "facts": [{"text": f["text"], "source": f["source"]} for f in c["facts"]]} for c in conflicts])
         log.info("check_conflicts: %d aspects -> %d conflicts (%.1fs)", len(groups), len(conflicts),
                  time.perf_counter() - started)
         return {"conflicts": conflicts, "conflicts_checked_at": len(state.get("verified", [])),
@@ -494,6 +542,8 @@ class Nodes:
             for im in state.get("page_images", [])])
 
         ranked = imaging.rank(candidates, [name])
+        ev = telemetry.emitter()
+        ev("image.candidates", counts=counts, ranked=len(ranked), fetching=min(len(ranked), MAX_IMAGE_FETCHES))
         log_rows: list[dict] = []
         accepted: list[dict] = []
         # 先に画像を取りに行き（プログラム。速い）、使える大きさのものだけを LLM で確かめる（遅い）。
@@ -501,6 +551,8 @@ class Nodes:
         usable: list[tuple[images.ImageCandidate, images.FetchedImage]] = []
         with ThreadPoolExecutor(max_workers=4) as pool:
             for c, fetched in zip(ranked[:MAX_IMAGE_FETCHES], pool.map(lambda c: images.fetch_image(c.src), ranked[:MAX_IMAGE_FETCHES])):
+                ev("image.fetched", **image_event(c, state), ok=fetched.ok, reason=fetched.reason,
+                   size=f"{fetched.width}×{fetched.height}" if fetched.width else "")
                 if fetched.ok:
                     usable.append((c, fetched))
                 else:
@@ -508,7 +560,7 @@ class Nodes:
         with ThreadPoolExecutor(max_workers=2) as pool:
             for start in range(0, min(len(usable), MAX_IMAGE_CHECKS), 2):
                 batch = usable[start:min(start + 2, MAX_IMAGE_CHECKS)]
-                for row in pool.map(lambda cf: self._check_image(state, *cf), batch):
+                for row in pool.map(lambda cf: self._check_image(state, *cf, ev), batch):
                     log_rows.append(row)
                     if row["level"] != imaging.REJECTED:
                         accepted.append(row)
@@ -521,8 +573,14 @@ class Nodes:
             gather("L5-周辺", lambda: images.related_images(target["id"]))
             for c in [c for c in candidates if c.stage == "L5-周辺"]:
                 fetched = images.fetch_image(c.src)
+                ev("image.fetched", **image_event(c, state), ok=fetched.ok, reason=fetched.reason,
+                   size=f"{fetched.width}×{fetched.height}" if fetched.width else "",
+                   related=c.extra.get("related", ""), relation=c.extra.get("relation", ""))
                 row = {**self._image_row(c, state), "related": c.extra.get("related", ""),
                        "relation": c.extra.get("relation", "")}
+                if fetched.ok:
+                    ev("image.done", src=c.src, level=imaging.REFERENCE, reason=f"関係のある「{row['related']}」の画像",
+                       description=row["related"], license=row["license"])
                 if fetched.ok:
                     accepted.append({**row, "level": imaging.REFERENCE, "description": c.extra.get("related", ""),
                                      "size": f"{fetched.width}×{fetched.height}"})
@@ -536,9 +594,12 @@ class Nodes:
         accepted.sort(key=lambda r: order[r["level"]])
         log.info("find_images: %d candidates %s -> checked %d, accepted %d (%.1fs)", len(ranked), counts,
                  len(log_rows), len(accepted), time.perf_counter() - started)
+        shown = imaging.choose_shown(accepted)
+        ev("image.final", shown=[r["src"] for r in shown],
+           withheld=[{"src": r["src"], "why": r["withheld"]} for r in accepted if r.get("withheld")])
         return {
             "images_checked": True,
-            "images": imaging.choose_shown(accepted),
+            "images": shown,
             "image_log": log_rows,
             "image_counts": counts,
             "failures": list(dict.fromkeys(state.get("failures", []) + failures)),
@@ -551,8 +612,11 @@ class Nodes:
         return {"src": c.src, "page_url": c.page_url, "stage": c.stage, "title": c.title,
                 "license": c.license, "tier": page_tier(c.page_url, state), "also_on": c.extra.get("also_on", [])}
 
-    def _check_image(self, state: AgentState, c: images.ImageCandidate, fetched: images.FetchedImage) -> dict:
+    def _check_image(self, state: AgentState, c: images.ImageCandidate, fetched: images.FetchedImage,
+                     ev: telemetry.Emitter | None = None) -> dict:
+        ev = ev or telemetry.Emitter()
         row = self._image_row(c, state)
+        ev("image.llm", src=c.src)
         if not row["license"] and images.is_wikimedia_file(c.src):
             try:
                 row["license"] = images.commons_license(c.src)   # Wikimedia の画像なら利用条件を取りに行く
@@ -566,6 +630,9 @@ class Nodes:
         # 型番（数字を含む語）のある名前だけに使う。駅名の看板などで別の物を対象と取り違えないように
         text_match = bool(re.search(r"\d", label) and len(visible) >= 2 and mentions(visible, [label]))
         level = imaging.judge(row["tier"], True, out.get("context", "low"), out.get("visual", "unknown"), text_match)
+        ev("image.done", src=c.src, level=level, reason=out.get("reason", ""), description=out.get("description", ""),
+           context=out.get("context"), visual=out.get("visual"), visible_text=visible, text_match=text_match,
+           features_seen=out.get("features_seen", []), license=row["license"])
         return {**row, "level": level, "context": out.get("context"), "visual": out.get("visual"),
                 "visible_text": visible, "text_match": text_match, "features_seen": out.get("features_seen", []),
                 "description": out.get("description", ""), "reason": out.get("reason", ""),
@@ -573,7 +640,10 @@ class Nodes:
 
     def ask_user(self, state: AgentState) -> dict:
         question = state["decision"]["question"]
+        ev = telemetry.emitter()
+        ev("question", question=question)   # 再開したときもう一度送られる（画面は同じ質問を 1 つにまとめる）
         answer = str(interrupt({"question": question})).strip()
+        ev("answer", question=question, answer=answer)
         result: dict = {"questions_asked": state.get("questions_asked", 0) + 1}
 
         result["last_question"] = question
@@ -652,6 +722,7 @@ class Nodes:
         if sources:
             parts.append("\n### 出典\n" + sources_text(state, sources))
         answer = "\n".join(parts)
+        telemetry.emitter()("report", answer=answer, sources=[{**s, "host": telemetry.host(s["url"])} for s in sources])
         return {"answer": answer, "trace": [{"node": "respond", "answer": answer}]}
 
 
@@ -712,6 +783,12 @@ def evidence_ok(evidence: str, request: str, label: str) -> bool:
     for phrase in _GENERIC_PHRASES:
         rest = rest.replace(phrase, "")
     return len(rest.strip("のをはがにでとや、。")) >= 2
+
+
+def image_event(c: images.ImageCandidate, state: AgentState) -> dict:
+    """画像の候補を表すイベントの共通の中身。"""
+    return {"src": c.src, "page_url": c.page_url, "host": telemetry.host(c.page_url), "stage": c.stage,
+            "title": c.title, "tier": page_tier(c.page_url, state), "license": c.license}
 
 
 def page_meta(out: dict, text: str, url: str, base: int, from_database: bool = False) -> dict:

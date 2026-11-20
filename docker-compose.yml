@@ -39,6 +39,8 @@ services:
       AGENT_API_KEY: ${AGENT_API_KEY:-}
       CINII_APPID: ${CINII_APPID:-}
       SEARXNG_URL: http://searxng:8080
+    volumes:
+      - ./runs:/app/runs        # 調査の記録（テレメトリー画面の一覧・再生に使う。git 管理外）
     depends_on:
       - searxng
     restart: unless-stopped

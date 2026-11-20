@@ -5,7 +5,8 @@
     uv run scripts/agent.py "マーキュリーについて調べて" --verbose
 
 聞き返されたら、ターミナルで答えを入力する。
-1 回の実行の記録（各ノードの入出力）は runs/<日時>.json に保存する（git 管理外）。
+1 回の実行の記録（各ノードの入出力）は runs/<日時>.json に、テレメトリーのイベントは
+runs/<日時>.events.jsonl に保存する（git 管理外。画面 /ui/ で再生できる）。
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import uuid
 from langgraph.types import Command
 
 from my_llm_app.agent.graph import build_graph
+from my_llm_app.agent.telemetry import Recorder
 from my_llm_app.config import REPO_ROOT
 
 
@@ -92,10 +94,16 @@ def main() -> int:
     graph = build_graph()
     config = {"configurable": {"thread_id": str(uuid.uuid4())}, "recursion_limit": 40}
 
+    run_id = time.strftime("%Y%m%d-%H%M%S")
+    recorder = Recorder(run_id, REPO_ROOT / "runs" / f"{run_id}.events.jsonl")
+    recorder.add({"type": "run.start", "request": args.request})
     payload: object = {"request": args.request}
     while True:
         interrupted = None
-        for chunk in graph.stream(payload, config, stream_mode="updates"):
+        for mode, chunk in graph.stream(payload, config, stream_mode=["updates", "custom"]):
+            if mode == "custom":
+                recorder.add(chunk)
+                continue
             for node, update in chunk.items():
                 if node == "__interrupt__":
                     interrupted = update[0].value
@@ -116,6 +124,7 @@ def main() -> int:
         payload = Command(resume=answer)
 
     state = graph.get_state(config).values
+    recorder.add({"type": "run.end", "answer": state.get("answer", "")})
     print("\n" + state.get("answer", "(回答なし)"))
 
     # どの処理に時間がかかったか（利用者の入力待ちは含まない）
@@ -130,7 +139,7 @@ def main() -> int:
 
     runs = REPO_ROOT / "runs"
     runs.mkdir(exist_ok=True)
-    out = runs / f"{time.strftime('%Y%m%d-%H%M%S')}.json"
+    out = runs / f"{run_id}.json"
     out.write_text(json.dumps(state, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
     print(f"\n(実行記録: {out.relative_to(REPO_ROOT)})")
     return 0

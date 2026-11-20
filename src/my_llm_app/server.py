@@ -9,6 +9,7 @@
   （Open WebUI の設定を変えずに済む）。
 - タイトル生成などの Open WebUI の裏処理（「### Task:」で始まる）は、エージェントを動かさず
   LLM にそのまま送る。
+- テレメトリー画面（/ui/）と、その API（/api/...）も出す（docs/telemetry_design.md）。
 """
 
 from __future__ import annotations
@@ -23,14 +24,19 @@ import time
 import uuid
 from collections.abc import Iterator
 
-from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import JSONResponse, StreamingResponse
+from pathlib import Path
+
+from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from langgraph.types import Command
 
+from my_llm_app import assets
 from my_llm_app.agent.graph import build_graph
 from my_llm_app.agent.progress import describe
-from my_llm_app.config import load_settings
+from my_llm_app.config import REPO_ROOT, load_settings
 from my_llm_app.llm import LLM
+from my_llm_app.runs import RunManager
 
 MODEL_ID = "research-agent"
 HEARTBEAT_SECONDS = 15   # LLM の応答待ちの間も接続が切れないよう、空のチャンクを送る間隔
@@ -43,6 +49,8 @@ _settings = load_settings()
 _llm = LLM(_settings)
 _graph = build_graph(_settings, _llm)
 _api_key = os.getenv("AGENT_API_KEY", "")
+_runs = RunManager(_graph, REPO_ROOT / "runs")
+_assets_dir = REPO_ROOT / "runs" / ".assets"
 # 質問して答えを待っている会話: 会話の鍵 → (thread_id, 質問した時刻)
 _pending: dict[str, tuple[str, float]] = {}
 _lock = threading.Lock()
@@ -175,3 +183,98 @@ def chat_completions(body: dict, authorization: str | None = Header(default=None
 @app.get("/health")
 def health() -> dict:
     return {"ok": True}
+
+
+# ---- テレメトリー画面の API（docs/telemetry_design.md 7 章） ----
+
+def _check_ui_key(authorization: str | None, key: str | None) -> None:
+    # EventSource はヘッダーを付けられないので、?key= でも受ける
+    if _api_key and authorization != f"Bearer {_api_key}" and key != _api_key:
+        raise HTTPException(status_code=401, detail="API キーが違います")
+
+
+@app.post("/api/runs")
+def api_start(body: dict, authorization: str | None = Header(default=None)) -> dict:
+    _check_ui_key(authorization, None)
+    request = str(body.get("request", "")).strip()
+    if not request:
+        raise HTTPException(status_code=400, detail="依頼が空です")
+    return _runs.start(request).summary()
+
+
+@app.post("/api/runs/{run_id}/answer")
+def api_answer(run_id: str, body: dict, authorization: str | None = Header(default=None)) -> dict:
+    _check_ui_key(authorization, None)
+    try:
+        return _runs.answer(run_id, str(body.get("answer", "")).strip()).summary()
+    except KeyError:
+        raise HTTPException(status_code=409, detail="この調査は答えを待っていません") from None
+
+
+@app.get("/api/runs")
+def api_runs(authorization: str | None = Header(default=None), key: str | None = None) -> dict:
+    _check_ui_key(authorization, key)
+    return {"runs": _runs.listing()}
+
+
+@app.get("/api/runs/{run_id}/events")
+def api_events(run_id: str, request: Request, after: int = 0, key: str | None = None,
+               authorization: str | None = Header(default=None)):
+    """イベントの流れ（Server-Sent Events）。after か Last-Event-ID より後から送る。"""
+    _check_ui_key(authorization, key)
+    last = request.headers.get("last-event-id")
+    seq = max(after, int(last) if last and last.isdigit() else 0)
+
+    def sse(e: dict) -> str:
+        return f"id: {e['seq']}\ndata: {json.dumps(e, ensure_ascii=False, default=str)}\n\n"
+
+    def gen() -> Iterator[str]:
+        nonlocal seq
+        run = _runs.get(run_id)
+        if run is None:
+            events = _runs.events_on_disk(run_id)
+            if not events:
+                yield "event: missing\ndata: {}\n\n"
+                return
+            for e in events[seq:]:
+                yield sse(e)
+            yield "event: end\ndata: {}\n\n"
+            return
+        while True:
+            new = run.recorder.wait_after(seq, HEARTBEAT_SECONDS)
+            for e in new:
+                yield sse(e)
+                seq = e["seq"]
+            if not new:
+                if run.recorder.finished:
+                    yield "event: end\ndata: {}\n\n"
+                    return
+                yield ": ping\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/favicon")
+def api_favicon(host: str) -> Response:
+    data = assets.favicon(host, _assets_dir)
+    if not data:
+        return Response(status_code=204)
+    return Response(data, media_type="image/png", headers={"Cache-Control": "max-age=86400"})
+
+
+@app.get("/api/image")
+def api_image(run: str, src: str, key: str | None = None, authorization: str | None = Header(default=None)) -> Response:
+    _check_ui_key(authorization, key)
+    data = assets.image(src, _runs.events(run), _assets_dir)
+    if not data:
+        return Response(status_code=404)
+    return Response(data, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
+
+
+@app.get("/")
+def root() -> RedirectResponse:
+    return RedirectResponse("/ui/")
+
+
+app.mount("/ui", StaticFiles(directory=Path(__file__).parent / "ui", html=True), name="ui")
