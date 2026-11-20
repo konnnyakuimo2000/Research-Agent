@@ -224,9 +224,17 @@ button:focus-visible, .node:focus-visible, input:focus-visible { outline: 2px so
 .pchip { width: 26px; height: 26px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); display: grid; place-items: center; position: relative; cursor: pointer;
   animation: pop .45s cubic-bezier(.3,1.6,.5,1); }
 .pchip.planned { border-style: dashed; opacity: .6; }
-.pchip.running, .pchip.llm { border-color: var(--ink); }
-.pchip.llm::after { content: ""; position: absolute; inset: -3px; border-radius: 10px; border: 1.5px solid var(--ink); animation: pulse 1s infinite; }
-.pchip.running::after { content: ""; position: absolute; inset: -3px; border-radius: 10px; border: 1.5px solid transparent; border-top-color: var(--ink); animation: spin .8s linear infinite; }
+.pchip.llm { border-color: var(--ink); }
+.pchip.running { border-color: var(--line); }
+/* 枠の形（角丸の四角）は動かさず、濃い部分だけが枠に沿って一周する（円を回すと四角の枠からずれて見える） */
+@property --sweep { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+.pchip.llm::after { content: ""; position: absolute; inset: -1px; border-radius: 8px; border: 2px solid var(--ink); animation: pulse 1s infinite; }
+.pchip.running::after { content: ""; position: absolute; inset: -1px; border-radius: 8px; padding: 2px;
+  background: conic-gradient(from var(--sweep), var(--ink) 0deg 80deg, transparent 80deg 360deg);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  animation: sweep .9s linear infinite; }
+@keyframes sweep { to { --sweep: 360deg; } }
 .pchip.failed { background: repeating-linear-gradient(135deg, var(--bg) 0 4px, var(--surface) 4px 6px); opacity: .7; }
 .pchip .n { position: absolute; right: -4px; bottom: -4px; min-width: 14px; height: 14px; border-radius: 7px; background: var(--strong); color: var(--on-strong);
   font-size: 9px; display: grid; place-items: center; padding: 0 3px; font-family: var(--font-data); }
