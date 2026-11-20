@@ -277,4 +277,13 @@ def root() -> RedirectResponse:
     return RedirectResponse("/ui/")
 
 
-app.mount("/ui", StaticFiles(directory=Path(__file__).parent / "ui", html=True), name="ui")
+class UIFiles(StaticFiles):
+    """画面のファイル。ブラウザに毎回確かめさせる（更新した画面が、古い版のまま使われないように）。"""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/ui", UIFiles(directory=Path(__file__).parent / "ui", html=True), name="ui")

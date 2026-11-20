@@ -15,7 +15,9 @@ const GAPX = 44, GAPY = 12, PAD = 24;
 const MIN_ZOOM = 0.22, MAX_ZOOM = 2.5, FIT_MAX = 1;
 const STEM = 1.1, RIPEN = 0.9;      // 線を鉛筆で描く秒数、ノードが大きくなる秒数
 const ARRIVE = STEM * 0.92;          // 線がノードの位置に届くころに、ノードが現れ始める
-const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+// 動きは画面の中身（何が起きているか）そのものなので、OS の「動きを減らす」設定でも止めない。
+// Windows でアニメーション効果をオフにしていると prefers-reduced-motion が有効になり、ノードも線も一瞬で現れていた
+const reduce = false;
 const ACTION = { search: "検索する", read_pages: "ページを読む", find_images: "画像を探す", check_conflicts: "食い違いを調べる",
   respond: "回答する", ask_user: "聞き返す" };
 const WORK = { search: "検索", read_pages: "ページを読む", find_images: "画像", check_conflicts: "食い違い", respond: "報告",
@@ -75,7 +77,8 @@ function add(id, parent, depth, html, details, cls = "", first = false) {
   if (p) { first ? p.kids.unshift(id) : p.kids.push(id); const t = p.el.querySelector(".toggle"); if (t) t.hidden = false; }
   order.push(id); info[id] = details || { title: id };
   layout();
-  N[id].cur = { ...N[id].tgt };   // 生まれるノードは、その場所で実るように膨らむ（動いてくるのではない）
+  N[id].cur = { ...N[id].tgt };   // 生まれるノードは、その場所で大きくなる（動いてくるのではない）
+  if (!instant && !reduce) { el.style.opacity = "0"; el.style.transform = `translate(${N[id].cur.x}px, ${N[id].cur.y}px) scale(0.55)`; }
   aim = id;
   return el;
 }
@@ -627,6 +630,7 @@ const FLOW = {
     this.visits[id] = 0; this.seconds[id] = 0;
     this.layout();
     n.cur = { ...n.tgt };
+    if (!instant && !reduce) { el.style.opacity = "0"; el.style.transform = `translate(${n.cur.x}px, ${n.cur.y}px) scale(0.55)`; }
     if (view === "flow") $("flowEmpty").hidden = true;
     return n;
   },
