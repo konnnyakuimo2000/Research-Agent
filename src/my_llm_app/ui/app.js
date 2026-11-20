@@ -13,7 +13,8 @@ const emptyChat = $("emptyChat");   // チャットを空にしても、最初�
 const COLW = [170, 250, 236, 236, 236];   // 深さごとの列の幅（依頼・判断・作業・ページ・データベースの記録）
 const GAPX = 44, GAPY = 12, PAD = 24;
 const MIN_ZOOM = 0.22, MAX_ZOOM = 2.5, FIT_MAX = 1;
-const STEM = 0.45, RIPEN = 0.6;      // 枝が伸びる秒数、実が膨らむ秒数
+const STEM = 1.1, RIPEN = 0.9;      // 線を鉛筆で描く秒数、ノードが大きくなる秒数
+const ARRIVE = STEM * 0.92;          // 線がノードの位置に届くころに、ノードが現れ始める
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const ACTION = { search: "検索する", read_pages: "ページを読む", find_images: "画像を探す", check_conflicts: "食い違いを調べる",
   respond: "回答する", ask_user: "聞き返す" };
@@ -121,7 +122,9 @@ function bezierTo(p0, p1, p2, p3, t) {
   return [p0, a, d, f];
 }
 const easeOut = (t) => 1 - Math.pow(1 - t, 3);
-const easeBack = (t) => { const c = 1.7; return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); };   // 少し行き過ぎて戻る（実が膨らむ）
+const easeInOut = (t) => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;   // ゆっくり始まり、ゆっくり終わる（鉛筆の線）
+// ノードは小さめの大きさから、行き過ぎずに滑らかに大きくなる。現れ方も同じ速さで
+const grownScale = (g) => g >= 1 ? 1 : 0.55 + 0.45 * easeOut(g);
 
 // ---- 表示の切り替え（流れの図 / 木） ----
 let view = "flow";
@@ -207,10 +210,9 @@ function animate(dt) {
     const n = N[id];
     n.cur.x += (n.tgt.x - n.cur.x) * k; n.cur.y += (n.tgt.y - n.cur.y) * k;
     const age = (t - n.born) / 1000;
-    const g = n.parent ? clamp((age - STEM * 0.7) / RIPEN) : clamp(age / RIPEN);
-    const scale = g >= 1 ? 1 : 0.04 + 0.96 * easeBack(g);
-    n.el.style.transform = `translate(${n.cur.x.toFixed(1)}px, ${n.cur.y.toFixed(1)}px) scale(${scale.toFixed(3)})`;
-    n.el.style.opacity = n.hidden ? 0 : clamp(g * 2.5).toFixed(2);
+    const g = n.parent ? clamp((age - ARRIVE) / RIPEN) : clamp(age / RIPEN);
+    n.el.style.transform = `translate(${n.cur.x.toFixed(1)}px, ${n.cur.y.toFixed(1)}px) scale(${grownScale(g).toFixed(3)})`;
+    n.el.style.opacity = n.hidden ? 0 : easeOut(g).toFixed(3);
   }
   let d = ""; const live = [], growing = [], buds = [], rep = [];
   const anchorY = (n) => n.cur.y + Math.min(22, n.el.offsetHeight / 2);
@@ -221,9 +223,9 @@ function animate(dt) {
     const p0 = { x: p.cur.x + p.el.offsetWidth, y: anchorY(p) }, p3 = { x: n.cur.x, y: anchorY(n) };
     const mx = p0.x + (p3.x - p0.x) / 2;
     const age = (t - n.born) / 1000, e = clamp(age / STEM);
-    const [a, b, c, q] = e >= 1 ? [p0, { x: mx, y: p0.y }, { x: mx, y: p3.y }, p3] : bezierTo(p0, { x: mx, y: p0.y }, { x: mx, y: p3.y }, p3, easeOut(e));
+    const [a, b, c, q] = e >= 1 ? [p0, { x: mx, y: p0.y }, { x: mx, y: p3.y }, p3] : bezierTo(p0, { x: mx, y: p0.y }, { x: mx, y: p3.y }, p3, easeInOut(e));
     const path = `M${fmt(a)} C${fmt(b)} ${fmt(c)} ${fmt(q)}`;
-    if (e < 1 || age < STEM + RIPEN * 0.5) { growing.push(path); if (e < 1) buds.push(q); }
+    if (e < 1 || age < ARRIVE + RIPEN * 0.5) { growing.push(path); if (e < 1) buds.push(q); }
     else if (n.el.classList.contains("running") || n.el.classList.contains("llm")) live.push(path);
     else d += path;
     for (const other of n.extra) {   // 転載: ほぼ同じ文章のページどうしを点線で結ぶ
@@ -233,7 +235,7 @@ function animate(dt) {
     }
   }
   svg.innerHTML = `<path d="${d}"/>` + live.map((p) => `<path class="live" d="${p}"/>`).join("")
-    + growing.map((p) => `<path class="grow" d="${p}"/>`).join("") + buds.map((q) => `<circle cx="${q.x.toFixed(1)}" cy="${q.y.toFixed(1)}" r="3"/>`).join("")
+    + growing.map((p) => `<path class="grow" d="${p}"/>`).join("") + buds.map((q) => `<circle class="pen" cx="${q.x.toFixed(1)}" cy="${q.y.toFixed(1)}" r="2.6"/>`).join("")
     + rep.map((p) => `<path class="rep" d="${p}"/>`).join("");
   if (view === "flow") FLOW.draw(dt);
   if (auto) fitTarget();
@@ -640,6 +642,8 @@ const FLOW = {
       label = document.createElementNS(SVGNS, "text"); label.setAttribute("class", "glabel"); label.setAttribute("text-anchor", "middle");
       gsvg.insertBefore(label, this.fx);
     }
+    const target = this.n[b];
+    if (performance.now() - target.born < 150) target.delay = ARRIVE;   // 線が届いてから現れる
     return (this.e[key] = { a, b, kind, path, label, count: 0, over: 0, born: instant || reduce ? -1e9 : performance.now() });
   },
   dataBody(id) {
@@ -871,17 +875,18 @@ const FLOW = {
     const k = instant || reduce ? 1 : 1 - Math.pow(0.0008, dt);
     for (const n of Object.values(this.n)) {
       n.cur.x += (n.tgt.x - n.cur.x) * k; n.cur.y += (n.tgt.y - n.cur.y) * k;
-      const age = (t - n.born) / 1000, g = clamp((age - (n.id === "start" ? 0 : STEM * 0.7)) / RIPEN);
-      const s = g >= 1 ? 1 : 0.04 + 0.96 * easeBack(g);
-      n.el.style.transform = `translate(${n.cur.x.toFixed(1)}px, ${n.cur.y.toFixed(1)}px) scale(${s.toFixed(3)})`;
-      n.el.style.opacity = clamp(g * 2.5).toFixed(2);
+      const age = (t - n.born) / 1000, g = clamp((age - (n.delay || 0)) / RIPEN);
+      n.el.style.transform = `translate(${n.cur.x.toFixed(1)}px, ${n.cur.y.toFixed(1)}px) scale(${grownScale(g).toFixed(3)})`;
+      n.el.style.opacity = easeOut(g).toFixed(3);
     }
     const fmt = (p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`;
+    const pens = [];
     for (const e of Object.values(this.e)) {
       const full = e.pts = this.geometry(e);
       const grow = clamp((t - e.born) / 1000 / STEM);
-      const [p0, p1, p2, p3] = grow >= 1 ? full : bezierTo(...full, easeOut(grow));
+      const [p0, p1, p2, p3] = grow >= 1 ? full : bezierTo(...full, easeInOut(grow));
       e.path.setAttribute("d", `M${fmt(p0)} C${fmt(p1)} ${fmt(p2)} ${fmt(p3)}`);
+      if (grow < 1) pens.push(p3);   // 描いている途中の線の先に、鉛筆の先を出す
       const target = this.n[e.b];
       const hot = this.cur === e.b && this.lastFrom === e.a && ["running", "llm", "waiting"].some((c) => target.el.classList.contains(c));
       const busyData = e.kind === "data" && this.particles.some((q) => q.e === e);
@@ -894,7 +899,7 @@ const FLOW = {
         e.label.setAttribute("class", `glabel ${e.over ? "over" : ""}`);
       }
     }
-    let fx = "";
+    let fx = pens.map((p) => `<circle class="pen" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2.6"/>`).join("");
     // 制御の流れ: 尾を引く点（0.75 秒で線をたどる）
     this.tokens = this.tokens.filter((tk) => {
       const u = (t - tk.t0) / 750; if (u >= 1) return false; if (u < 0 || !tk.e.pts) return true;
