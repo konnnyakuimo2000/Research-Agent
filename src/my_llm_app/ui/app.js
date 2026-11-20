@@ -52,7 +52,8 @@ function reset() {
   svg.innerHTML = "";
   N = {}; order = []; info = {}; selected = null; round = null; work = null; dbNode = {}; statusEl = null;
   questions = new Set(); sources = []; instant = false; rounds = 0; aim = null;
-  $("drawer").classList.remove("open"); $("flowEmpty").hidden = false;
+  $("drawer").classList.remove("open"); $("flowEmpty").hidden = view === "flow";
+  FLOW.reset();
   fitMode(true); cam = { x: 0, y: 0, s: 1 }; camT = { ...cam };
 }
 
@@ -122,25 +123,39 @@ function bezierTo(p0, p1, p2, p3, t) {
 const easeOut = (t) => 1 - Math.pow(1 - t, 3);
 const easeBack = (t) => { const c = 1.7; return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); };   // 少し行き過ぎて戻る（実が膨らむ）
 
+// ---- 表示の切り替え（流れの図 / 木） ----
+let view = "flow";
+function setView(v) {
+  view = v;
+  $("graph").hidden = v !== "flow"; canvas.hidden = v !== "tree";
+  $("flowEmpty").hidden = v === "flow" || order.length > 0;
+  document.querySelectorAll("[data-view]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === v)));
+  fitMode(true);
+}
+document.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
+
 // ---- カメラ（拡大・縮小・移動） ----
 let cam = { x: 0, y: 0, s: 1 }, camT = { ...cam }, auto = true;
 function fitMode(on) { auto = on; $("zoomFit").setAttribute("aria-pressed", String(on)); }
 function fitTarget() {
-  const vis = order.filter((id) => !N[id].hidden);
-  if (!vis.length) return;
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  for (const id of vis) {
-    const n = N[id];
-    x0 = Math.min(x0, n.tgt.x); y0 = Math.min(y0, n.tgt.y);
-    x1 = Math.max(x1, n.tgt.x + n.el.offsetWidth); y1 = Math.max(y1, n.tgt.y + n.el.offsetHeight);
+  if (view === "flow") ({ x0, y0, x1, y1 } = FLOW.bounds());
+  else {
+    const vis = order.filter((id) => !N[id].hidden);
+    if (!vis.length) return;
+    for (const id of vis) {
+      const n = N[id];
+      x0 = Math.min(x0, n.tgt.x); y0 = Math.min(y0, n.tgt.y);
+      x1 = Math.max(x1, n.tgt.x + n.el.offsetWidth); y1 = Math.max(y1, n.tgt.y + n.el.offsetHeight);
+    }
   }
-  const W = flow.clientWidth, H = flow.clientHeight, m = 36, bottom = 64;
+  const W = flow.clientWidth, H = flow.clientHeight, m = view === "flow" ? 56 : 36, bottom = 64;
   const bw = x1 - x0, bh = y1 - y0;
   const s = clamp(Math.min((W - 2 * m) / bw, (H - m - bottom) / bh), MIN_ZOOM, FIT_MAX);
   let x = (W - bw * s) / 2 - x0 * s, y = m + Math.max(0, (H - m - bottom - bh * s) / 2) - y0 * s;
   // 縮小しきっても収まらないときは、いちばん新しいノードのあたりを見せる
-  if (bw * s > W - 2 * m && aim && N[aim]) x = clamp(W * 0.62 - (N[aim].tgt.x + COLW[N[aim].depth]) * s, W - 2 * m - x1 * s, m - x0 * s);
-  if (bh * s > H - m - bottom && aim && N[aim]) y = clamp(H * 0.5 - N[aim].tgt.y * s, H - bottom - y1 * s, m - y0 * s);
+  if (view === "tree" && bw * s > W - 2 * m && aim && N[aim]) x = clamp(W * 0.62 - (N[aim].tgt.x + COLW[N[aim].depth]) * s, W - 2 * m - x1 * s, m - x0 * s);
+  if (view === "tree" && bh * s > H - m - bottom && aim && N[aim]) y = clamp(H * 0.5 - N[aim].tgt.y * s, H - bottom - y1 * s, m - y0 * s);
   camT = { x, y, s };
 }
 function zoomAt(mx, my, factor) {
@@ -161,7 +176,7 @@ flow.addEventListener("wheel", (e) => {
 }, { passive: false });
 const pointers = new Map(); let pinch = null;
 flow.addEventListener("pointerdown", (e) => {
-  if (e.target.closest(".node, .hud, .drawer")) return;
+  if (e.target.closest(".node, .fnode, .hud, .drawer")) return;
   flow.setPointerCapture(e.pointerId); pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   flow.classList.add("dragging"); fitMode(false);
   if (pointers.size === 2) { const [a, b] = [...pointers.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) }; }
@@ -185,7 +200,7 @@ $("zoomFit").addEventListener("click", () => fitMode(true));
 
 // 毎フレーム: ノードを目標の位置へ近づけ、生まれたばかりのノードは枝を伸ばしてから膨らませ、線とカメラを動かす
 function animate(dt) {
-  if (!N) return;
+  if (!N || !FLOW.n) return;
   const t = performance.now();
   const k = instant || reduce ? 1 : 1 - Math.pow(0.0008, dt);
   for (const id of order) {
@@ -220,10 +235,11 @@ function animate(dt) {
   svg.innerHTML = `<path d="${d}"/>` + live.map((p) => `<path class="live" d="${p}"/>`).join("")
     + growing.map((p) => `<path class="grow" d="${p}"/>`).join("") + buds.map((q) => `<circle cx="${q.x.toFixed(1)}" cy="${q.y.toFixed(1)}" r="3"/>`).join("")
     + rep.map((p) => `<path class="rep" d="${p}"/>`).join("");
+  if (view === "flow") FLOW.draw();
   if (auto) fitTarget();
   const kc = instant || reduce ? 1 : 1 - Math.pow(0.02, dt);
   cam.x += (camT.x - cam.x) * kc; cam.y += (camT.y - cam.y) * kc; cam.s += (camT.s - cam.s) * kc;
-  canvas.style.transform = `translate(${cam.x.toFixed(1)}px, ${cam.y.toFixed(1)}px) scale(${cam.s.toFixed(4)})`;
+  (view === "flow" ? $("graph") : canvas).style.transform = `translate(${cam.x.toFixed(1)}px, ${cam.y.toFixed(1)}px) scale(${cam.s.toFixed(4)})`;
 }
 
 // ---- チャット ----
@@ -288,8 +304,10 @@ function coverage(rows) {
 function select(id) {
   if (selected && N[selected]) N[selected].el.classList.remove("sel");
   selected = id; N[id].el.classList.add("sel");
-  const d = info[id] || {};
-  $("dTitle").textContent = d.title || id;
+  showDetails(info[id] || { title: id });
+}
+function showDetails(d) {
+  $("dTitle").textContent = d.title || "";
   let h = "";
   if (d.photo) h += `<img class="big" src="${d.photo}" alt="${esc(d.alt || "")}">`;
   if (d.kv) h += `<dl class="kv">${d.kv.filter(([, v]) => v !== "" && v != null).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl>`;
@@ -305,7 +323,7 @@ $("dClose").addEventListener("click", () => { $("drawer").classList.remove("open
 const link = (u) => `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer" class="mono">${esc(u)}</a>`;
 
 // ---- イベント → 画面 ----
-function handle(e) { const H = HANDLERS[e.type]; if (H) H(e); }
+function handle(e) { const H = HANDLERS[e.type]; if (H) H(e); FLOW.on(e); }
 const HANDLERS = {
   "run.start": (e) => {
     chatUser(e.request); statusBubble();
@@ -549,8 +567,285 @@ function wireCites(el) {
     const s = sources[b.dataset.src - 1]; if (!s) return;
     const id = order.find((k) => k.startsWith("p:") && sameUrl(k.slice(2), s.url)) || (N.sum && sameUrl(N.sum.url, s.url) ? "sum" : null);
     if (!id) return;
-    reveal(id); jumpTo(id); select(id);
+    reveal(id); select(id);
+    if (view === "flow") FLOW.pageDetails(s.url); else jumpTo(id);
   }));
+}
+
+// ==== 流れの図（エージェントのフロー）====
+// LangGraph のノードと同じ形の図。位置は決まっていて、今いるノードが光り、作業が移るたびに線の上を点が流れる。
+// 線には通った回数を出す。プログラムが LLM の選択を変えたときは、LLM が選んだ先への線を点線で一瞬出す。
+// 「読んだページ」「網羅表」「画像」は、集まったものを載せるノード（データ）。
+const graph = $("graph"), gsvg = $("gedges");
+const STAGE = { check_feasibility: "feas", decide: "hub", search: "search", read_pages: "read", find_images: "images",
+  check_conflicts: "conflicts", ask_user: "ask", respond: "respond", report_infeasible: "infeasible" };
+const LLM_STAGES = new Set(["feas", "hub", "conflicts", "respond", "infeasible"]);
+const ACTION_STAGE = { search: "search", read_pages: "read", find_images: "images", check_conflicts: "conflicts", ask_user: "ask", respond: "respond" };
+const FLOW_NODES = {
+  start:      { x: 0,    y: 300, w: 160, label: "依頼", cls: "start terminal" },
+  feas:       { x: 200,  y: 300, w: 160, label: "判定" },
+  hub:        { x: 400,  y: 286, w: 210, label: "判断", cls: "hub" },
+  infeasible: { x: 200,  y: 520, w: 190, label: "調べられないことの報告" },
+  ask:        { x: 700,  y: 0,   w: 230, label: "聞き返し" },
+  search:     { x: 700,  y: 105, w: 230, label: "検索" },
+  read:       { x: 700,  y: 250, w: 230, label: "ページを読む" },
+  images:     { x: 700,  y: 410, w: 230, label: "画像" },
+  conflicts:  { x: 700,  y: 560, w: 230, label: "食い違い" },
+  respond:    { x: 700,  y: 670, w: 230, label: "報告" },
+  end:        { x: 990,  y: 690, w: 150, label: "終わり", cls: "terminal" },
+  pages:      { x: 990,  y: 105, w: 250, label: "読んだページ", cls: "data" },
+  cov:        { x: 1290, y: 105, w: 250, label: "網羅表", cls: "data" },
+  imgs:       { x: 990,  y: 410, w: 250, label: "確かめた画像", cls: "data" },
+};
+const FLOW_EDGES = [
+  ["start", "feas"], ["feas", "hub"], ["feas", "infeasible"], ["infeasible", "end"], ["respond", "end"],
+  ...["ask", "search", "read", "images", "conflicts", "respond"].map((s) => ["hub", s]),
+  ...["ask", "search", "read", "images", "conflicts"].map((s) => [s, "hub", "back"]),
+  ["read", "pages", "data"], ["pages", "cov", "data"], ["images", "imgs", "data"],
+];
+const FLOW = {
+  reset() {
+    graph.querySelectorAll(".fnode, .fly2").forEach((e) => e.remove());
+    gsvg.innerHTML = "";
+    this.n = {}; this.e = {}; this.tokens = []; this.ghosts = []; this.cur = null; this.pageChip = {}; this.covRow = {}; this.thumb = {};
+    this.visits = {}; this.seconds = {};
+    for (const [id, d] of Object.entries(FLOW_NODES)) {
+      const el = document.createElement("div");
+      el.className = `fnode idle ${d.cls || ""}`; el.style.setProperty("--w", d.w + "px");
+      el.style.transform = `translate(${d.x}px, ${d.y}px)`;
+      el.innerHTML = `<div class="k"><span>${d.label}</span><span class="row"><span class="cnt"></span><span class="st"></span></span></div>
+        <div class="t"></div><div class="s"></div>${d.cls?.includes("data") ? this.dataBody(id) : `<ul class="hist"></ul>`}`;
+      el.tabIndex = 0; el.setAttribute("role", "button");
+      el.addEventListener("click", (ev) => { if (!ev.target.closest(".pchip")) this.details(id); });
+      graph.appendChild(el);
+      this.n[id] = { el, ...d, hist: [] };
+      this.visits[id] = 0; this.seconds[id] = 0;
+    }
+    for (const [a, b, kind] of FLOW_EDGES) {
+      const key = `${a}>${b}`;
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("class", `gedge ${kind || ""}`); gsvg.appendChild(path);
+      const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      label.setAttribute("class", "glabel"); label.setAttribute("text-anchor", "middle"); gsvg.appendChild(label);
+      this.e[key] = { a, b, kind: kind || "", path, label, count: 0, over: 0 };
+    }
+    this.setText("start", "", "依頼を待っている");
+  },
+  dataBody(id) {
+    if (id === "pages") return `<div class="chipgrid"></div>`;
+    if (id === "cov") return `<div class="covrows"></div>`;
+    return `<div class="thumbs"></div>`;
+  },
+  setText(id, t, s) { const n = this.n[id]; if (!n) return; if (t !== undefined) n.el.querySelector(".t").textContent = t; if (s !== undefined) n.el.querySelector(".s").textContent = s; },
+  setState(id, st) {
+    const n = this.n[id]; if (!n) return;
+    n.el.classList.remove("idle", "running", "llm", "waiting", "done", "failed");
+    n.el.classList.add(st);
+  },
+  push(id, line) {   // ノードの中の最近の出来事（新しいものを上に、3 つまで）。すべては詳細に残す
+    const n = this.n[id]; if (!n) return;
+    n.hist.unshift(line);
+    const ul = n.el.querySelector(".hist"); if (ul) ul.innerHTML = n.hist.slice(0, 3).map((x) => `<li>${esc(x)}</li>`).join("");
+  },
+  count(id) {
+    const n = this.n[id]; if (!n) return;
+    n.el.querySelector(".cnt").textContent = `×${this.visits[id]}${this.seconds[id] ? ` · ${Math.round(this.seconds[id])} 秒` : ""}`;
+  },
+  // 作業が移る: 前のノードから次のノードへの線に点を流し、通った回数を数える
+  go(to) {
+    const from = this.cur;
+    if (from && from !== to) {
+      const e = this.e[`${from}>${to}`];
+      if (e) { e.count++; this.tokens.push({ e, t0: performance.now() }); }
+      if (this.n[from] && !this.n[from].el.classList.contains("failed") && !this.n[from].el.classList.contains("waiting")) this.setState(from, "done");
+    }
+    this.lastFrom = from; this.cur = to;
+    this.visits[to]++; this.count(to);
+    this.setState(to, to === "ask" ? "waiting" : LLM_STAGES.has(to) ? "llm" : "running");
+  },
+  ghost(to) {   // LLM が選んだが、プログラムが変えた行き先（点線で一瞬出して消す）
+    const e = this.e[`hub>${to}`]; if (!e) return;
+    this.ghosts.push({ e, t0: performance.now() });
+  },
+  on(e) {
+    const f = this;
+    switch (e.type) {
+      case "run.start": f.setState("start", "done"); f.setText("start", e.request, runId); f.cur = "start"; break;
+      case "step.start": {
+        const id = STAGE[e.node]; if (!id) break;
+        if (id === "ask" && f.cur === "ask") { f.setState("ask", "running"); break; }   // 答えで再開した
+        f.go(id);
+        if (id === "read") f.setText("read", "ページを読む順番を決めている", "");
+        if (id === "respond") f.setText("respond", "確かめた事実だけで報告を書いている", "");
+        if (id === "conflicts") f.setText("conflicts", "別々のサイトの事実を比べている", "");
+        break;
+      }
+      case "step.end": {
+        const id = e.node === "decide" ? "hub" : STAGE[e.node]; if (!id) break;
+        f.seconds[id] += e.seconds || 0; f.count(id);
+        if (e.error) { f.setState(id, "failed"); f.setText(id, undefined, e.error); }
+        break;
+      }
+      case "feasibility": {
+        const v = { yes: "調べられる", partial: "一部は調べられない", no: "調べられない", unsure: "調べてみる" }[e.verdict] || e.verdict;
+        f.setText("feas", v, e.reason); f.push("feas", v); break;
+      }
+      case "decision": {
+        const llm = ACTION[e.llm?.action] || e.llm?.action || "", act = ACTION[e.action] || e.action;
+        const changed = e.guard && e.llm?.action !== e.action;
+        f.setText("hub", act + (e.action === "search" && e.query ? `「${e.query}」` : ""), changed ? `LLM は「${llm}」→ プログラムが変更` : `LLM の選択どおり`);
+        f.push("hub", changed ? `${llm} → ${act}（変更）` : act);
+        if (changed) {
+          const llmTo = ACTION_STAGE[e.llm?.action]; if (llmTo) f.ghost(llmTo);
+          const real = f.e[`hub>${ACTION_STAGE[e.action]}`]; if (real) real.over++;
+        }
+        break;
+      }
+      case "search.start": f.setText("search", e.query, SEARCH_KIND[e.kind] || e.kind); f.push("search", e.query); break;
+      case "search.done": f.setText("search", undefined, e.failed || `結果 ${e.results.length} 件 · 対象を含む ${e.results.filter((r) => r.relevant).length} 件`); break;
+      case "aspects": {
+        f.n.cov.el.querySelector(".covrows").innerHTML = e.aspects.map((a) =>
+          `<div class="covrow" data-a="${esc(a)}"><span class="m"></span><span class="nm">${esc(a)}</span><span class="sq"></span></div>`).join("");
+        e.aspects.forEach((a) => { f.covRow[a] = f.n.cov.el.querySelector(`.covrow[data-a="${CSS.escape(a)}"]`); });
+        f.setState("cov", "done"); f.setText("cov", `観点 ${e.aspects.length} つ`, `${e.subject_type} · ${e.origin}が作成`);
+        f.setText("read", `対象の種類: ${e.subject_type}`, "観点を作った");
+        break;
+      }
+      case "databases": f.push("read", `データベース: ${e.used.join(" → ") || "なし"}（記録 ${e.records.length} 件）`); break;
+      case "page.planned": case "page.start": {
+        let chip = f.pageChip[e.url];
+        if (!chip) {
+          chip = document.createElement("div"); chip.className = "pchip planned"; chip.title = e.host;
+          chip.innerHTML = icon(e.host); chip.addEventListener("click", () => f.pageDetails(e.url));
+          f.n.pages.el.querySelector(".chipgrid").appendChild(chip); f.pageChip[e.url] = chip;
+          f.setState("pages", "done"); f.updatePages();
+        }
+        if (e.type === "page.start") { chip.className = "pchip running"; f.setText("read", e.host, e.db ? "データベースの記録を読んでいる" : "ページを取得している"); }
+        break;
+      }
+      case "page.fetched": { const c = f.pageChip[e.url]; if (c && !e.ok) { c.className = "pchip failed"; f.push("read", `${host(e.url)}: ${e.reason}`); } break; }
+      case "page.llm": { const c = f.pageChip[e.url]; if (c) c.className = "pchip llm"; f.setText("read", host(e.url), "LLM が引用付きで事実を抜き出している"); break; }
+      case "page.done": {
+        const c = f.pageChip[e.url];
+        if (c) { c.className = "pchip done"; if (e.facts.length) c.insertAdjacentHTML("beforeend", `<span class="n">${e.facts.length}</span>`); }
+        f.push("read", `${host(e.url)}: 事実 ${e.facts.length} 件`); f.updatePages();
+        e.facts.forEach((x, i) => f.flyFact(c, x, e.tier, i * 140));
+        break;
+      }
+      case "coverage":
+        e.rows.forEach((r) => { const row = f.covRow[r.aspect]; if (row) row.className = "covrow " + (r.status === "確認済み" ? "ok" : r.status === "出典不足" ? "weak" : ""); });
+        f.setText("cov", undefined, `${e.rows.filter((r) => r.status === "確認済み").length} / ${e.rows.length} 観点を確認済み`);
+        break;
+      case "image.candidates": f.setText("images", `${e.ranked} 候補`, `${e.fetching} 件を取得して確かめる`); break;
+      case "image.fetched": {
+        if (!e.ok) break;
+        const th = document.createElement("div"); th.className = "th"; th.textContent = "…"; th.title = e.title || e.src;
+        f.n.imgs.el.querySelector(".thumbs").appendChild(th); f.thumb[e.src] = th; f.setState("imgs", "done");
+        break;
+      }
+      case "image.llm": { const th = f.thumb[e.src]; if (th) th.classList.add("llm"); f.setText("images", undefined, "VLM が対象かどうか確かめている"); break; }
+      case "image.done": {
+        const th = f.thumb[e.src]; if (!th) break;
+        th.classList.remove("llm");
+        if (e.level === "不採用") { th.classList.add("ng"); th.textContent = "✕"; }
+        else if (NEEDS_PERMISSION.test(e.license || "")) { th.classList.add("lock"); th.innerHTML = "許可が<br>必要"; }
+        else th.innerHTML = `<img src="${withKey(`/api/image?run=${encodeURIComponent(runId)}&src=${encodeURIComponent(e.src)}`)}" alt="${esc(e.description)}">`;
+        f.push("images", `${e.level}: ${e.description || e.reason || ""}`);
+        break;
+      }
+      case "image.final": f.setText("images", `載せる ${e.shown.length} 枚`, `確かめた ${Object.keys(f.thumb).length} 枚`); break;
+      case "conflicts": f.setText("conflicts", `食い違い ${e.conflicts.length} 件`, `比べた観点 ${e.aspects.length}`); e.conflicts.forEach((c) => f.push("conflicts", c.topic)); break;
+      case "question": f.setState("ask", "waiting"); f.setText("ask", e.question.split("\n")[0], "利用者の答えを待っている"); break;
+      case "answer": f.setState("ask", "running"); f.push("ask", `答え: ${e.answer}`); f.setText("ask", undefined, `答え: ${e.answer}`); break;
+      case "report": f.setText("respond", `出典 ${(e.sources || []).length} 件`, "報告を書いた"); break;
+      case "run.end": f.go("end"); f.setState("end", "done"); f.setText("end", `${Math.round(e.t)} 秒`, "報告をチャットに出した"); break;
+      case "run.error": if (f.cur) { f.setState(f.cur, "failed"); f.setText(f.cur, undefined, e.error); } break;
+    }
+  },
+  updatePages() {
+    const chips = Object.values(this.pageChip);
+    const ok = chips.filter((c) => c.classList.contains("done")).length, ng = chips.filter((c) => c.classList.contains("failed")).length;
+    this.setText("pages", `${chips.length} ページ`, `読めた ${ok} · 読めなかった ${ng}`);
+  },
+  flyFact(chip, x, tier, delay) {
+    const row = this.covRow[x.aspect];
+    const land = () => { if (!row) return; const sq = document.createElement("i"); if (tier !== 1) sq.className = "t2"; sq.title = x.text; row.querySelector(".sq").appendChild(sq); };
+    if (instant || reduce || !chip || !row) { land(); return; }
+    setTimeout(() => {
+      const g = graph.getBoundingClientRect(), s = cam.s;
+      const from = chip.getBoundingClientRect(), to = row.getBoundingClientRect();
+      const dot = document.createElement("div"); dot.className = "fly2";
+      dot.style.transform = `translate(${(from.left - g.left) / s + 8}px, ${(from.top - g.top) / s + 8}px)`; graph.appendChild(dot);
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        dot.style.transform = `translate(${(to.right - g.left) / s - 30}px, ${(to.top - g.top) / s + 3}px)`; dot.style.opacity = ".2";
+      }));
+      setTimeout(() => { dot.remove(); land(); }, 800);
+    }, delay);
+  },
+  // 線を引き直し、流れている点を動かす（毎フレーム）
+  draw() {
+    const t = performance.now();
+    const box = (id) => { const n = this.n[id]; return { x: n.x, y: n.y, w: n.el.offsetWidth, h: n.el.offsetHeight }; };
+    for (const e of Object.values(this.e)) {
+      const A = box(e.a), B = box(e.b);
+      let p0, p1, p2, p3;
+      if (e.kind === "back") {   // 戻りの線: 作業の左下から判断の右下へ、下にふくらませる
+        p0 = { x: A.x, y: A.y + A.h * 0.72 }; p3 = { x: B.x + B.w, y: B.y + B.h * 0.72 };
+        p1 = { x: p0.x - 90, y: p0.y + 26 }; p2 = { x: p3.x + 90, y: p3.y + 26 };
+      } else if (e.a === "feas" && e.b === "infeasible") {
+        p0 = { x: A.x + A.w / 2, y: A.y + A.h }; p3 = { x: B.x + 40, y: B.y }; p1 = { x: p0.x, y: p0.y + 80 }; p2 = { x: p3.x, y: p3.y - 80 };
+      } else {
+        p0 = { x: A.x + A.w, y: A.y + Math.min(24, A.h / 2) }; p3 = { x: B.x, y: B.y + Math.min(24, B.h / 2) };
+        const mx = (p0.x + p3.x) / 2; p1 = { x: mx, y: p0.y }; p2 = { x: mx, y: p3.y };
+      }
+      e.path.setAttribute("d", `M${p0.x},${p0.y} C${p1.x},${p1.y} ${p2.x},${p2.y} ${p3.x},${p3.y}`);
+      const hot = this.cur === e.b && this.lastFrom === e.a && !this.n[e.b].el.classList.contains("done");
+      e.path.setAttribute("class", `gedge ${e.kind} ${e.count ? "used" : ""} ${hot ? "hot" : ""}`);
+      e.path.style.strokeWidth = e.count && e.kind !== "data" ? Math.min(4, 1.4 + e.count * 0.4) : "";
+      // 回数の文字は線の行き先寄りに置く（判断から出る線は、出発点の近くで重なるため）
+      const at = e.kind === "back" ? 0.5 : e.a === "hub" ? 0.78 : 0.5;
+      const lp = bezierPoint(p0, p1, p2, p3, at);
+      e.label.setAttribute("x", lp.x); e.label.setAttribute("y", lp.y - 6);
+      e.label.textContent = e.count && e.kind !== "data" ? `×${e.count}${e.over ? ` · 変更 ${e.over}` : ""}` : "";
+      e.label.setAttribute("class", `glabel ${e.over ? "over" : ""}`);
+      e.pts = [p0, p1, p2, p3];
+    }
+    // 流れている点（0.7 秒で線をたどる）
+    this.tokens = this.tokens.filter((k) => {
+      const u = (t - k.t0) / 700; if (u >= 1) { k.dot?.remove(); return false; }
+      if (!k.dot) { k.dot = document.createElementNS("http://www.w3.org/2000/svg", "circle"); k.dot.setAttribute("r", "5"); k.dot.setAttribute("class", "token"); gsvg.appendChild(k.dot); }
+      const p = bezierPoint(...k.e.pts, easeOut(u)); k.dot.setAttribute("cx", p.x); k.dot.setAttribute("cy", p.y);
+      return true;
+    });
+    // LLM が選んだが変えられた行き先: 点線を 2.5 秒かけて消す
+    this.ghosts = this.ghosts.filter((g) => {
+      const u = (t - g.t0) / 2500; if (u >= 1) { g.el?.remove(); return false; }
+      if (!g.el) { g.el = document.createElementNS("http://www.w3.org/2000/svg", "path"); g.el.setAttribute("class", "gedge ghost"); gsvg.appendChild(g.el); }
+      const [p0, p1, p2, p3] = g.e.pts;
+      g.el.setAttribute("d", `M${p0.x},${p0.y + 8} C${p1.x},${p1.y + 8} ${p2.x},${p2.y + 8} ${p3.x},${p3.y + 8}`);
+      g.el.style.opacity = (1 - u).toFixed(2);
+      return true;
+    });
+  },
+  bounds() {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const n of Object.values(this.n)) { if (!n) continue; x0 = Math.min(x0, n.x); y0 = Math.min(y0, n.y); x1 = Math.max(x1, n.x + n.el.offsetWidth); y1 = Math.max(y1, n.y + n.el.offsetHeight); }
+    return { x0, y0, x1, y1 };
+  },
+  details(id) {
+    const n = this.n[id];
+    document.querySelectorAll(".fnode.sel").forEach((x) => x.classList.remove("sel")); n.el.classList.add("sel");
+    const kv = [["通った回数", `${this.visits[id]} 回`], ["かかった時間", this.seconds[id] ? `${Math.round(this.seconds[id])} 秒` : ""]];
+    const list = n.hist.map((x) => esc(x));
+    if (id === "pages") list.splice(0, list.length, ...Object.keys(this.pageChip).map((u) => `${esc(host(u))} — ${link(u)}`));
+    showDetails({ title: n.label, kv, list, note: id === "pages" ? "アイコンを押すと、そのページで確かめた事実と引用が出ます。" : "" });
+  },
+  pageDetails(url) { const d = info["p:" + url]; if (d) showDetails(d); },
+};
+function bezierPoint(p0, p1, p2, p3, t) {
+  const u = 1 - t;
+  return { x: u * u * u * p0.x + 3 * u * u * t * p1.x + 3 * u * t * t * p2.x + t * t * t * p3.x,
+           y: u * u * u * p0.y + 3 * u * u * t * p1.y + 3 * u * t * t * p2.y + t * t * t * p3.y };
 }
 
 // ---- 調査の開始・答え・一覧 ----

@@ -31,9 +31,14 @@
 
   <section class="tele" aria-label="作業の流れ">
     <div class="flow" id="flow">
-      <div class="canvas" id="canvas"><svg class="edges" id="edges"></svg></div>
-      <p class="flow-empty" id="flowEmpty">調査を始めると、ここに作業の流れが木の形で伸びていきます。<br>ホイールやピンチで拡大、ドラッグで移動できます。</p>
+      <div class="canvas" id="canvas" hidden><svg class="edges" id="edges"></svg></div>
+      <div class="canvas graph" id="graph"><svg class="edges" id="gedges"></svg></div>
+      <p class="flow-empty" id="flowEmpty" hidden>調査を始めると、ここに作業の流れが木の形で伸びていきます。<br>ホイールやピンチで拡大、ドラッグで移動できます。</p>
 
+      <div class="hud hud-top" role="group" aria-label="表示">
+        <button type="button" data-view="flow" aria-pressed="true">流れ</button>
+        <button type="button" data-view="tree" aria-pressed="false">木</button>
+      </div>
       <div class="hud hud-left" id="replayCtl" hidden role="group" aria-label="再生">
         <button type="button" id="playBtn">一時停止</button>
         <button type="button" data-speed="8" aria-pressed="true">8×</button>
