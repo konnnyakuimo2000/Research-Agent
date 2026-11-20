@@ -169,7 +169,7 @@ function fitTarget() {
 }
 function zoomAt(mx, my, factor) {
   fitMode(false);
-  const s = clamp(camT.s * factor, MIN_ZOOM * 0.7, MAX_ZOOM);
+  const s = clamp(camT.s * factor, 0.05, MAX_ZOOM);   // 自分で縮小するときは、自動より小さくできる
   camT = { x: mx - (mx - camT.x) * (s / camT.s), y: my - (my - camT.y) * (s / camT.s), s };
 }
 function jumpTo(id) {
@@ -183,17 +183,27 @@ flow.addEventListener("wheel", (e) => {
   const r = flow.getBoundingClientRect();
   zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0018)));
 }, { passive: false });
-const pointers = new Map(); let pinch = null;
+// 移動: ノードの上からでも、少し動かせばドラッグにする（木が大きいと、窓がノードで埋まってつかむ場所がなくなるため）。
+// 動かさずに離したら、これまでどおりノードを押したことになる。
+// マウスで押し始めるたびに、取り逃した「離した」の記録を消す（残っていると 2 本指のピンチと見なされ、動かせなくなる）
+const pointers = new Map(); let pinch = null, downAt = null, dragged = false;
 flow.addEventListener("pointerdown", (e) => {
-  if (e.target.closest(".node, .fnode, .hud, .drawer")) return;
-  flow.setPointerCapture(e.pointerId); pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  flow.classList.add("dragging"); fitMode(false);
-  if (pointers.size === 2) { const [a, b] = [...pointers.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) }; }
+  if (e.button > 0 || e.target.closest(".hud, .drawer, .toggle, .pchip, a")) return;
+  if (e.pointerType === "mouse") pointers.clear();
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 1) { downAt = { x: e.clientX, y: e.clientY }; dragged = false; }
+  if (pointers.size === 2) { const [a, b] = [...pointers.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) }; dragged = true; }
 });
 flow.addEventListener("pointermove", (e) => {
   const prev = pointers.get(e.pointerId); if (!prev) return;
+  if (e.pointerType === "mouse" && e.buttons === 0) { pointers.clear(); flow.classList.remove("dragging"); return; }   // 離したのに届かなかった
   const now = { x: e.clientX, y: e.clientY }; pointers.set(e.pointerId, now);
   if (pointers.size === 1) {
+    if (!dragged) {
+      if (Math.hypot(now.x - downAt.x, now.y - downAt.y) < 5) return;
+      dragged = true; fitMode(false); flow.classList.add("dragging");
+      try { flow.setPointerCapture(e.pointerId); } catch (err) { /* 取れなくても動かせる */ }
+    }
     const dx = now.x - prev.x, dy = now.y - prev.y;
     camT.x += dx; camT.y += dy; cam.x += dx; cam.y += dy;   // ドラッグは遅れなく動かす
   } else if (pointers.size === 2 && pinch) {
@@ -202,7 +212,10 @@ flow.addEventListener("pointermove", (e) => {
   }
 });
 const endPointer = (e) => { pointers.delete(e.pointerId); if (pointers.size < 2) pinch = null; if (!pointers.size) flow.classList.remove("dragging"); };
-flow.addEventListener("pointerup", endPointer); flow.addEventListener("pointercancel", endPointer);
+["pointerup", "pointercancel", "lostpointercapture"].forEach((t) => flow.addEventListener(t, endPointer));
+window.addEventListener("blur", () => { pointers.clear(); flow.classList.remove("dragging"); });
+// ドラッグした後の「押した」は、ノードの選択にしない
+flow.addEventListener("click", (e) => { if (dragged) { e.stopPropagation(); e.preventDefault(); dragged = false; } }, true);
 $("zoomIn").addEventListener("click", () => zoomAt(flow.clientWidth / 2, flow.clientHeight / 2, 1.3));
 $("zoomOut").addEventListener("click", () => zoomAt(flow.clientWidth / 2, flow.clientHeight / 2, 1 / 1.3));
 $("zoomFit").addEventListener("click", () => fitMode(true));
@@ -500,7 +513,9 @@ const HANDLERS = {
     if (!ng && !NEEDS_PERMISSION.test(license)) {
       const src = withKey(`/api/image?run=${encodeURIComponent(runId)}&src=${encodeURIComponent(e.src)}`);
       th.innerHTML = `<img src="${src}" alt="${esc(e.description)}">`; info[id].photo = src; info[id].alt = e.description;
-    } else th.innerHTML = ng ? "—" : "許可が<br>必要";
+    } else if (ng && !NEEDS_PERMISSION.test(license)) {
+      th.innerHTML = `<img src="${withKey(`/api/image?run=${encodeURIComponent(runId)}&src=${encodeURIComponent(e.src)}`)}" alt="" onerror="this.remove()"><span class="un">不採用</span>`;
+    } else th.innerHTML = "許可が<br>必要";
     info[id].kv.push(["判定", esc(e.level)], ["理由", esc(e.reason)], ["写っているもの", esc(e.description)],
       ["文脈 V-1 / 見た目 V-3", e.context ? esc(`${e.context} / ${e.visual}`) : ""], ["画像の中の文字", esc(e.visible_text)],
       ["画像で確かめた特徴", esc((e.features_seen || []).join("、"))], ["ライセンス", esc(license)]);
@@ -508,7 +523,9 @@ const HANDLERS = {
   "image.final": (e) => {
     order.filter((k) => k.startsWith("i:") && N[k].parent === work && N[k].el.classList.contains("running")).forEach((k) => {
       setState(k, "planned"); setSub(k, "未確認（確認済みがそろった、または確かめる数の上限）"); step(k, 1, "ng"); step(k, 2, "ng");
-      N[k].el.querySelector(".thumb").textContent = "未確認";
+      const lic = N[k].license || "", src = k.slice(2);
+      N[k].el.querySelector(".thumb").innerHTML = NEEDS_PERMISSION.test(lic) ? "未確認"
+        : `<img src="${withKey(`/api/image?run=${encodeURIComponent(runId)}&src=${encodeURIComponent(src)}`)}" alt="" onerror="this.remove()"><span class="un">未確認</span>`;
     });
     (e.withheld || []).forEach((w) => { const id = "i:" + w.src; if (!N[id]) return; N[id].el.classList.add("dropped"); setSub(id, "確認済み · 許可が必要なので載せない"); info[id].kv.push(["報告", esc(w.why)]); });
     if (N[work]) setSub(work, `確かめた ${order.filter((k) => k.startsWith("i:") && N[k].parent === work).length} · 載せる ${e.shown.length}`);
@@ -823,8 +840,15 @@ const FLOW = {
       case "image.fetched": {
         if (!e.ok) break;
         f.node("imgs"); f.setState("imgs", "done"); f.edge("images", "imgs", "data");
-        const th = document.createElement("div"); th.className = "th"; th.textContent = "…"; th.title = e.title || e.src;
-        f.n.imgs.el.querySelector(".thumbs").appendChild(th); f.thumb[e.src] = th; f.layout();
+        const th = document.createElement("div"); th.className = "th"; th.title = e.title || e.src;
+        f.thumb[e.src] = th;
+        // 取ってきた画像が粒になって「画像の候補」へ流れ、届いたところでサムネイルが現れる
+        f.flow("images", "imgs", 1, () => {
+          th.innerHTML = NEEDS_PERMISSION.test(e.license || "") ? "許可が<br>必要"
+            : `<img src="${withKey(`/api/image?run=${encodeURIComponent(runId)}&src=${encodeURIComponent(e.src)}`)}" alt="" onerror="this.remove()">`;
+          if (NEEDS_PERMISSION.test(e.license || "")) th.classList.add("lock");
+          f.n.imgs.el.querySelector(".thumbs").appendChild(th); f.layout();
+        });
         break;
       }
       case "image.llm": { const th = f.thumb[e.src]; if (th) th.classList.add("llm"); f.setText("images", undefined, "VLM が対象かどうか確かめている"); break; }
@@ -832,12 +856,11 @@ const FLOW = {
         const th = f.thumb[e.src]; if (!th) break;
         th.classList.remove("llm"); th.dataset.done = e.level;
         const ok = e.level !== "不採用";
-        const show = () => {
-          if (!ok) { th.classList.add("ng"); th.textContent = "✕"; }
-          else if (NEEDS_PERMISSION.test(e.license || "")) { th.classList.add("lock"); th.innerHTML = "許可が<br>必要"; }
-          else th.innerHTML = `<img src="${withKey(`/api/image?run=${encodeURIComponent(runId)}&src=${encodeURIComponent(e.src)}`)}" alt="${esc(e.description)}">`;
-        };
-        if (ok) f.flow("images", "imgs", 1, show); else show();   // 採用した画像が「確かめた画像」へ流れる
+        // 判定が出たサムネイルは、一瞬縁取りが光る。不採用は点線の枠と「不採用」のラベル（画像は色付きのまま）
+        th.classList.add(ok ? "ok" : "ng", "flash"); setTimeout(() => th.classList.remove("flash"), 900);
+        if (NEEDS_PERMISSION.test(e.license || "")) { th.classList.add("lock"); th.innerHTML = "許可が<br>必要"; }
+        else if (!ok) th.insertAdjacentHTML("beforeend", `<span class="un">不採用</span>`);
+        th.title = `${e.level}: ${e.description || e.reason || ""}`;
         f.push("images", `${e.level}: ${e.description || e.reason || ""}`);
         break;
       }
@@ -848,7 +871,7 @@ const FLOW = {
         const why = confirmed >= 2 ? "確認済みの画像が 2 枚そろったので、残りは確かめていない" : "確かめる数の上限（6 枚）に達したので、残りは確かめていない";
         ths.filter(([, th]) => !th.dataset.done).forEach(([src, th]) => {
           th.classList.add("unchecked"); th.title = `未確認: ${why}`;
-          th.innerHTML = `<img src="${withKey(`/api/image?run=${encodeURIComponent(runId)}&src=${encodeURIComponent(src)}`)}" alt="" onerror="this.remove()"><span class="un">未確認</span>`;
+          if (!th.classList.contains("lock")) th.insertAdjacentHTML("beforeend", `<span class="un">未確認</span>`);
         });
         f.unchecked = ths.length - checked.length; f.uncheckedWhy = why;
         f.setText("images", `載せる ${e.shown.length} 枚`, `確かめた ${checked.length} 枚`);
@@ -908,6 +931,10 @@ const FLOW = {
     }
     const fmt = (p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`;
     const pens = [];
+    // 集まったもののノードが忙しい間（ページを読んでいる、画像を確かめている）は、そこへの線とノードを光らせる
+    const imgsBusy = Object.values(this.thumb).some((th) => th.classList.contains("llm")) || this.particles.some((q) => q.e.b === "imgs");
+    const pagesBusy = Object.values(this.pageChip).some((c) => c.classList.contains("running") || c.classList.contains("llm"));
+    this.n.imgs?.el.classList.toggle("busy", imgsBusy); this.n.pages?.el.classList.toggle("busy", pagesBusy);
     for (const e of Object.values(this.e)) {
       const full = e.pts = this.geometry(e);
       const grow = clamp((t - e.born) / 1000 / STEM);
@@ -915,7 +942,8 @@ const FLOW = {
       e.path.setAttribute("d", `M${fmt(p0)} C${fmt(p1)} ${fmt(p2)} ${fmt(p3)}`);
       if (grow < 1) pens.push(p3);   // 描いている途中の線の先に、鉛筆の先を出す
       const target = this.n[e.b];
-      const hot = this.cur === e.b && this.lastFrom === e.a && ["running", "llm", "waiting"].some((c) => target.el.classList.contains(c));
+      const hot = (this.cur === e.b && this.lastFrom === e.a && ["running", "llm", "waiting"].some((c) => target.el.classList.contains(c)))
+        || (e.b === "imgs" && imgsBusy) || (e.b === "pages" && pagesBusy);
       const busyData = e.kind === "data" && this.particles.some((q) => q.e === e);
       e.path.setAttribute("class", `gedge ${e.kind} ${e.count || busyData ? "used" : ""} ${hot ? "hot" : ""} ${grow < 1 ? "growing" : ""}`);
       e.path.style.strokeWidth = e.count && e.kind !== "data" ? Math.min(4, 1.4 + e.count * 0.4) : "";

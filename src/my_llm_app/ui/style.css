@@ -287,10 +287,16 @@ button:focus-visible, .node:focus-visible, input:focus-visible { outline: 2px so
   font-size: 9px; color: var(--muted); animation: pop .45s cubic-bezier(.3,1.6,.5,1); position: relative; }
 .thumbs .th img { width: 100%; height: 100%; object-fit: cover; }
 .thumbs .th.llm { border-color: var(--ink); } .thumbs .th.llm::after { content: ""; position: absolute; inset: 0; border: 2px solid var(--ink); border-radius: 6px; animation: pulse 1s infinite; }
-.thumbs .th.ng { color: var(--muted); border-style: dashed; }
-.thumbs .th.unchecked { border-style: dashed; }
-.thumbs .th.unchecked img { opacity: .4; filter: grayscale(1); }
-.thumbs .th .un { position: absolute; inset: auto 0 0 0; font-size: 8.5px; text-align: center; background: color-mix(in srgb, var(--bg) 75%, transparent); color: var(--ink); } .thumbs .th.lock { font-size: 8px; text-align: center; line-height: 1.1; }
+.thumbs .th.ng { border-style: dashed; border-color: var(--muted); }
+.thumbs .th.ok { border: 1.5px solid var(--ink); }
+.thumbs .th.unchecked { border-style: dotted; }
+/* 判定が出たときの光る縁取りは、別の層（::before）で出す。サムネイル自体の animation（現れるときに膨らむ）を上書きすると、
+   光り終わって戻したときに膨らみ直してしまうため */
+.thumbs .th.flash::before { content: ""; position: absolute; inset: -1px; border-radius: 6px; pointer-events: none; animation: flash .9s ease-out forwards; }
+@keyframes flash { 0% { box-shadow: 0 0 0 0 var(--ink); } 100% { box-shadow: 0 0 0 7px transparent; } }
+.fnode.busy { border-color: var(--ink); animation: ring 1.4s infinite; }
+.th .un, .thumb .un { position: absolute; inset: auto 0 0 0; font-size: 8.5px; line-height: 1.5; text-align: center; background: color-mix(in srgb, var(--bg) 80%, transparent); color: var(--ink); }
+.thumb { position: relative; } .thumbs .th.lock { font-size: 8px; text-align: center; line-height: 1.1; }
 .gedge { fill: none; stroke: var(--muted); stroke-width: 1.5; }
 .gedge.used, .gedge.hot, .gedge.ghost { opacity: 1; }
 .gedge.back { stroke-dasharray: 1 0; }
