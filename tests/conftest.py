@@ -15,3 +15,11 @@ def no_external_lookups():
          patch("my_llm_app.agent.nodes.images.related_images", return_value=[]):
         yield
     http.clear_cache()
+
+
+@pytest.fixture(autouse=True)
+def no_configured_internal_hosts(monkeypatch):
+    """.env の LLM・SearXNG を、公開取得で拒む内部のサービスとして扱わない（偽の名前引きと混ざると、
+    テストの順番によって結果が変わるため）。内部の扱いを確かめるテストは自分で設定する。"""
+    monkeypatch.setattr(http, "INTERNAL_HOSTS", set())
+    monkeypatch.setattr(http, "_internal_ips", {})
