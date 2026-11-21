@@ -190,3 +190,161 @@ def test_one_page_with_broken_llm_output_does_not_lose_other_pages():
     assert [f["source"] for f in out["verified"]] == ["https://good.example/2"]
     traced = {p["url"]: p for p in out["trace"][0]["pages"]}
     assert "JSON" in traced["https://bad.example/1"]["reason"]          # 実行記録にも理由が残る
+
+
+# ---- 1. 公開 URL の取得先を制限する ----
+
+def test_public_fetch_allows_public_and_refuses_private_destinations(monkeypatch):
+    import httpx
+    import pytest
+
+    import http_mock
+    from my_llm_app.tools import http
+    sent = http_mock.install(monkeypatch, lambda r: httpx.Response(200, text="ok"),
+                             ips={"intra.example": "10.0.0.5", "meta.example": "169.254.169.254", "v6.example": "::1"})
+    assert http.get("https://pub.example/a").text == "ok"
+    for url in ("http://intra.example/admin", "http://meta.example/latest/meta-data", "http://v6.example/",
+                "file:///etc/passwd", "ftp://pub.example/x"):
+        with pytest.raises(http.BlockedDestination):
+            http.get(url)
+    assert [str(r.url) for r in sent] == ["https://pub.example/a"]      # 拒否した宛先には 1 回も送っていない
+
+
+def test_redirects_are_followed_one_by_one_with_the_same_check(monkeypatch):
+    import httpx
+    import pytest
+
+    import http_mock
+    from my_llm_app.tools import http
+
+    def handler(request):
+        if request.url.host == "pub.example" and request.url.path == "/to-public":
+            return httpx.Response(302, headers={"location": "https://other.example/page"})
+        if request.url.host == "pub.example" and request.url.path == "/to-private":
+            return httpx.Response(302, headers={"location": "http://intra.example/secret"})
+        return httpx.Response(200, text=f"from {request.url.host}")
+
+    sent = http_mock.install(monkeypatch, handler, ips={"intra.example": "192.168.1.10"})
+    r = http.get("https://pub.example/to-public")
+    assert r.text == "from other.example" and str(r.url) == "https://other.example/page"   # 最終の URL がわかる
+    sent.clear()
+    with pytest.raises(http.BlockedDestination):
+        http.get("https://pub.example/to-private")
+    assert [r.url.host for r in sent] == ["pub.example"]                # 転送先（内部）には送っていない
+
+
+def test_connection_is_made_to_the_checked_address_only(monkeypatch):
+    import httpcore
+    import pytest
+
+    from my_llm_app.tools import http
+    monkeypatch.setattr(http, "resolve", lambda host, port: {"pub.example": ["93.184.216.34"],
+                                                             "mixed.example": ["93.184.216.34", "10.1.2.3"]}[host])
+    connected = []
+    monkeypatch.setattr(httpcore.SyncBackend, "connect_tcp", lambda self, host, port, *a, **k: connected.append(host) or "stream")
+    backend = http.PublicOnlyBackend()
+    assert backend.connect_tcp("pub.example", 443) == "stream"
+    assert connected == ["93.184.216.34"]                               # 名前を引き直さず、確かめた IP につなぐ
+    with pytest.raises(http.BlockedDestination):
+        backend.connect_tcp("mixed.example", 443)                       # 内部のアドレスが混じる名前は信じない
+    assert http.is_public_ip("8.8.8.8") and not http.is_public_ip("127.0.0.1")
+    assert not http.is_public_ip("100.64.0.1") and not http.is_public_ip("::ffff:10.0.0.1")
+
+
+def test_internal_services_and_proxy_settings(monkeypatch):
+    import httpx
+
+    import http_mock
+    from my_llm_app.tools import http
+    http_mock.install(monkeypatch, lambda r: httpx.Response(200, json={"results": []}), ips={"searxng": "172.18.0.3"})
+    assert http.get("http://searxng:8080/search", public=False).status_code == 200   # 設定済みの内部サービスは従来どおり
+    assert http._public_client().trust_env is False                     # 環境変数のプロキシ設定で迂回しない
+
+
+# ---- 2. HTML と画像のサイズ上限を受信中に当てる ----
+
+def test_size_limit_is_applied_while_receiving(monkeypatch):
+    import httpx
+    import pytest
+
+    import http_mock
+    from my_llm_app.tools import http
+    pulled = []
+
+    def chunks():
+        for i in range(10):
+            pulled.append(i)
+            yield b"x" * 1000
+
+    http_mock.install(monkeypatch, lambda r: httpx.Response(200, content=chunks()))   # Content-Length なし
+    assert len(http.get("https://pub.example/exact", max_bytes=10_000).content) == 10_000   # ちょうどは通る
+    pulled.clear()
+    with pytest.raises(http.ResponseTooLarge):
+        http.get("https://pub.example/big", max_bytes=2_500)
+    assert len(pulled) == 3                                             # 超えた時点でやめ、残りは読まない
+    assert not any("big" in k for k in http._cache)                     # 途中までの応答は覚えない
+    with pytest.raises(http.ResponseTooLarge):
+        http.get("https://pub.example/exact", max_bytes=5_000)           # 覚えた応答にも呼び出し側の上限が効く
+
+
+def test_too_large_page_and_image_are_one_candidate_failures(monkeypatch):
+    import httpx
+
+    import http_mock
+    from my_llm_app.tools import fetch, images
+    monkeypatch.setattr(fetch, "MAX_BYTES", 1000)
+    monkeypatch.setattr(images, "MAX_BYTES", 1000)
+    http_mock.install(monkeypatch, lambda r: httpx.Response(200, headers={"content-type": "text/html"},
+                                                            content=iter([b"<p>" + b"a" * 600, b"b" * 600])))
+    assert fetch.fetch_page("https://pub.example/huge").reason == "大きすぎる"
+    assert images.fetch_image("https://pub.example/huge.jpg").reason == "大きすぎる"
+
+
+# ---- 3. 本文の発行元と Tier を転送先に合わせる ----
+
+ARTICLE = "<html><head><title>水星 - Wikipedia</title></head><body><article><p>" + "水星は太陽系で最も内側を公転する惑星である。" * 8 + "</p></article></body></html>"
+
+
+def _redirecting(monkeypatch, target):
+    import httpx
+
+    import http_mock
+
+    def handler(request):
+        if request.url.host == "blog.example.com":
+            return httpx.Response(301, headers={"location": target})
+        return httpx.Response(200, headers={"content-type": "text/html; charset=utf-8"}, text=ARTICLE)
+    return http_mock.install(monkeypatch, handler)
+
+
+def test_redirected_page_is_cited_and_tiered_as_its_final_url(monkeypatch):
+    from my_llm_app.agent import prompts
+    from my_llm_app.agent.nodes import Nodes
+    from my_llm_app.config import Settings
+    final = "https://ja.wikipedia.org/wiki/%E6%B0%B4%E6%98%9F"     # Location は符号化した形で届く
+    sent = _redirecting(monkeypatch, final)
+
+    class LLM:
+        def chat_json(self, system, user, schema, temperature=0.2, image_data_url=None):
+            return {"facts": [{"text": "最も内側を公転する", "quote": "水星は太陽系で最も内側を公転する惑星である",
+                               "aspect": "特徴", "about": prompts.ABOUT_TARGET}],
+                    "other_entity": "", "features": [], "new_terms": [], "page_tier": {"adjust": "そのまま", "reason": ""}}
+
+    settings = Settings(llm_base_url="http://unused/v1", llm_model="m", llm_api_key="k", searxng_url="http://unused")
+    state = {"request": "水星", "target": TARGET, "aspects": [{"name": "特徴", "words": "特徴"}], "subject_type": "自然物",
+             "databases_checked": True, "reading_list": ["https://blog.example.com/mercury"]}
+    out = Nodes(settings, LLM()).read_pages(state)
+    assert [f["source"] for f in out["verified"]] == [final]            # 出典は本文の発行元
+    assert out["coverage"][0]["best_tier"] == 2                         # Tier も転送先（Wikipedia）で付く
+    assert out["pages_read"][0]["final_url"] == final
+    # 同じ転送元が再び候補に入っても、読み直さない
+    sent.clear()
+    again = Nodes(settings, LLM()).read_pages({**state, **out, "reading_list": ["https://blog.example.com/mercury", final]})
+    assert sent == [] and again["pages_read"] == out["pages_read"]
+
+
+def test_redirect_to_an_excluded_site_is_not_used(monkeypatch):
+    from my_llm_app.tools import fetch
+    _redirecting(monkeypatch, "https://www.pinterest.jp/pin/1")
+    page = fetch.fetch_page("https://blog.example.com/mercury")
+    assert not page.ok and "転送先" in page.reason and page.final_url == "https://www.pinterest.jp/pin/1"

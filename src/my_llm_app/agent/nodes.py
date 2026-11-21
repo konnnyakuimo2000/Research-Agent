@@ -309,7 +309,8 @@ class Nodes:
             extra.update(self._lookup_databases(state, ev))
             state = {**state, **extra}
 
-        done = {canonical(p["url"]) for p in state.get("pages_read", [])}
+        # 読んだページは、要求した URL と転送先の URL の両方で既読とする（同じ転送元・転送先を読み直さない）
+        done = {canonical(u) for p in state.get("pages_read", []) for u in (p["url"], p.get("final_url") or p["url"])}
         queue = by_tier(state.get("priority_urls", [])) + state.get("reading_list", [])
         urls = []
         for u in queue:
@@ -345,9 +346,11 @@ class Nodes:
                 for link in follow_links(page, self._target_name(state), set(state.get("reading_list", []))):
                     depth[link] = depth.get(page.url, 0) + 1
                     new_links.append(link)
+            final = getattr(page, "source_url", page.url)
             if page.ok and page.title:
                 pages.setdefault(page.url, page.title)
-            key = canonical(page.url)
+                pages.setdefault(final, page.title)
+            key = canonical(final)
             if meta.get("signature"):
                 # 転載の見分け（6.3）: 先に読んだページとほぼ同じ文章なら、そのページの写しとして記録する
                 if original := reprints.find_original(meta["signature"], signatures):
@@ -363,7 +366,7 @@ class Nodes:
             verified += facts
             page_imgs += [{**im, "page_url": page.url, "title": page.title} for im in page.images]
             ok, reason = page.ok and not meta.get("error"), meta.get("error") or page.reason
-            reads.append({"url": page.url, "ok": ok, "reason": reason,
+            reads.append({"url": page.url, "final_url": final, "ok": ok, "reason": reason,
                           "extracted": len(facts) + len(dropped), "verified": len(facts)})
             traces.append({"url": page.url, "ok": ok, "reason": reason,
                            "verified": facts, "dropped": dropped, "reprint_of": copies.get(key, ""),
@@ -452,7 +455,8 @@ class Nodes:
             return page, [], [], "", {}
         text = page.text[:MAX_PAGE_CHARS]
         names = [a["name"] for a in state.get("aspects", [])]
-        base = page_tier(url, state)
+        source = getattr(page, "source_url", url) if not record else url   # 本文の発行元（転送されていれば転送先）
+        base = page_tier(source, state)
         ev("page.llm", url=url)
         try:
             out = self.llm.chat_json(prompts.EXTRACT_SYSTEM, prompts.extract_user(state, page.title, text, base),
@@ -471,11 +475,11 @@ class Nodes:
                 dropped.append({**f, "dropped": "対象そのものについての記述ではない"})
             elif quote_in_text(f.get("quote", ""), text):
                 aspect = f.get("aspect") if f.get("aspect") in names else cov.OTHER_ASPECT
-                facts.append({"text": f["text"], "quote": f["quote"], "aspect": aspect, "source": url})
+                facts.append({"text": f["text"], "quote": f["quote"], "aspect": aspect, "source": source})
             else:
                 dropped.append(f)
-        meta = page_meta(out, text, url, base, from_database=bool(record))
-        ev("page.done", url=url, title=page.title, base_tier=base, tier=meta.get("tier", base),
+        meta = page_meta(out, text, source, base, from_database=bool(record))
+        ev("page.done", url=url, final_url=source, title=page.title, base_tier=base, tier=meta.get("tier", base),
            tier_reason=meta.get("tier_reason", ""), other_entity=out.get("other_entity", "").strip(),
            facts=[{k: f[k] for k in ("text", "aspect", "quote")} for f in facts],
            dropped=[{"text": f.get("text", ""), "quote": f.get("quote", ""),
@@ -826,7 +830,7 @@ def page_meta(out: dict, text: str, url: str, base: int, from_database: bool = F
 def follow_links(page: fetch.Page, name: str, known: set[str]) -> list[str]:
     """R-2: ページからたどる参照を選ぶ（プログラム）。出典欄の中のリンクか、文字や URL に対象の名前がある
     リンクのうち、別のサイトで Tier 1〜2 のものを、Tier の高い順に最大 REFS_PER_PAGE 件。"""
-    host = urlparse(page.url).hostname
+    host = urlparse(getattr(page, "source_url", page.url)).hostname   # 転送先のサイトを基準にする
     picked = []
     for link in page.links:
         href = link["href"].split("#")[0]

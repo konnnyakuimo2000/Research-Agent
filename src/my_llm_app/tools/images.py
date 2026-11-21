@@ -50,7 +50,11 @@ class FetchedImage:
 def fetch_image(src: str, timeout: float = 20.0) -> FetchedImage:
     """画像を取得し、使える大きさかを確かめ、LLM に渡す大きさに縮小する（V-5）。"""
     try:
-        r = http.get(src, timeout=timeout, cache=False)   # 画像は大きいので覚えない
+        r = http.get(src, timeout=timeout, cache=False, max_bytes=MAX_BYTES)   # 画像は大きいので覚えない
+    except http.ResponseTooLarge:
+        return FetchedImage(False, "大きすぎる")
+    except http.BlockedDestination:
+        return FetchedImage(False, "公開されていない宛先のため取得しない")
     except httpx.HTTPError as e:
         return FetchedImage(False, f"取得できない（{type(e).__name__}）")
     if r.status_code != 200:

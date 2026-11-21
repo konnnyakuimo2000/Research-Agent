@@ -118,18 +118,18 @@ def test_page_images_keeps_captioned_images_and_skips_icons():
 
 
 def _image_response(size):
+    import httpx
     buf = io.BytesIO()
     Image.new("RGB", size, "white").save(buf, format="JPEG")
-    resp = MagicMock(status_code=200, content=buf.getvalue(), headers={"content-type": "image/jpeg"})
-    return resp
+    return httpx.Response(200, content=buf.getvalue(), headers={"content-type": "image/jpeg"})
 
 
-def test_fetch_image_checks_size_and_shrinks():
-    with patch("my_llm_app.tools.http.httpx.get", return_value=_image_response((1600, 1200))):
-        f = fetch_image("https://x/a.jpg")
+def test_fetch_image_checks_size_and_shrinks(monkeypatch):
+    import http_mock
+    http_mock.install(monkeypatch, lambda r: _image_response((1600, 1200) if r.url.path.endswith("a.jpg") else (120, 90)))
+    f = fetch_image("https://x.example/a.jpg")
     assert f.ok and (f.width, f.height) == (1600, 1200) and f.data_url.startswith("data:image/jpeg;base64,")
-    with patch("my_llm_app.tools.http.httpx.get", return_value=_image_response((120, 90))):
-        assert fetch_image("https://x/b.jpg").reason.startswith("小さすぎる")
+    assert fetch_image("https://x.example/b.jpg").reason.startswith("小さすぎる")
 
 
 class FakeVLM:

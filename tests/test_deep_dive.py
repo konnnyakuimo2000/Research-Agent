@@ -46,9 +46,10 @@ def test_read_pages_keeps_only_verified_quotes_and_records_failures():
     assert [f["text"] for f in out["verified"]] == ["最も内側を公転する", "昼は約430℃"]
     assert all(f["source"] == "https://a.example/1" for f in out["verified"])
     assert out["pages_read"] == [
-        {"url": "https://a.example/1", "ok": True, "reason": "", "extracted": 3, "verified": 2},
-        {"url": "https://broken.example/2", "ok": False, "reason": "取得できない（HTTP 404）",
-         "extracted": 0, "verified": 0},
+        {"url": "https://a.example/1", "final_url": "https://a.example/1", "ok": True, "reason": "",
+         "extracted": 3, "verified": 2},
+        {"url": "https://broken.example/2", "final_url": "https://broken.example/2", "ok": False,
+         "reason": "取得できない（HTTP 404）", "extracted": 0, "verified": 0},
     ]
     assert out["trace"][0]["pages"][0]["dropped"][0]["text"] == "直径は4,880km"
 

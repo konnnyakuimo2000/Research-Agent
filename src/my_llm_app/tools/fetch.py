@@ -26,6 +26,11 @@ class Page:
     reason: str = ""     # 取得できなかった理由（申告と実行記録のため）
     images: list[dict] = field(default_factory=list)   # ページ内の画像（src・alt・キャプション。L4）
     links: list[dict] = field(default_factory=list)    # ページ内のリンク（href・文字・出典欄の中か。R-2）
+    final_url: str = ""  # 転送をたどった後の URL（本文の発行元。出典・Tier・リンクの基準はこちら）
+
+    @property
+    def source_url(self) -> str:
+        return self.final_url or self.url
 
 
 _UNREADABLE_SUFFIXES = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip")
@@ -44,28 +49,38 @@ def is_skipped_domain(url: str) -> bool:
 
 
 def fetch_page(url: str, timeout: float = 20.0) -> Page:
+    """ページを取得して本文を取り出す。公開の宛先だけ（http.get の公開取得）、HTML は MAX_BYTES まで。
+
+    転送された場合は、最終の URL を本文の発行元とする（final_url）。転送先が出典にしないサイトなら読まない。
+    """
     if is_skipped_domain(url):
         return Page(url, reason="出典にしないサイト（転載・まとめ）")
     try:
-        r = http.get(url, timeout=timeout)
+        r = http.get(url, timeout=timeout, max_bytes=MAX_BYTES)
+    except http.ResponseTooLarge:
+        return Page(url, reason="大きすぎる")
+    except http.BlockedDestination:
+        return Page(url, reason="公開されていない宛先のため取得しない")
     except httpx.HTTPError as e:
         return Page(url, reason=f"取得できない（{type(e).__name__}）")
+    final = str(r.url)
+    if final != url and is_skipped_domain(final):
+        return Page(url, reason="転送先が出典にしないサイト（転載・まとめ）", final_url=final)
     if r.status_code != 200:
-        return Page(url, reason=f"取得できない（HTTP {r.status_code}）")
+        return Page(url, reason=f"取得できない（HTTP {r.status_code}）", final_url=final)
     ctype = r.headers.get("content-type", "")
     if "html" not in ctype:
         # PDF などは未対応（本文を読めないものは出典にしない）
-        return Page(url, reason=f"未対応の形式（{ctype.split(';')[0] or '不明'}）")
-    if len(r.content) > MAX_BYTES:
-        return Page(url, reason="大きすぎる")
+        return Page(url, reason=f"未対応の形式（{ctype.split(';')[0] or '不明'}）", final_url=final)
 
     text = trafilatura.extract(r.text, include_comments=False, include_tables=True, favor_precision=True) or ""
     meta = trafilatura.extract_metadata(r.text)
-    title = (meta.title if meta and meta.title else "") or url
+    title = (meta.title if meta and meta.title else "") or final
     if len(text) < 100:
-        return Page(url, title=title, reason="本文が取り出せない")
-    return Page(url, title=title, text=text, ok=True, images=page_images(r.text, str(r.url)),
-                links=page_links(r.text, str(r.url)))
+        return Page(url, title=title, reason="本文が取り出せない", final_url=final)
+    # 画像・リンクの相対 URL は、本文の発行元（最終の URL）を基準にする
+    return Page(url, title=title, text=text, ok=True, images=page_images(r.text, final),
+                links=page_links(r.text, final), final_url=final)
 
 
 _REF_MARKERS = ("reference", "references", "citation", "cite", "footnote", "出典", "参考文献", "脚注", "注釈")

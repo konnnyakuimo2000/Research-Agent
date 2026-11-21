@@ -13,44 +13,44 @@ from my_llm_app.tools import databases, http, images, searxng
 from my_llm_app.tools.databases import lookup as real_lookup   # conftest が差し替える前の本物
 from my_llm_app.tools.images import FetchedImage, ImageCandidate
 
+import http_mock  # noqa: E402  （tests/http_mock.py）
+
 SETTINGS = Settings(llm_base_url="http://unused/v1", llm_model="m", llm_api_key="k", searxng_url="http://sx")
-
-
-def _resp(status=200, json=None, headers=None, content=b"{}"):
-    r = MagicMock(status_code=status, headers=headers or {}, content=content)
-    r.json.return_value = json or {}
-    return r
 
 
 # ---- フェーズ 6: 呼び出しの堅牢化（429・やり直し・キャッシュ・間隔）
 
-def test_http_retries_rate_limits_with_retry_after_and_caches():
+def test_http_retries_rate_limits_with_retry_after_and_caches(monkeypatch):
+    replies = [httpx.Response(429, headers={"retry-after": "2"}), httpx.Response(200, json={"ok": 1})]
+    sent = http_mock.install(monkeypatch, lambda r: replies[min(len(sent) - 1, 1)])
     waits = []
-    calls = [_resp(429, headers={"retry-after": "2"}), _resp(200, json={"ok": 1})]
-    with patch.object(http, "sleep", waits.append), patch("my_llm_app.tools.http.httpx.get", side_effect=calls) as g:
-        assert http.get("https://api.example/x", params={"q": "a"}).json() == {"ok": 1}
-        assert http.get("https://api.example/x", params={"q": "a"}).json() == {"ok": 1}   # 2 回目は覚えた応答
-    assert waits == [2.0] and g.call_count == 2
+    monkeypatch.setattr(http, "sleep", waits.append)
+    assert http.get("https://api.example/x", params={"q": "a"}).json() == {"ok": 1}
+    assert http.get("https://api.example/x", params={"q": "a"}).json() == {"ok": 1}   # 2 回目は覚えた応答
+    assert waits == [2.0] and len(sent) == 2
 
 
-def test_http_gives_up_when_told_to_wait_too_long_and_retries_connect_errors():
-    with patch.object(http, "sleep", lambda s: None), \
-         patch("my_llm_app.tools.http.httpx.get", return_value=_resp(429, headers={"retry-after": "3600"})) as g:
-        assert http.get("https://api.example/slow").status_code == 429       # 1 時間は待たない
-    assert g.call_count == 1
-    calls = [httpx.ConnectError("down"), _resp(200, json={"ok": 2})]
-    with patch.object(http, "sleep", lambda s: None), patch("my_llm_app.tools.http.httpx.get", side_effect=calls):
-        assert http.get("https://api.example/flaky").json() == {"ok": 2}
+def test_http_gives_up_when_told_to_wait_too_long_and_retries_connect_errors(monkeypatch):
+    sent = http_mock.install(monkeypatch, lambda r: httpx.Response(429, headers={"retry-after": "3600"}))
+    assert http.get("https://api.example/slow").status_code == 429       # 1 時間は待たない
+    assert len(sent) == 1
+
+    def flaky(request):
+        if len(sent) == 1:
+            raise httpx.ConnectError("down", request=request)
+        return httpx.Response(200, json={"ok": 2})
+    sent = http_mock.install(monkeypatch, flaky)
+    assert http.get("https://api.example/flaky").json() == {"ok": 2}
 
 
-def test_web_search_retries_once_when_engines_did_not_answer():
+def test_web_search_retries_once_when_engines_did_not_answer(monkeypatch):
     empty = {"results": [], "unresponsive_engines": [["google", "timeout"]]}
     full = {"results": [{"title": "t", "url": "https://a.jp/", "content": "", "engines": ["bing"]}],
             "unresponsive_engines": [["brave", "too many requests"]]}
+    sent = http_mock.install(monkeypatch, lambda r: httpx.Response(200, json=empty if len(sent) == 1 else full))
     waits = []
-    with patch.object(http, "sleep", waits.append), \
-         patch("my_llm_app.tools.http.httpx.get", side_effect=[_resp(json=empty), _resp(json=full)]):
-        out = searxng.web_search("http://sx", "水星")
+    monkeypatch.setattr(http, "sleep", waits.append)
+    out = searxng.web_search("http://sx", "水星")
     assert [w.url for w in out.results] == ["https://a.jp/"]
     assert out.retried and out.unresponsive == ["brave", "google"]   # 1 回目に応答しなかったエンジンも申告する
     assert searxng.RETRY_DELAY in waits

@@ -50,7 +50,8 @@ def parse_response(data: dict, limit: int) -> WebSearchResponse:
 def search_json(base_url: str, params: dict, timeout: float) -> dict:
     """SearXNG に 1 回問い合わせる。間隔をあけ、利用制限はやり直す（http.get）。"""
     url = f"{base_url}/search"
-    r = http.get(url, params={**params, "format": "json"}, timeout=timeout, min_interval=MIN_INTERVAL)
+    # SearXNG は設定済みの内部のサービスなので、公開取得の宛先の制限をかけない
+    r = http.get(url, params={**params, "format": "json"}, timeout=timeout, min_interval=MIN_INTERVAL, public=False)
     r.raise_for_status()
     data = r.json()
     if not data.get("results"):

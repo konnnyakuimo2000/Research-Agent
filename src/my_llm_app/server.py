@@ -303,7 +303,7 @@ def api_status() -> dict:
     def check(url: str) -> dict:
         started = time.time()
         try:
-            r = http_tools.get(url, timeout=4, cache=False)
+            r = http_tools.get(url, timeout=4, cache=False, public=False)   # 設定済みの LLM・SearXNG
             return {"ok": r.status_code == 200, "seconds": round(time.time() - started, 1)}
         except Exception as e:  # noqa: BLE001 - つながらない理由を画面に出す
             return {"ok": False, "error": type(e).__name__}
