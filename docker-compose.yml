@@ -1,4 +1,5 @@
-# Open WebUI + SearXNG + ゲートウェイ（画面）+ エージェント（調査・チャット）
+# Open WebUI + SearXNG + ゲートウェイ（画面）+ エージェント（調査・チャット）+ モデルの窓口
+# 三層: webui（画面と記録）→ agent-*（調べ方）→ model-gateway（どのモデルに送るか）
 # ゲートウェイとエージェントは契約（/agent/v1/*）だけで話す。エージェントを足すときは、ここにサービスを足し、
 # config/agents.toml に 1 項目足す（docs/telemetry_enhancement_plan.md 3 章）
 # 使い方: docker compose up -d   (停止: docker compose down)
@@ -55,14 +56,16 @@ services:
       - agent-chat
     restart: unless-stopped
 
-  # 調査エージェント（契約の 0・1 段と research/v1）。外には出さず、ゲートウェイからだけ呼ぶ
+  # 調査エージェント（契約の 0・1 段と research/v1）。外には出さず、ゲートウェイからだけ呼ぶ。
+  # モデルはモデルの窓口を通して呼ぶ（LLM の鍵は持たない）
   agent-research:
     image: my_llm_app-app:local
     command: ["/app/.venv/bin/uvicorn", "--factory", "my_llm_app.agents.research:create_app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
+      MODEL_GATEWAY_URL: http://model-gateway:8000/v1
+      MODEL_GATEWAY_KEY: ${MODEL_GATEWAY_KEY:-}
+      # 研究室の LLM の宛先は、公開ページの取得で拒むためだけに渡す（呼び出しは窓口を通す）
       VL_BASE_URL: ${VL_BASE_URL:?.env に VL_BASE_URL を設定してください}
-      VL_MODEL: ${VL_MODEL:-qwen3.8-27b}
-      VL_API_KEY: ${VL_API_KEY:-dummy}
       AGENT_SERVICE_KEY: ${AGENT_SERVICE_KEY:-}
       CINII_APPID: ${CINII_APPID:-}
       SEARXNG_URL: http://searxng:8080
@@ -70,6 +73,7 @@ services:
       - ./runs/agent-research:/app/runs/agent-research   # 調べた状態の全体（調べ直すため）
     depends_on:
       - searxng
+      - model-gateway
     restart: unless-stopped
 
   # チャット（契約の 0 段だけ）。Open WebUI の裏処理（タイトル生成など）も受け持つ
@@ -77,10 +81,24 @@ services:
     image: my_llm_app-app:local
     command: ["/app/.venv/bin/uvicorn", "--factory", "my_llm_app.agents.chat:create_app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
+      MODEL_GATEWAY_URL: http://model-gateway:8000/v1
+      MODEL_GATEWAY_KEY: ${MODEL_GATEWAY_KEY:-}
+      VL_BASE_URL: ${VL_BASE_URL:?.env に VL_BASE_URL を設定してください}
+      AGENT_SERVICE_KEY: ${AGENT_SERVICE_KEY:-}
+    depends_on:
+      - model-gateway
+    restart: unless-stopped
+
+  # モデルの窓口（第 3 層）。config/models.toml のモデルに送る。やり直し・モデルごとの同時実行の上限・使用量を
+  # すべてのエージェントをまたいで受け持つ。LLM の接続先と鍵を持つのはここだけ
+  model-gateway:
+    image: my_llm_app-app:local
+    command: ["/app/.venv/bin/uvicorn", "--factory", "my_llm_app.modelgw.app:create_app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
       VL_BASE_URL: ${VL_BASE_URL:?.env に VL_BASE_URL を設定してください}
       VL_MODEL: ${VL_MODEL:-qwen3.8-27b}
       VL_API_KEY: ${VL_API_KEY:-dummy}
-      AGENT_SERVICE_KEY: ${AGENT_SERVICE_KEY:-}
+      MODEL_GATEWAY_KEY: ${MODEL_GATEWAY_KEY:-}
     restart: unless-stopped
 
   searxng:

@@ -140,22 +140,20 @@ _status: dict = {}
 
 
 def health(settings) -> dict:
-    """研究室の LLM サーバーと検索（SearXNG）につながるか（20 秒覚えておく）。"""
+    """モデル（窓口を通すときは窓口）と検索（SearXNG）につながるか（20 秒覚えておく）。"""
     if _status and time.time() - _status["at"] < 20:
         return _status["value"]
+    from my_llm_app.modelgw.status import model_check
     from my_llm_app.tools import http as http_tools
 
-    def check(url: str) -> dict:
-        started = time.time()
-        try:
-            r = http_tools.get(url, timeout=4, cache=False, public=False)   # 設定済みの LLM・SearXNG
-            return {"ok": r.status_code == 200, "seconds": round(time.time() - started, 1)}
-        except Exception as e:  # noqa: BLE001 - つながらない理由を画面に出す
-            return {"ok": False, "error": type(e).__name__}
-
-    value = {"model": settings.llm_model, "checks": {
-        "llm": {"title": "LLM", "hint": "VPN を確認", **check(settings.llm_base_url.rstrip("/") + "/models")},
-        "search": {"title": "検索", "hint": "検索につながらない", **check(settings.searxng_url.rstrip("/") + "/healthz")}}}
+    started = time.time()
+    try:
+        r = http_tools.get(settings.searxng_url.rstrip("/") + "/healthz", timeout=4, cache=False, public=False)
+        search = {"ok": r.status_code == 200, "seconds": round(time.time() - started, 1)}
+    except Exception as e:  # noqa: BLE001 - つながらない理由を画面に出す
+        search = {"ok": False, "error": type(e).__name__}
+    model, llm = model_check(settings)
+    value = {"model": model, "checks": {"llm": llm, "search": {"title": "検索", "hint": "検索につながらない", **search}}}
     _status.update(at=time.time(), value=value)
     return value
 

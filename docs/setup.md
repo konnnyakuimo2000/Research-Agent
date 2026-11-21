@@ -53,17 +53,18 @@ docker compose up -d
 docker compose ps
 ```
 
-`open-webui`・`searxng`・`webui`（ゲートウェイ）・`agent-research`（調査エージェント）・`agent-chat`（チャット）の 5 つが `Up` になっていれば OK（`open-webui` が `healthy` になるまで数分かかる）。
+`open-webui`・`searxng`・`webui`（ゲートウェイ）・`agent-research`（調査エージェント）・`agent-chat`（チャット）・`model-gateway`（モデルの窓口）の 6 つが `Up` になっていれば OK（`open-webui` が `healthy` になるまで数分かかる）。
 
-画面とエージェントは別のサービスに分かれている（2026-11-21 から）。
+画面・エージェント・モデルの窓口の三層に分かれている（2026-11-21 から）。
 
 | サービス | 内容 |
 |---|---|
 | `webui`（ゲートウェイ） | テレメトリー画面（http://localhost:8100/ui/）、依頼の記録（`runs/`）、Open WebUI 向けの OpenAI 互換の入口。エージェントとは契約（`/agent/v1/*`）だけで話す |
 | `agent-research` | 調査エージェント。外には出さず、ゲートウェイからだけ呼ぶ |
 | `agent-chat` | モデルとそのまま話すだけのエージェント。Open WebUI の裏処理も受け持つ |
+| `model-gateway` | モデルの窓口。エージェントはモデルを直接呼ばず、ここに頼む。どのモデルに送るか（`config/models.toml`）、やり直し、モデルごとの同時実行の上限（研究室のモデルは全エージェント合わせて 2 件まで）、使用量を受け持つ。LLM の接続先と鍵を持つのはここだけ |
 
-つなぐエージェントは `config/agents.toml` に書く。エージェントを足すときは、サービスを足してここに 1 項目足す。
+つなぐエージェントは `config/agents.toml`、使うモデルは `config/models.toml` に書く。エージェントを足すときはサービスを足して `agents.toml` に 1 項目、モデルを足すときは `models.toml` に 1 項目足す。
 
 ## 4. 初期設定
 
@@ -122,7 +123,7 @@ docker compose ps
 | `docker compose ps` | 状態を確認 |
 | `docker compose logs -f open-webui` | ログを表示（Ctrl+C で終了） |
 | `docker compose restart open-webui` | Open WebUI だけ再起動 |
-| `docker build -t my_llm_app-app:local .` → `docker compose up -d webui agent-research agent-chat` | コードを変えた後に作り直して再起動（3 つのサービスは同じイメージを使う） |
+| `docker build -t my_llm_app-app:local .` → `docker compose up -d webui agent-research agent-chat model-gateway` | コードを変えた後に作り直して再起動（4 つのサービスは同じイメージを使う） |
 | `docker compose logs -f agent-research` | 調査エージェントのログを表示（ゲートウェイは `webui`） |
 
 **注意**: `docker compose down -v` は、アカウントと会話履歴もすべて削除する。最初からやり直したいとき以外は使わない。
@@ -166,9 +167,11 @@ uv run scripts/chat.py      # ターミナルで会話
 Docker を使わずにこの PC で画面とエージェントを動かすとき（開発用。SearXNG は Docker のものを使う）:
 
 ```sh
+uv run uvicorn --factory my_llm_app.modelgw.app:create_app --port 8103       # モデルの窓口
 uv run uvicorn --factory my_llm_app.agents.research:create_app --port 8101   # 調査エージェント
 uv run uvicorn --factory my_llm_app.agents.chat:create_app --port 8102       # チャット
 uv run uvicorn --factory my_llm_app.gateway.app:create_app --port 8110       # ゲートウェイ → http://localhost:8110/ui/
 ```
 
 接続先は `config/agents.toml` の `url`（環境変数 `AGENT_RESEARCH_URL`・`AGENT_CHAT_URL` があればそちら）。
+エージェントは、環境変数 `MODEL_GATEWAY_URL=http://localhost:8103/v1` を付けて起動すると窓口を通してモデルを呼ぶ。付けなければ、これまでどおり `VL_BASE_URL` の LLM を直接呼ぶ。

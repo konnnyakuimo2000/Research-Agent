@@ -12,7 +12,7 @@
   （ipaddress の is_global）であることを確かめ、確かめたその IP につなぐ（DNS の答えを途中ですり替えられても、
   内部のサービスにはつながらない）。環境変数のプロキシ設定は使わない（trust_env=False）。
 - 内部取得（public=False）: 設定済みの SearXNG・LLM サーバーなど。宛先の制限をしない。
-  逆に、設定済みの SearXNG・LLM サーバー（.env の SEARXNG_URL・VL_BASE_URL）の名前と IP アドレスは、
+  逆に、設定済みの SearXNG・LLM サーバー・モデルの窓口（.env の SEARXNG_URL・VL_BASE_URL・MODEL_GATEWAY_URL）の名前と IP アドレスは、
   公開取得では宛先として拒む。研究室の LLM サーバーは大学の公開アドレス上にあるので、公開アドレスかどうか
   だけでは防げない（検索結果のふりをした URL から LLM サーバーに取りに行けてしまう）。
 受け取る大きさの上限（max_bytes）は、受け取りながら数え、超えたら残りを読まずにやめる（レビュー 2）。
@@ -70,7 +70,7 @@ class ResponseTooLarge(httpx.HTTPError):
 
 def _configured_hosts() -> set[str]:
     hosts = set()
-    for name in ("VL_BASE_URL", "SEARXNG_URL"):
+    for name in ("VL_BASE_URL", "SEARXNG_URL", "MODEL_GATEWAY_URL"):
         host = urlparse(os.getenv(name, "")).hostname
         if host:
             hosts.add(host.lower())

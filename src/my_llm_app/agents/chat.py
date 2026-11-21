@@ -47,14 +47,9 @@ _status: dict = {}
 def health(settings) -> dict:
     if _status and time.time() - _status["at"] < 20:
         return _status["value"]
-    from my_llm_app.tools import http as http_tools
-    started = time.time()
-    try:
-        r = http_tools.get(settings.llm_base_url.rstrip("/") + "/models", timeout=4, cache=False, public=False)
-        llm = {"ok": r.status_code == 200, "seconds": round(time.time() - started, 1)}
-    except Exception as e:  # noqa: BLE001
-        llm = {"ok": False, "error": type(e).__name__}
-    value = {"model": settings.llm_model, "checks": {"llm": {"title": "LLM", "hint": "VPN を確認", **llm}}}
+    from my_llm_app.modelgw.status import model_check
+    model, llm = model_check(settings)
+    value = {"model": model, "checks": {"llm": llm}}
     _status.update(at=time.time(), value=value)
     return value
 

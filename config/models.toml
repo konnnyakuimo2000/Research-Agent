@@ -1,0 +1,22 @@
+# モデルの窓口（model-gateway）が使うモデルの一覧（docs/telemetry_enhancement_plan.md 6.2）。
+# エージェントはモデルを直接呼ばず、窓口に頼む。モデルを足すときは、ここに 1 項目足す。
+# 接続先・鍵・モデル名は .env から読む（*_env）。リポジトリには書かない。
+#   provider         "openai" = OpenAI 互換（llama.cpp・Ollama・vLLM・OpenAI）。M3 で "anthropic" などを足す
+#   capabilities     json_schema（JSON スキーマに沿った出力）・vision（画像を読める）
+#   max_concurrency  このモデルに同時に送る数。すべてのエージェントをまたいで、窓口が守る
+#   extra_body       モデルごとの癖（そのまま送る項目）
+
+default = "lab-qwen"   # 既定のモデル（M2 で役割ごとに選べるようにする）
+
+[[models]]
+id = "lab-qwen"
+title = "研究室 qwen3.8-27b"
+provider = "openai"
+base_url_env = "VL_BASE_URL"
+api_key_env = "VL_API_KEY"
+model_env = "VL_MODEL"
+model = "qwen3.8-27b"
+capabilities = ["json_schema", "vision"]
+max_concurrency = 2    # 研究室のサーバーは共有で同時に 4 件まで。こちらからは 2 件までにする
+context_tokens = 32768
+extra_body = { chat_template_kwargs = { enable_thinking = false } }   # 思考モード OFF（応答速度を優先）
