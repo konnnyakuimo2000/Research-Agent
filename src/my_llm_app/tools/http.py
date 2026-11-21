@@ -12,6 +12,9 @@
   （ipaddress の is_global）であることを確かめ、確かめたその IP につなぐ（DNS の答えを途中ですり替えられても、
   内部のサービスにはつながらない）。環境変数のプロキシ設定は使わない（trust_env=False）。
 - 内部取得（public=False）: 設定済みの SearXNG・LLM サーバーなど。宛先の制限をしない。
+  逆に、設定済みの SearXNG・LLM サーバー（.env の SEARXNG_URL・VL_BASE_URL）の名前と IP アドレスは、
+  公開取得では宛先として拒む。研究室の LLM サーバーは大学の公開アドレス上にあるので、公開アドレスかどうか
+  だけでは防げない（検索結果のふりをした URL から LLM サーバーに取りに行けてしまう）。
 受け取る大きさの上限（max_bytes）は、受け取りながら数え、超えたら残りを読まずにやめる（レビュー 2）。
 """
 
@@ -19,6 +22,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import socket
 import threading
 import time
@@ -64,6 +68,32 @@ class ResponseTooLarge(httpx.HTTPError):
 
 # ---- 宛先の確かめ ----
 
+def _configured_hosts() -> set[str]:
+    hosts = set()
+    for name in ("VL_BASE_URL", "SEARXNG_URL"):
+        host = urlparse(os.getenv(name, "")).hostname
+        if host:
+            hosts.add(host.lower())
+    return hosts
+
+
+INTERNAL_HOSTS: set[str] = _configured_hosts()   # 公開取得では拒む、設定済みの内部サービス（テストで差し替える）
+_internal_ips: dict[str, set[str]] = {}
+
+
+def _internal_addresses() -> set[str]:
+    """設定済みの内部サービスの IP アドレス（引けたものだけ。名前ごとに覚えておく）。"""
+    out: set[str] = set()
+    for host in INTERNAL_HOSTS:
+        if host not in _internal_ips:
+            try:
+                _internal_ips[host] = set(resolve(host, 443))
+            except OSError:
+                _internal_ips[host] = set()
+        out |= _internal_ips[host]
+    return out
+
+
 def is_public_ip(ip: str) -> bool:
     """公開アドレスか（プライベート・ループバック・リンクローカル・共有・予約済み・マルチキャストは公開ではない）。"""
     try:
@@ -88,6 +118,8 @@ def public_addresses(host: str, port: int) -> list[str]:
         raise httpx.ConnectError(f"名前を引けない: {host}") from e
     if not addrs or not all(is_public_ip(a) for a in addrs):
         raise BlockedDestination(f"公開されていない宛先: {host} → {', '.join(addrs) or '（なし）'}")
+    if host.lower() in INTERNAL_HOSTS or set(addrs) & _internal_addresses():
+        raise BlockedDestination(f"設定済みの内部サービス（LLM・SearXNG）: {host}")
     return addrs
 
 

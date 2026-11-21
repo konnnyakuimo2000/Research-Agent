@@ -5,8 +5,12 @@
 - /v1/models に「research-agent」を 1 つ出す。Open WebUI のモデル一覧に出る。
 - 途中経過は <think> の中に流す（Open WebUI が開閉できる表示にする）。報告はその後に流す。
 - エージェントが質問したら、それを回答として返して一時停止する。同じ会話の次のメッセージを
-  利用者の答えとして、続きから再開する。会話は「それまでの利用者のメッセージ」で見分ける
-  （Open WebUI の設定を変えずに済む）。
+  利用者の答えとして、続きから再開する。会話は次のどちらかで見分ける（レビュー 4）。
+  1. Open WebUI が付ける利用者 ID とチャット ID（X-OpenWebUI-User-Id / X-OpenWebUI-Chat-Id。
+     Open WebUI の ENABLE_FORWARD_USER_INFO_HEADERS=true で付く）。別の利用者の会話からは再開できない
+  2. 付いていなければ、サーバーが発行した会話トークン。質問の末尾に、表示されない Markdown の行
+     （[//]: # (conv:…)）として入れ、次のターンで送られてくる会話の履歴から読み取る
+- 終わった・失敗した・答えを待つ期限が切れた会話の記録（チェックポイント）は消す（レビュー 5）。
 - タイトル生成などの Open WebUI の裏処理（「### Task:」で始まる）は、エージェントを動かさず
   LLM にそのまま送る。
 - テレメトリー画面（/ui/）と、その API（/api/...）も出す（docs/telemetry_design.md）。
@@ -14,11 +18,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
 import queue
+import re
 import threading
 import time
 import uuid
@@ -53,6 +57,10 @@ _runs = RunManager(_graph, REPO_ROOT / "runs")
 _assets_dir = REPO_ROOT / "runs" / ".assets"
 # 質問して答えを待っている会話: 会話の鍵 → (thread_id, 質問した時刻)
 _pending: dict[str, tuple[str, float]] = {}
+USER_HEADER, CHAT_HEADER = "x-openwebui-user-id", "x-openwebui-chat-id"
+# 質問の末尾に入れる会話トークン（Markdown のリンク定義の形なので、画面には表示されない）
+_TOKEN_LINE = "\n\n[//]: # (conv:{token})"
+_TOKEN = re.compile(r"\[//\]: # \(conv:([0-9a-f]{32})\)")
 _lock = threading.Lock()
 
 
@@ -65,8 +73,24 @@ def text_of(content: object) -> str:
     return ""
 
 
-def conversation_key(user_texts: list[str]) -> str:
-    return hashlib.sha256("\x1e".join(t.strip() for t in user_texts).encode("utf-8")).hexdigest()
+def session_key(headers: dict, messages: list[dict]) -> str | None:
+    """答えを待っている会話の鍵。Open WebUI の利用者 ID とチャット ID があればその組、なければ会話トークン。"""
+    user, chat = headers.get(USER_HEADER), headers.get(CHAT_HEADER)
+    if user and chat:
+        return f"owui:{user}:{chat}"
+    for m in reversed(messages):
+        if m.get("role") == "assistant":
+            found = _TOKEN.findall(text_of(m.get("content")))
+            return f"tok:{found[-1]}" if found else None
+    return None
+
+
+def forget_thread(thread_id: str) -> None:
+    """会話の記録（チェックポイント）を消す。終わった・失敗した・期限が切れた会話に使う。"""
+    try:
+        _graph.checkpointer.delete_thread(thread_id)
+    except Exception:  # noqa: BLE001 - 消せなくても応答は続ける
+        log.exception("could not delete thread %s", thread_id)
 
 
 def is_background_task(messages: list[dict]) -> bool:
@@ -75,32 +99,46 @@ def is_background_task(messages: list[dict]) -> bool:
     return last.lstrip().startswith("### Task:")
 
 
-def start_or_resume(user_texts: list[str]) -> tuple[str, object]:
+def start_or_resume(key: str | None, text: str) -> tuple[str, object]:
     """新しい依頼か、質問への答えかを見分けて、(thread_id, グラフへの入力) を返す。"""
     now = time.time()
     with _lock:
-        for k in [k for k, (_, t) in _pending.items() if now - t > PENDING_TTL]:
-            del _pending[k]
-        waiting = _pending.pop(conversation_key(user_texts[:-1]), None) if len(user_texts) > 1 else None
+        expired = [k for k, (_, t) in _pending.items() if now - t > PENDING_TTL]
+        threads = [_pending.pop(k)[0] for k in expired]
+        waiting = _pending.pop(key, None) if key else None
+    for thread_id in threads:
+        forget_thread(thread_id)          # 答えを待つ期限が切れた会話の記録を消す
     if waiting:
-        return waiting[0], Command(resume=user_texts[-1])
-    return str(uuid.uuid4()), {"request": user_texts[-1]}
+        return waiting[0], Command(resume=text)
+    return str(uuid.uuid4()), {"request": text}
 
 
-def run_agent(user_texts: list[str]) -> Iterator[str]:
-    """エージェントを動かし、画面に流す文字列を順に返す。None はハートビート。"""
-    thread_id, payload = start_or_resume(user_texts)
+def run_agent(text: str, key: str | None) -> Iterator[str]:
+    """エージェントを動かし、画面に流す文字列を順に返す。None はハートビート。
+
+    最終の回答は、調査を動かしているスレッドが取り出してから会話の記録を消す（画面との接続が途中で切れても、
+    調査が終わったところで消える）。
+    """
+    thread_id, payload = start_or_resume(key, text)
     config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 40}
     events: queue.Queue = queue.Queue()
 
     def work() -> None:
+        question = None
         try:
             for chunk in _graph.stream(payload, config, stream_mode="updates"):
+                if "__interrupt__" in chunk:
+                    question = chunk["__interrupt__"][0].value["question"]
                 events.put(("chunk", chunk))
-            events.put(("done", None))
+            answer = None if question else _graph.get_state(config).values.get("answer", "(回答なし)")
         except Exception as e:  # noqa: BLE001  画面に原因を出すため、すべて受ける
             log.exception("agent failed")
+            forget_thread(thread_id)      # 回復できない失敗: 記録を消す
             events.put(("error", e))
+            return
+        if not question:
+            forget_thread(thread_id)      # 終わった: 回答を取り出したので記録を消す
+        events.put(("done", answer))
 
     threading.Thread(target=work, daemon=True).start()
     yield "<think>\n"
@@ -115,6 +153,7 @@ def run_agent(user_texts: list[str]) -> Iterator[str]:
             yield f"\n</think>\n\nエラーで調査を続けられませんでした: {type(item).__name__}: {item}"
             return
         if kind == "done":
+            answer = item
             break
         for node, update in item.items():
             if node == "__interrupt__":
@@ -125,11 +164,15 @@ def run_agent(user_texts: list[str]) -> Iterator[str]:
                 yield text + "\n"
     yield "</think>\n\n"
     if question:
+        suffix = ""
+        if not key or not key.startswith("owui:"):
+            token = uuid.uuid4().hex          # Open WebUI の ID がない: 会話トークンを発行して、次のターンで受け取る
+            key, suffix = f"tok:{token}", _TOKEN_LINE.format(token=token)
         with _lock:
-            _pending[conversation_key(user_texts)] = (thread_id, time.time())
-        yield question
+            _pending[key] = (thread_id, time.time())
+        yield question + suffix
         return
-    yield _graph.get_state(config).values.get("answer", "(回答なし)")
+    yield answer
 
 
 def _chunk(cid: str, created: int, delta: dict, finish: str | None = None) -> str:
@@ -159,7 +202,7 @@ def models(authorization: str | None = Header(default=None)) -> dict:
 
 
 @app.post("/v1/chat/completions")
-def chat_completions(body: dict, authorization: str | None = Header(default=None)):
+def chat_completions(body: dict, request: Request, authorization: str | None = Header(default=None)):
     _check_key(authorization)
     messages = body.get("messages") or []
     if is_background_task(messages):
@@ -169,7 +212,7 @@ def chat_completions(body: dict, authorization: str | None = Header(default=None
         user_texts = [text_of(m.get("content")) for m in messages if m.get("role") == "user"]
         if not user_texts or not user_texts[-1].strip():
             raise HTTPException(status_code=400, detail="no user message")
-        parts = run_agent(user_texts)
+        parts = run_agent(user_texts[-1], session_key(request.headers, messages))
     if body.get("stream"):
         return StreamingResponse(_stream(parts), media_type="text/event-stream")
     content = "".join(p for p in parts if p)

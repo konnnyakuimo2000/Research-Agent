@@ -10,6 +10,8 @@ services:
     volumes:
       - open-webui:/app/backend/data
     environment:
+      # 利用者 ID とチャット ID をエージェントに渡す（同じ文面の会話を取り違えずに再開するため。レビュー 4）
+      ENABLE_FORWARD_USER_INFO_HEADERS: "true"
       # 接続先は 2 つ: LLM サーバー（普通の会話）と、調査エージェント（モデル名 research-agent）
       # ※ Open WebUI は初回起動時だけこの値を使い、その後は管理画面（設定 → 接続）の値を使う
       OPENAI_API_BASE_URLS: "${VL_BASE_URL:?.env に VL_BASE_URL を設定してください};http://agent:8000/v1"

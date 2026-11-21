@@ -348,3 +348,21 @@ def test_redirect_to_an_excluded_site_is_not_used(monkeypatch):
     _redirecting(monkeypatch, "https://www.pinterest.jp/pin/1")
     page = fetch.fetch_page("https://blog.example.com/mercury")
     assert not page.ok and "転送先" in page.reason and page.final_url == "https://www.pinterest.jp/pin/1"
+
+
+def test_configured_llm_and_searxng_are_refused_by_the_public_path(monkeypatch):
+    # 研究室の LLM サーバーは公開アドレス上にあるので、公開かどうかだけでは防げない。設定済みの宛先は名前と IP で拒む
+    import httpx
+    import pytest
+
+    import http_mock
+    from my_llm_app.tools import http
+    sent = http_mock.install(monkeypatch, lambda r: httpx.Response(200, text="ok"),
+                             ips={"llm.lab.example": "133.2.0.10", "alias.example": "133.2.0.10"})
+    monkeypatch.setattr(http, "INTERNAL_HOSTS", {"llm.lab.example"})
+    monkeypatch.setattr(http, "_internal_ips", {})
+    for url in ("http://llm.lab.example:8080/v1/models", "http://alias.example/"):   # 別名で同じ IP を指しても拒む
+        with pytest.raises(http.BlockedDestination):
+            http.get(url)
+    assert sent == []
+    assert http.get("http://llm.lab.example:8080/v1/models", public=False).text == "ok"   # 内部取得では、従来どおりつながる

@@ -107,12 +107,14 @@ class RunManager:
                 run.status = "error"
                 run.recorder.add({"type": "run.error", "error": f"{type(e).__name__}: {e}"})
                 run.recorder.finish()
+                self._forget(run)
                 return
             if question:
                 run.status, run.question = "waiting", question
                 run.recorder.add({"type": "run.waiting", "question": question})
                 return
             state = self.graph.get_state(config).values
+            self._forget(run)                 # 回答を取り出したので、会話の記録（チェックポイント）は消す
             run.status = "done"
             run.recorder.add({"type": "run.end", "answer": state.get("answer", "")})
             run.recorder.finish()
@@ -121,6 +123,14 @@ class RunManager:
                                                         encoding="utf-8")
             except OSError:
                 log.exception("could not save run %s", run.id)
+
+    def _forget(self, run: Run) -> None:
+        checkpointer = getattr(self.graph, "checkpointer", None)
+        if checkpointer is not None:
+            try:
+                checkpointer.delete_thread(run.thread_id)
+            except Exception:  # noqa: BLE001
+                log.exception("could not delete thread %s", run.thread_id)
 
     # ---- 記録 ----
 

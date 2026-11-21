@@ -103,3 +103,26 @@ def test_pause_stops_before_the_next_step_and_resume_finishes(tmp_path):
         raise AssertionError("止まっていない調査は再開できない")
     except KeyError:
         pass
+
+
+def test_finished_and_failed_runs_delete_their_checkpoints(tmp_path):
+    from unittest.mock import MagicMock
+    g = FakeGraph()
+    g.checkpointer = MagicMock()
+    m = RunManager(g, tmp_path)
+    run = m.start("マーキュリーについて")
+    assert wait_for(lambda: run.status == "waiting")
+    g.checkpointer.delete_thread.assert_not_called()                  # 答えを待っている間は残す
+    m.answer(run.id, "1")
+    assert wait_for(lambda: run.status == "done")
+    g.checkpointer.delete_thread.assert_called_once_with(run.thread_id)
+
+    class Broken(FakeGraph):
+        def stream(self, payload, config, stream_mode):
+            raise RuntimeError("壊れた")
+            yield
+    b = Broken()
+    b.checkpointer = MagicMock()
+    run2 = RunManager(b, tmp_path).start("壊れる")
+    assert wait_for(lambda: run2.status == "error")
+    b.checkpointer.delete_thread.assert_called_once_with(run2.thread_id)
