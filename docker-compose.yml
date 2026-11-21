@@ -35,6 +35,7 @@ services:
   # ゲートウェイ: テレメトリー画面（http://localhost:8100/ui/）、依頼の記録、OpenAI 互換の入口
   webui:
     build: .
+    image: my_llm_app-app:local   # 3 つのサービスで同じイメージを使う（作るのはここだけ）
     ports:
       - "127.0.0.1:8100:8000"   # この PC からのみ開ける
     environment:
@@ -56,7 +57,7 @@ services:
 
   # 調査エージェント（契約の 0・1 段と research/v1）。外には出さず、ゲートウェイからだけ呼ぶ
   agent-research:
-    build: .
+    image: my_llm_app-app:local
     command: ["/app/.venv/bin/uvicorn", "--factory", "my_llm_app.agents.research:create_app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       VL_BASE_URL: ${VL_BASE_URL:?.env に VL_BASE_URL を設定してください}
@@ -73,7 +74,7 @@ services:
 
   # チャット（契約の 0 段だけ）。Open WebUI の裏処理（タイトル生成など）も受け持つ
   agent-chat:
-    build: .
+    image: my_llm_app-app:local
     command: ["/app/.venv/bin/uvicorn", "--factory", "my_llm_app.agents.chat:create_app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       VL_BASE_URL: ${VL_BASE_URL:?.env に VL_BASE_URL を設定してください}

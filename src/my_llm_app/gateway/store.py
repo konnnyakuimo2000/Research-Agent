@@ -74,7 +74,7 @@ class RunStore:
             sql += f" AND status IN ({','.join('?' * len(statuses))})"
             args += list(statuses)
         with self._lock:
-            rows = self.db.execute(sql + " ORDER BY id DESC LIMIT ?", [*args, limit]).fetchall()
+            rows = self.db.execute(sql + " ORDER BY created DESC LIMIT ?", [*args, limit]).fetchall()   # ID は時刻帯で前後するので、作った時刻の順
         return [dict(r) for r in rows]
 
     # ---- イベントと結果 ----
