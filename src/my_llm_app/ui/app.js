@@ -37,8 +37,43 @@ async function api(path, body) {
   return r.json();
 }
 
+// ---- エージェント（ゲートウェイがつないでいるもの） ----
+// 名乗りの段（levels）で出す画面を変える: 1 段（作業・段階）があれば流れの図と木、0 段だけならチャットだけ
+let AGENTS = {}, agentId = "", runAgent = "";
+const hasFlow = (id) => (AGENTS[id]?.levels || [0, 1]).includes(1);   // まだ名乗りを受け取っていなければ、流れの図を出す
+const caps = (id) => AGENTS[id]?.capabilities || ["pause", "questions"];
+function setLayout(id) { document.querySelector(".app").classList.toggle("chatonly", !hasFlow(id)); }
+async function loadAgents() {
+  try {
+    const { agents, default: def } = await api("/api/agents");
+    AGENTS = Object.fromEntries(agents.map((a) => [a.id, a]));
+    let saved = ""; try { saved = localStorage.getItem("agent") || ""; } catch (e) { /* 覚えられなくても動く */ }
+    agentId = AGENTS[saved] ? saved : def;
+    const sel = $("agentSel");
+    sel.innerHTML = agents.map((a) => `<option value="${esc(a.id)}"${a.id === agentId ? " selected" : ""}${a.ok ? "" : " disabled"}>${esc(a.name)}${a.ok ? "" : "（つながらない）"}</option>`).join("");
+    sel.hidden = agents.length < 2; sel.title = AGENTS[agentId]?.description || "";
+    setLayout(runId ? runAgent : agentId);   // 名乗りが届く前に開いた依頼も、段に合わせて出し直す
+    if (runId && N) layout();
+    checkConnection(); loadRuns();
+  } catch (err) { /* 一覧が取れなければ、既定のエージェントに送る */ }
+}
+$("agentSel").addEventListener("change", (ev) => {
+  agentId = ev.target.value; ev.target.title = AGENTS[agentId]?.description || "";
+  try { localStorage.setItem("agent", agentId); } catch (e) { /* 覚えられなくても動く */ }
+  newResearch(); checkConnection();
+});
+// 契約の封筒の形（{v, seq, t, type, data}）を、画面の中の平らな形にする。知っている拡張（research/v1）のイベントは拡張の名前を外す。
+// 知らない拡張のイベントは名前がそのまま残り、描かれない（画面は止まらない）
+const KNOWN_EXT = ["research/v1"];
+function norm(m) {
+  if (!m.v) return m;
+  let type = m.type || ""; const i = type.indexOf(":");
+  if (i > 0 && KNOWN_EXT.includes(type.slice(0, i))) type = type.slice(i + 1);
+  return { ...(m.data || {}), seq: m.seq, t: m.t, type, task_id: m.task_id };
+}
+
 // ---- 状態 ----
-let N, order, info, selected, round, work, dbNode, runId, statusEl, questions, sources, instant, rounds, aim;
+let N, order, info, selected, round, work, dbNode, runId, statusEl, questions, sources, instant, rounds, aim, streamText;
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch (e) { return u; } };
 const tier = (t) => t ? `<span class="tier${t === 1 ? " t1" : ""}">T${t}</span>` : "";
@@ -55,7 +90,7 @@ function reset() {
   canvas.querySelectorAll(".node, .fly").forEach((e) => e.remove());
   svg.innerHTML = "";
   N = {}; order = []; info = {}; selected = null; round = null; work = null; dbNode = {}; statusEl = null;
-  questions = new Set(); sources = []; instant = false; rounds = 0; aim = null;
+  questions = new Set(); sources = []; instant = false; rounds = 0; aim = null; streamText = "";
   $("drawer").classList.remove("open"); $("flowEmpty").hidden = false;
   FLOW.reset();
   fitMode(true); cam = { x: 0, y: 0, s: 1 }; camT = { ...cam };
@@ -552,7 +587,7 @@ const HANDLERS = {
   },
   "run.end": (e) => {
     setState("req", "done");
-    const body = renderReport(e.answer || "");
+    const body = renderReport(e.report ?? e.answer ?? "");
     const el = statusEl || chatAgent("");
     el.querySelector(".body").innerHTML = body; wireCites(el); statusEl = null; liveState = ""; setComposer(false);
     loadRuns();
@@ -560,6 +595,17 @@ const HANDLERS = {
   "run.error": (e) => { chatAgent(`<p>エラーで調査を続けられませんでした: ${esc(e.error)}</p>`); statusEl = null; liveState = ""; updateSend(); },
   "run.paused": () => { if (!replay) liveState = "paused"; now("一時停止している（今の作業が終わったところで止まる）"); updateSend(); },
   "run.resumed": () => { if (!replay) liveState = "running"; now("再開した"); updateSend(); },
+  "run.cancelled": () => {
+    const el = statusEl || chatAgent("");
+    el.querySelector(".body").innerHTML = (streamText ? renderReport(streamText) : "") + `<p class="q">止めました。</p>`;
+    statusEl = null; liveState = ""; setComposer(false); loadRuns();
+  },
+  // 0 段: 文の続きをそのまま描く。状態の一行は、流れの図がないときだけ吹き出しに出す
+  "message.delta": (e) => {
+    statusBubble(); streamText += e.text || "";
+    statusEl.querySelector(".body").innerHTML = renderReport(streamText); scrollChat();
+  },
+  "status": (e) => { if (!hasFlow(runAgent)) now(e.text); },
 };
 // 転送されたページ: 本文の発行元（転送先）をノードに覚えさせ、サイト名・アイコン・流れの図のアイコンを切り替える。
 // 報告の出典は転送先の URL なので、出典番号から飛ぶときはこれで探す
@@ -912,6 +958,7 @@ const FLOW = {
         if (f.n.respond) f.flow("respond", "end", Math.max(1, f.reportSources || 1), null, "");
         break;
       case "run.error": if (f.cur) { f.setState(f.cur, "failed"); f.setText(f.cur, undefined, e.error); } break;
+      case "run.cancelled": if (f.cur) { f.setState(f.cur, "failed"); f.setText(f.cur, undefined, "止めた"); } break;
     }
   },
   updatePages() {
@@ -1048,14 +1095,15 @@ function busy() { return !waitingRun && (replay ? queue.length > 0 || !!source :
 function paused() { return replay ? !playing : liveState === "paused"; }
 function updateSend() {
   const b = $("sendBtn"), stop = busy(), p = paused();
-  b.setAttribute("aria-label", stop ? (p ? "再開" : "一時停止") : "送る"); b.title = b.getAttribute("aria-label");
+  const canPause = replay || caps(runAgent).includes("pause");
+  b.setAttribute("aria-label", stop ? (!canPause ? "止める" : p ? "再開" : "一時停止") : "送る"); b.title = b.getAttribute("aria-label");
   b.classList.toggle("pause", stop && !p); b.classList.toggle("resume", stop && p);
 }
 async function togglePause() {
   if (replay) { playing = !playing; updateSend(); now(playing ? "再生している" : "一時停止している"); return; }
-  const action = liveState === "paused" ? "resume" : "pause";
+  const action = !caps(runAgent).includes("pause") ? "cancel" : liveState === "paused" ? "resume" : "pause";
   try { await api(`/api/runs/${runId}/${action}`, {}); }
-  catch (err) { chatAgent(`<p>${action === "pause" ? "止められませんでした" : "再開できませんでした"}: ${esc(err.message)}</p>`); }
+  catch (err) { chatAgent(`<p>${action === "resume" ? "再開できませんでした" : "止められませんでした"}: ${esc(err.message)}</p>`); }
 }
 async function sendAnswer(text) {
   if (!waitingRun || !text) return;
@@ -1068,11 +1116,11 @@ $("composer").addEventListener("submit", async (ev) => {
   const text = input.value.trim(); if (!text) return;
   input.value = ""; growInput();
   if (waitingRun) { sendAnswer(text); return; }
-  try { const r = await api("/api/runs", { request: text }); open(r.id, true); loadRuns(); }
+  try { const r = await api("/api/runs", { request: text, agent: agentId }); open(r.id, true, r.agent); loadRuns(); }
   catch (err) { chatAgent(`<p>調査を始められませんでした: ${esc(err.message)}</p>`); }
 });
 function newResearch() {
-  closeSource(); reset(); runId = null; $("chat").innerHTML = ""; setEmpty(true);
+  closeSource(); reset(); runId = null; runAgent = agentId; setLayout(agentId); $("chat").innerHTML = ""; setEmpty(true);
   replay = false; liveState = ""; setComposer(false); highlightRun(); $("input").focus();
 }
 $("newBtn").addEventListener("click", newResearch);
@@ -1090,12 +1138,14 @@ input.addEventListener("keydown", (e) => {
 // 研究室の LLM サーバーと検索につながるか（入力欄の下に出す）
 async function checkConnection() {
   try {
-    const st = await api("/api/status");
-    $("modelName").textContent = st.model; $("modelName").title = `調査エージェント（research-agent）が使っているモデル: ${st.model}`;
-    const ok = st.llm.ok && st.search.ok;
+    const st = await api(`/api/status?agent=${encodeURIComponent(agentId)}`);
+    const name = AGENTS[st.agent]?.name || st.agent;
+    $("modelName").textContent = st.model || ""; $("modelName").title = `${name}が使っているモデル: ${st.model}`;
+    const checks = Object.values(st.checks || {}), bad = checks.find((c) => !c.ok), ok = st.ok && !bad;
     $("conn").className = "conn " + (ok ? "ok" : "ng");
-    $("connText").textContent = ok ? "" : !st.llm.ok ? "VPN を確認" : "検索につながらない";
-    $("conn").title = `LLM: ${st.llm.ok ? `応答 ${st.llm.seconds} 秒` : st.llm.error || "応答なし"} / 検索: ${st.search.ok ? "応答あり" : st.search.error || "応答なし"}`;
+    $("connText").textContent = ok ? "" : !st.ok ? "エージェントにつながらない" : bad.hint || `${bad.title}につながらない`;
+    $("conn").title = st.ok ? `${name}: ` + checks.map((c) => `${c.title} ${c.ok ? `応答 ${c.seconds} 秒` : c.error || "応答なし"}`).join(" / ")
+      : `${name}: ${st.error || "応答なし"}`;
   } catch (err) { $("conn").className = "conn ng"; $("connText").textContent = "エージェントにつながらない"; }
 }
 checkConnection(); setInterval(checkConnection, 30000);
@@ -1115,12 +1165,12 @@ function showRecent(runs) {
 // 再生: 終わった調査は、記録の時刻どおりに（速さを掛けて）流す。動いている調査は届いたらすぐ描く
 let queue = [], clock = 0, speed = 8, playing = true, replay = false, lastTs = null, stopAt = Infinity;
 function closeSource() { if (source) { source.close(); source = null; } queue = []; }
-function open(id, live) {
-  closeSource(); reset(); runId = id; $("chat").innerHTML = "";
+function open(id, live, agent) {
+  closeSource(); reset(); runId = id; runAgent = agent || "research"; setLayout(runAgent); $("chat").innerHTML = "";
   replay = !live; clock = 0; playing = true; liveState = live ? "running" : "";
   setComposer(false); highlightRun();
   source = new EventSource(withKey(`/api/runs/${encodeURIComponent(id)}/events`));
-  source.onmessage = (m) => { const e = JSON.parse(m.data); if (replay) queue.push(e); else handle(e); };
+  source.onmessage = (m) => { const e = norm(JSON.parse(m.data)); if (replay) queue.push(e); else handle(e); };
   source.addEventListener("end", () => { if (source) { source.close(); source = null; } updateSend(); });
   source.addEventListener("missing", () => { if (source) { source.close(); source = null; } chatAgent("<p>この調査の記録が見つかりません。</p>"); });
 }
@@ -1143,11 +1193,12 @@ function frame(ts) {
 async function loadRuns() {
   try {
     const { runs } = await api(withKey("/api/runs"));
-    const label = { running: "調べている", paused: "一時停止中", waiting: "答え待ち", done: "完了", error: "エラー", stopped: "途中で止まった" };
-    $("runs").innerHTML = runs.map((r) => `<button type="button" class="run" data-id="${esc(r.id)}" data-live="${["running", "waiting", "paused"].includes(r.status)}">
-      <span class="r1">${esc(r.request || "(依頼なし)")}</span><span class="r2">${esc(r.id.slice(0, 13).replace(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2}).*/, "$2/$3 $4:$5"))} · ${label[r.status] || r.status}</span></button>`).join("")
+    const label = { running: "調べている", paused: "一時停止中", waiting: "答え待ち", done: "完了", error: "エラー", stopped: "途中で止まった", cancelled: "止めた" };
+    const defAgent = Object.values(AGENTS).find((a) => a.default)?.id;
+    $("runs").innerHTML = runs.map((r) => `<button type="button" class="run" data-id="${esc(r.id)}" data-agent="${esc(r.agent || "")}" data-live="${["running", "waiting", "paused"].includes(r.status)}">
+      <span class="r1">${esc(r.request || "(依頼なし)")}</span><span class="r2">${esc(r.id.slice(0, 13).replace(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2}).*/, "$2/$3 $4:$5"))} · ${label[r.status] || r.status}${AGENTS[r.agent] && r.agent !== defAgent ? " · " + esc(AGENTS[r.agent].name) : ""}</span></button>`).join("")
       || `<p class="r2" style="padding:8px;color:var(--muted)">まだ調査はありません</p>`;
-    $("runs").querySelectorAll(".run").forEach((b) => b.addEventListener("click", () => open(b.dataset.id, b.dataset.live === "true")));
+    $("runs").querySelectorAll(".run").forEach((b) => b.addEventListener("click", () => open(b.dataset.id, b.dataset.live === "true", b.dataset.agent)));
     showRecent(runs);
     highlightRun();
   } catch (err) { $("runs").innerHTML = `<p style="padding:8px;color:var(--muted)">一覧を読めません: ${esc(err.message)}</p>`; }
@@ -1155,13 +1206,13 @@ async function loadRuns() {
 function highlightRun() { $("runs").querySelectorAll(".run").forEach((b) => b.classList.toggle("on", b.dataset.id === runId)); }
 
 window.addEventListener("resize", () => N && layout());
-reset(); loadRuns(); requestAnimationFrame(frame);
+reset(); loadRuns(); loadAgents(); requestAnimationFrame(frame);
 const params = new URLSearchParams(location.search);
 if (params.has("speed")) speed = +params.get("speed") || 0;   // 再生の速さ（0 = すぐ全部を出す。確認用）
 if (params.has("at")) stopAt = +params.get("at");   // この時刻（秒）の状態で止める
 const first = params.get("run");
 if (first) api(withKey("/api/runs")).then(({ runs }) => {
   const r = runs.find((x) => x.id === first);
-  open(first, !!r && ["running", "waiting", "paused"].includes(r.status));
+  open(first, !!r && ["running", "waiting", "paused"].includes(r.status), r?.agent);
 }).catch(() => open(first, false));
 })();

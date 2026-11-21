@@ -5,6 +5,9 @@
 - **Open WebUI**: チャット画面
 - **SearXNG**: Web 検索
 - **調査エージェント**（LangGraph）: Open WebUI のモデル `research-agent` として使える。出典を確かめながら調べて報告する
+- **テレメトリー画面**（ゲートウェイ, http://localhost:8100/ui/）: エージェントの作業の流れをノードと線で見ながら依頼する。
+  画面とエージェントは契約（Agent Protocol v1, `/agent/v1/*`）だけで話すので、エージェントを差し替え・追加できる
+  （`config/agents.toml`。今は調査エージェントとチャット）
 - すべて Docker で動かし、`docker compose up -d` で起動する
 
 ## はじめかた

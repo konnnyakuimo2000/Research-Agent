@@ -1,4 +1,6 @@
-# Open WebUI + SearXNG + 調査エージェント
+# Open WebUI + SearXNG + ゲートウェイ（画面）+ エージェント（調査・チャット）
+# ゲートウェイとエージェントは契約（/agent/v1/*）だけで話す。エージェントを足すときは、ここにサービスを足し、
+# config/agents.toml に 1 項目足す（docs/telemetry_enhancement_plan.md 3 章）
 # 使い方: docker compose up -d   (停止: docker compose down)
 # 接続先などの値は .env から読み込む（.env.example 参照）
 
@@ -12,9 +14,9 @@ services:
     environment:
       # 利用者 ID とチャット ID をエージェントに渡す（同じ文面の会話を取り違えずに再開するため。レビュー 4）
       ENABLE_FORWARD_USER_INFO_HEADERS: "true"
-      # 接続先は 2 つ: LLM サーバー（普通の会話）と、調査エージェント（モデル名 research-agent）
+      # 接続先は 2 つ: LLM サーバー（普通の会話）と、ゲートウェイの OpenAI 互換の入口（モデル名 research-agent）
       # ※ Open WebUI は初回起動時だけこの値を使い、その後は管理画面（設定 → 接続）の値を使う
-      OPENAI_API_BASE_URLS: "${VL_BASE_URL:?.env に VL_BASE_URL を設定してください};http://agent:8000/v1"
+      OPENAI_API_BASE_URLS: "${VL_BASE_URL:?.env に VL_BASE_URL を設定してください};http://webui:8000/v1"
       OPENAI_API_KEYS: "${VL_API_KEY:-dummy};${AGENT_API_KEY:-dummy}"
       # 調査は数分かかるので、応答待ちで切らない（秒）
       AIOHTTP_CLIENT_TIMEOUT: "1800"
@@ -27,24 +29,57 @@ services:
       WEB_SEARCH_RESULT_COUNT: "5"
     depends_on:
       - searxng
-      - agent
+      - webui
     restart: unless-stopped
 
-  agent:
+  # ゲートウェイ: テレメトリー画面（http://localhost:8100/ui/）、依頼の記録、OpenAI 互換の入口
+  webui:
     build: .
     ports:
-      - "127.0.0.1:8100:8000"   # 開発用: この PC から API を直接試す
+      - "127.0.0.1:8100:8000"   # この PC からのみ開ける
+    environment:
+      VL_BASE_URL: ${VL_BASE_URL:?.env に VL_BASE_URL を設定してください}   # 設定の読み込みに要る（ゲートウェイは LLM を呼ばない）
+      AGENT_API_KEY: ${AGENT_API_KEY:-}
+      AGENT_SERVICE_KEY: ${AGENT_SERVICE_KEY:-}
+      AGENT_RESEARCH_URL: http://agent-research:8000
+      AGENT_CHAT_URL: http://agent-chat:8000
+    volumes:
+      - ./runs:/app/runs        # 依頼の記録（一覧の SQLite とイベントの jsonl。git 管理外）
+    networks:
+      default:
+        # 分ける前の接続先（http://agent:8000/v1）を覚えている Open WebUI からも、そのまま届くように
+        aliases: [agent]
+    depends_on:
+      - agent-research
+      - agent-chat
+    restart: unless-stopped
+
+  # 調査エージェント（契約の 0・1 段と research/v1）。外には出さず、ゲートウェイからだけ呼ぶ
+  agent-research:
+    build: .
+    command: ["/app/.venv/bin/uvicorn", "--factory", "my_llm_app.agents.research:create_app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       VL_BASE_URL: ${VL_BASE_URL:?.env に VL_BASE_URL を設定してください}
       VL_MODEL: ${VL_MODEL:-qwen3.8-27b}
       VL_API_KEY: ${VL_API_KEY:-dummy}
-      AGENT_API_KEY: ${AGENT_API_KEY:-}
+      AGENT_SERVICE_KEY: ${AGENT_SERVICE_KEY:-}
       CINII_APPID: ${CINII_APPID:-}
       SEARXNG_URL: http://searxng:8080
     volumes:
-      - ./runs:/app/runs        # 調査の記録（テレメトリー画面の一覧・再生に使う。git 管理外）
+      - ./runs/agent-research:/app/runs/agent-research   # 調べた状態の全体（調べ直すため）
     depends_on:
       - searxng
+    restart: unless-stopped
+
+  # チャット（契約の 0 段だけ）。Open WebUI の裏処理（タイトル生成など）も受け持つ
+  agent-chat:
+    build: .
+    command: ["/app/.venv/bin/uvicorn", "--factory", "my_llm_app.agents.chat:create_app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      VL_BASE_URL: ${VL_BASE_URL:?.env に VL_BASE_URL を設定してください}
+      VL_MODEL: ${VL_MODEL:-qwen3.8-27b}
+      VL_API_KEY: ${VL_API_KEY:-dummy}
+      AGENT_SERVICE_KEY: ${AGENT_SERVICE_KEY:-}
     restart: unless-stopped
 
   searxng:

@@ -109,6 +109,16 @@ button:focus-visible, .node:focus-visible, input:focus-visible { outline: 2px so
 .send .i-play { fill: currentColor; stroke-width: 1.2; }
 .app.noside { grid-template-columns: 0 minmax(300px, 440px) minmax(0, 1fr); }
 .app.noside .side { visibility: hidden; }
+/* エージェントの選択（ゲートウェイが 2 つ以上つないでいるときだけ出す） */
+.agent-sel { border: none; background: none; color: var(--ink); font: inherit; font-size: 12.5px; padding: 4px 6px; border-radius: 8px;
+  cursor: pointer; max-width: 150px; }
+.agent-sel:hover, .agent-sel:focus-visible { background: var(--surface); outline: none; }
+.agent-sel option { background: var(--bg); color: var(--ink); }
+/* 0 段のエージェント（作業・段階を出さない）: 流れの図を出さず、チャットだけにする */
+.app.chatonly { grid-template-columns: 220px minmax(0, 1fr); }
+.app.chatonly.noside { grid-template-columns: 0 minmax(0, 1fr); }
+.app.chatonly .tele { display: none; }
+.app.chatonly .chat, .app.chatonly .dock { width: 100%; max-width: 820px; margin-left: auto; margin-right: auto; }
 
 /* ノードの窓（全面）。中の canvas を拡大・縮小・移動する */
 .tele { position: relative; min-height: 0; min-width: 0; overflow: hidden; }
@@ -220,6 +230,7 @@ button:focus-visible, .node:focus-visible, input:focus-visible { outline: 2px so
 
 @media (max-width: 1180px) {
   .app { grid-template-columns: minmax(280px, 360px) minmax(0, 1fr); }
+  .app.chatonly, .app.chatonly.noside { grid-template-columns: minmax(0, 1fr); }
   .side { display: none; }
 }
 @media (max-width: 820px) {

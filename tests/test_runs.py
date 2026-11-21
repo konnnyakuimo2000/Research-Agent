@@ -1,11 +1,16 @@
-"""テレメトリー画面のための調査の実行（RunManager）。グラフは偽物に差し替える。"""
+"""エージェント側の依頼の実行（agentkit.runs と調査エージェント）。グラフは偽物に差し替える。"""
 
 import time
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
+from fastapi.testclient import TestClient
 from langgraph.types import Command
 
-from my_llm_app.runs import RunManager
+from my_llm_app.agentkit import protocol
+from my_llm_app.agentkit.runs import StateError
+from my_llm_app.agents import research
+from my_llm_app.agents.research import ResearchRuns
 
 
 class FakeGraph:
@@ -13,6 +18,7 @@ class FakeGraph:
 
     def __init__(self):
         self.answered = None
+        self.checkpointer = MagicMock()
 
     def stream(self, payload, config, stream_mode):
         if isinstance(payload, Command):
@@ -21,10 +27,11 @@ class FakeGraph:
             yield "updates", {"respond": {"answer": "報告"}}
             return
         yield "custom", {"type": "step.start", "node": "ask_user", "step": 1, "wall": time.time()}
+        yield "custom", {"type": "page.done", "url": "https://example.org/", "wall": time.time()}
         yield "updates", {"__interrupt__": [SimpleNamespace(value={"question": "どれですか？\n1. 水星\n2. 歌手"})]}
 
     def get_state(self, config):
-        return SimpleNamespace(values={"answer": "水星は太陽系の惑星です。"})
+        return SimpleNamespace(values={"answer": "水星は太陽系の惑星です。", "verified": [], "coverage": []})
 
 
 def wait_for(cond, timeout=5):
@@ -36,33 +43,36 @@ def wait_for(cond, timeout=5):
     return False
 
 
-def test_run_waits_for_answer_then_finishes_and_is_listed(tmp_path):
-    m = RunManager(FakeGraph(), tmp_path)
-    run = m.start("マーキュリーについて")
+def types(run):
+    return [e["type"] for e in run.recorder.events]
+
+
+def test_run_waits_for_answer_then_finishes(tmp_path):
+    g = FakeGraph()
+    m = ResearchRuns(g, tmp_path)
+    run = m.start({"text": "マーキュリーについて"})
     assert wait_for(lambda: run.status == "waiting")
     assert run.question.startswith("どれですか")
+    g.checkpointer.delete_thread.assert_not_called()                  # 答えを待っている間は残す
     m.answer(run.id, "1")
     assert wait_for(lambda: run.status == "done")
-    types = [e["type"] for e in run.recorder.events]
-    assert types == ["run.start", "step.start", "run.waiting", "answer", "run.end"]
-    assert run.recorder.events[-1]["answer"] == "水星は太陽系の惑星です。"
-    assert (tmp_path / f"{run.id}.events.jsonl").exists() and (tmp_path / f"{run.id}.json").exists()
-
-    # サーバーを立ち上げ直した後も、記録から一覧と再生ができる
-    fresh = RunManager(FakeGraph(), tmp_path)
-    listed = fresh.listing()
-    assert listed[0]["id"] == run.id and listed[0]["status"] == "done" and listed[0]["request"] == "マーキュリーについて"
-    assert [e["type"] for e in fresh.events(run.id)] == types
+    assert g.answered == "1"
+    assert types(run) == ["run.start", "step.start", "page.done", "run.waiting", "answer", "run.end"]
+    assert run.recorder.events[-1]["report"] == "水星は太陽系の惑星です。"
+    assert run.result["report"] == "水星は太陽系の惑星です。"
+    assert {a["kind"] for a in run.result["artifacts"]} == {"research/v1:facts", "research/v1:sources",
+                                                           "research/v1:images", "research/v1:coverage"}
+    assert (tmp_path / f"{run.id}.json").exists()
+    g.checkpointer.delete_thread.assert_called_once_with(run.thread_id)   # 終わったら会話の記録を消す
 
 
-def test_answer_is_refused_when_not_waiting_and_unsafe_ids_are_ignored(tmp_path):
-    m = RunManager(FakeGraph(), tmp_path)
+def test_answer_is_refused_when_not_waiting(tmp_path):
+    m = ResearchRuns(FakeGraph(), tmp_path)
     try:
         m.answer("no-such-run", "1")
-        raise AssertionError("答えを待っていない調査には答えられない")
+        raise AssertionError("ない依頼には答えられない")
     except KeyError:
         pass
-    assert m.events_on_disk("../etc/passwd") == []
 
 
 class SlowGraph:
@@ -72,6 +82,7 @@ class SlowGraph:
         import threading
         self.ready = threading.Event()
         self.steps = 0
+        self.checkpointer = MagicMock()
 
     def stream(self, payload, config, stream_mode):
         self.ready.wait(5)
@@ -85,8 +96,8 @@ class SlowGraph:
 
 def test_pause_stops_before_the_next_step_and_resume_finishes(tmp_path):
     g = SlowGraph()
-    m = RunManager(g, tmp_path)
-    run = m.start("水星")
+    m = ResearchRuns(g, tmp_path)
+    run = m.start({"text": "水星"})
     m.pause(run.id)
     assert run.status == "paused"
     g.ready.set()
@@ -96,33 +107,64 @@ def test_pause_stops_before_the_next_step_and_resume_finishes(tmp_path):
     m.resume(run.id)
     assert wait_for(lambda: run.status == "done")
     assert g.steps == 3
-    types = [e["type"] for e in run.recorder.events]
-    assert types == ["run.start", "run.paused", "run.resumed", "run.end"]
+    assert types(run) == ["run.start", "run.paused", "run.resumed", "run.end"]
     try:
         m.resume(run.id)
-        raise AssertionError("止まっていない調査は再開できない")
-    except KeyError:
+        raise AssertionError("止まっていない依頼は再開できない")
+    except StateError:
         pass
 
 
-def test_finished_and_failed_runs_delete_their_checkpoints(tmp_path):
-    from unittest.mock import MagicMock
-    g = FakeGraph()
-    g.checkpointer = MagicMock()
-    m = RunManager(g, tmp_path)
-    run = m.start("マーキュリーについて")
-    assert wait_for(lambda: run.status == "waiting")
-    g.checkpointer.delete_thread.assert_not_called()                  # 答えを待っている間は残す
-    m.answer(run.id, "1")
-    assert wait_for(lambda: run.status == "done")
+def test_cancel_stops_a_running_or_waiting_run_and_deletes_its_checkpoint(tmp_path):
+    g = SlowGraph()
+    m = ResearchRuns(g, tmp_path)
+    run = m.start({"text": "水星"})
+    m.pause(run.id)
+    g.ready.set()
+    assert wait_for(lambda: g.steps == 1)
+    m.cancel(run.id)                                          # 一時停止中に止める
+    assert wait_for(lambda: run.status == "cancelled")
+    assert g.steps == 1 and types(run)[-1] == "run.cancelled"
     g.checkpointer.delete_thread.assert_called_once_with(run.thread_id)
 
+    f = FakeGraph()
+    m2 = ResearchRuns(f, tmp_path)
+    waiting = m2.start({"text": "マーキュリー"})
+    assert wait_for(lambda: waiting.status == "waiting")
+    m2.cancel(waiting.id)                                     # 答え待ちは、すぐ止まる
+    assert waiting.status == "cancelled" and waiting.recorder.finished
+    f.checkpointer.delete_thread.assert_called_once_with(waiting.thread_id)
+
+
+def test_failed_runs_delete_their_checkpoints(tmp_path):
     class Broken(FakeGraph):
         def stream(self, payload, config, stream_mode):
             raise RuntimeError("壊れた")
             yield
     b = Broken()
-    b.checkpointer = MagicMock()
-    run2 = RunManager(b, tmp_path).start("壊れる")
-    assert wait_for(lambda: run2.status == "error")
-    b.checkpointer.delete_thread.assert_called_once_with(run2.thread_id)
+    run = ResearchRuns(b, tmp_path).start({"text": "壊れる"})
+    assert wait_for(lambda: run.status == "error")
+    assert "壊れた" in run.recorder.events[-1]["error"]
+    b.checkpointer.delete_thread.assert_called_once_with(run.thread_id)
+
+
+def test_events_go_out_in_the_protocol_shape_and_rest_while_waiting():
+    from my_llm_app.config import Settings
+    app = research.create_app(graph=FakeGraph(), settings=Settings("http://localhost:1/v1", "m", "k", "http://x"),
+                              key="")
+    c = TestClient(app)
+    assert c.get("/agent/v1/manifest").json()["extensions"] == ["research/v1"]
+    run_id = c.post("/agent/v1/runs", json={"input": {"text": "マーキュリー"}}).json()["run_id"]
+    assert wait_for(lambda: c.get(f"/agent/v1/runs/{run_id}").json()["status"] == "waiting")
+    body = c.get(f"/agent/v1/runs/{run_id}/events").text
+    envs = [e for name, e in protocol.read_sse(body.splitlines()) if name == "message"]
+    assert [e["type"] for e in envs] == ["run.start", "step.start", "research/v1:page.done", "run.waiting"]
+    assert envs[2]["data"]["url"] == "https://example.org/" and envs[0]["v"] == 1
+    assert body.rstrip().endswith('event: rest\ndata: {"status": "waiting"}')     # 答え待ちでは閉じる
+    assert c.post(f"/agent/v1/runs/{run_id}/control", json={"action": "resume"}).status_code == 409
+    assert c.post(f"/agent/v1/runs/{run_id}/input", json={"kind": "answer", "text": "1"}).status_code == 200
+    assert wait_for(lambda: c.get(f"/agent/v1/runs/{run_id}").json()["status"] == "done")
+    rest = c.get(f"/agent/v1/runs/{run_id}/events", params={"after": 4}).text
+    assert [e["type"] for n, e in protocol.read_sse(rest.splitlines()) if n == "message"] == ["answer", "run.end"]
+    assert "event: end" in rest
+    assert c.get(f"/agent/v1/runs/{run_id}/result").json()["report"] == "水星は太陽系の惑星です。"

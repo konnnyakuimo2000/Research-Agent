@@ -31,7 +31,8 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
           </button>
           <span class="cspace"></span>
-          <span class="conn" id="conn" title="研究室の LLM サーバーと検索への接続"><i class="dot"></i><span id="connText"></span><span class="model" id="modelName"></span></span>
+          <select class="agent-sel" id="agentSel" aria-label="エージェント" hidden></select>
+          <span class="conn" id="conn" title="エージェントと、エージェントが使うモデル・検索への接続"><i class="dot"></i><span id="connText"></span><span class="model" id="modelName"></span></span>
           <button type="submit" class="send" id="sendBtn" aria-label="送る">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path class="i-send" d="M12 19V5M6 11l6-6 6 6"/><path class="i-pause" d="M9 6v12M15 6v12"/><path class="i-play" d="M8 5l11 7-11 7z"/></svg>
           </button>

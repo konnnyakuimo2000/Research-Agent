@@ -1,0 +1,21 @@
+# ゲートウェイがつなぐエージェント（docs/telemetry_enhancement_plan.md 3 章）。
+# エージェントを足すときは、契約（/agent/v1/*）を話すサービスを足して、ここに 1 項目足す。
+# 1 つ目が、画面で最初に選ばれるエージェント。
+#   url_env      接続先を読む環境変数（Docker では compose が設定する）。空なら url を使う（この PC で動かすとき）
+#   key_env      エージェントの鍵を読む環境変数（AGENT_SERVICE_KEY。空なら鍵なし）
+#   openai_model OpenAI 互換の入口（Open WebUI）に出すモデル名。空なら出さない
+#   background   Open WebUI の裏処理（タイトル生成など）を受け持つ
+
+[[agents]]
+id = "research"
+url_env = "AGENT_RESEARCH_URL"
+url = "http://localhost:8101"
+key_env = "AGENT_SERVICE_KEY"
+openai_model = "research-agent"
+
+[[agents]]
+id = "chat"
+url_env = "AGENT_CHAT_URL"
+url = "http://localhost:8102"
+key_env = "AGENT_SERVICE_KEY"
+background = true

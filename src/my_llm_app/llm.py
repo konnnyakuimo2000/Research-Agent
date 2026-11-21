@@ -6,6 +6,7 @@ import json
 import logging
 import threading
 import time
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
@@ -111,6 +112,33 @@ class LLM:
     def chat_messages(self, messages: list[dict], temperature: float = 0.5) -> str:
         """会話の履歴をそのまま送る（Open WebUI のタイトル生成などの裏処理を中継するため）。"""
         return self._create(messages, temperature=temperature)
+
+    def stream_messages(self, messages: list[dict], temperature: float = 0.5) -> Iterator[str]:
+        """会話の履歴を送り、返ってくる文を少しずつ返す（チャットのエージェント用）。
+
+        やり直すのは、まだ 1 文字も受け取っていないときだけ（途中から送り直すと、文が重なるため）。
+        """
+        for attempt in range(len(_RETRY_WAITS) + 1):
+            started, got = time.perf_counter(), False
+            try:
+                with _semaphore:
+                    stream = self.client.chat.completions.create(
+                        model=self.model, messages=messages, temperature=temperature, stream=True,
+                        extra_body={"chat_template_kwargs": {"enable_thinking": False}})
+                    for chunk in stream:
+                        text = chunk.choices[0].delta.content if chunk.choices else None
+                        if text:
+                            got = True
+                            yield text
+                return
+            except (APIConnectionError, APIStatusError) as e:
+                if got or not _transient(e) or attempt == len(_RETRY_WAITS):
+                    raise
+                self._add_wait(time.perf_counter() - started)
+                wait = _RETRY_WAITS[attempt]
+                log.warning("LLM に接続できません（%s）。%d 秒後にやり直します", type(e).__name__, wait)
+                time.sleep(wait)
+                self._add_wait(wait)
 
     def chat_text(self, system: str, user: str, temperature: float = 0.5) -> str:
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]

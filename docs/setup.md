@@ -53,7 +53,17 @@ docker compose up -d
 docker compose ps
 ```
 
-`open-webui`・`searxng`・`agent`（調査エージェント）の 3 つが `Up` になっていれば OK（`open-webui` が `healthy` になるまで数分かかる）。
+`open-webui`・`searxng`・`webui`（ゲートウェイ）・`agent-research`（調査エージェント）・`agent-chat`（チャット）の 5 つが `Up` になっていれば OK（`open-webui` が `healthy` になるまで数分かかる）。
+
+画面とエージェントは別のサービスに分かれている（2026-11-21 から）。
+
+| サービス | 内容 |
+|---|---|
+| `webui`（ゲートウェイ） | テレメトリー画面（http://localhost:8100/ui/）、依頼の記録（`runs/`）、Open WebUI 向けの OpenAI 互換の入口。エージェントとは契約（`/agent/v1/*`）だけで話す |
+| `agent-research` | 調査エージェント。外には出さず、ゲートウェイからだけ呼ぶ |
+| `agent-chat` | モデルとそのまま話すだけのエージェント。Open WebUI の裏処理も受け持つ |
+
+つなぐエージェントは `config/agents.toml` に書く。エージェントを足すときは、サービスを足してここに 1 項目足す。
 
 ## 4. 初期設定
 
@@ -81,14 +91,18 @@ docker compose ps
 - タイトル生成などの裏処理は、エージェントではなく `qwen3.8-27b` が直接行う
 
 > 2026-11 より前に Open WebUI を初期設定した場合、エージェントは接続先に入っていない。
-> 管理者パネル →「設定」→「接続」→ OpenAI API に `http://agent:8000/v1`（キーは任意の文字列）を追加し、
+> 管理者パネル →「設定」→「接続」→ OpenAI API に `http://webui:8000/v1`（キーは任意の文字列）を追加し、
 > 「設定」→「インターフェース」→ タスクモデル（外部）を `qwen3.8-27b` にする。
+> 前に追加した `http://agent:8000/v1` は、そのままでも届く（ゲートウェイに `agent` という別名を付けている）。
 
 ### テレメトリー画面（調査の様子を見る）
 
 ブラウザで http://localhost:8100/ui/ を開く。依頼を送ると、エージェントが調べている様子（判断・検索・読んでいるページ・画像の確認・網羅表）が木の形で伸びていく。左の一覧から、これまでの調査を再生できる。
 
-- 調査の記録は `runs/` に保存される（git 管理外）。CLI（`scripts/agent.py`）で実行した調査も一覧に出る
+- 入力欄の下で、依頼を渡すエージェントを選べる（調査エージェント / チャット）。チャットは作業の段階を持たないので、流れの図を出さずにチャットだけになる
+- Open WebUI から `research-agent` に依頼した調査も、この一覧に出る（同じゲートウェイを通るため）
+
+- 依頼の記録は `runs/` に保存される（一覧は `runs/gateway.sqlite`、イベントは `runs/<ID>.events.jsonl`、結果は `runs/<ID>.result.json`。git 管理外）。分ける前の記録と、CLI（`scripts/agent.py`）で実行した調査も一覧に出る
 - `?run=<ID>&speed=0&at=110` のように開くと、その調査の 110 秒時点の状態をすぐに出す
 - `.env` に `AGENT_API_KEY` を設定している場合は、初回に `?key=<キー>` を付けて開く（ブラウザに保存される）
 
@@ -97,7 +111,7 @@ docker compose ps
 - **公開ページ・画像の取得**: エージェントは、検索結果やページから得た URL を、インターネットの公開アドレスにあるものだけ取りに行く。研究室の内部のアドレス（10.x、192.168.x、127.0.0.1、169.254.x など）や、HTTP(S) 以外の URL は取りに行かない。転送（リダイレクト）の先も、つなぐ瞬間の IP アドレスも確かめる。設定は要らない。設定した LLM サーバーと SearXNG には、これまでどおりつながる
 - **大きさの上限**: ページは 3 MB、画像は 8 MB を超えた時点で読むのをやめる
 - **会話の再開**: Open WebUI は `ENABLE_FORWARD_USER_INFO_HEADERS=true`（`docker-compose.yml` に設定済み）で、利用者 ID とチャット ID をエージェントに渡す。エージェントはこの組で、質問への答えをどの調査に戻すかを決める（同じ文面で始めた別の会話を取り違えない）。この設定を変えたときは `docker compose up -d open-webui` で作り直す。ID が届かない使い方（API を直接呼ぶなど）では、質問の末尾に表示されない会話トークンを入れて見分ける
-- エージェントのポート（127.0.0.1:8100）はこの PC からだけ使える。研究室の外に出す場合は、`AGENT_API_KEY` を設定し、Open WebUI 以外から利用者 ID のヘッダーを送れないようにする
+- ゲートウェイのポート（127.0.0.1:8100）はこの PC からだけ使える。エージェントのサービスはポートを出さない（Docker の中からだけ呼べる）。研究室の外に出す場合は、`AGENT_API_KEY`（ゲートウェイ）と `AGENT_SERVICE_KEY`（ゲートウェイ → エージェント）を設定し、Open WebUI 以外から利用者 ID のヘッダーを送れないようにする
 
 ## 6. よく使うコマンド
 
@@ -108,8 +122,8 @@ docker compose ps
 | `docker compose ps` | 状態を確認 |
 | `docker compose logs -f open-webui` | ログを表示（Ctrl+C で終了） |
 | `docker compose restart open-webui` | Open WebUI だけ再起動 |
-| `docker compose up -d --build agent` | エージェントのコードを変えた後に作り直して再起動 |
-| `docker compose logs -f agent` | エージェントのログを表示 |
+| `docker compose up -d --build webui agent-research agent-chat` | コードを変えた後に作り直して再起動 |
+| `docker compose logs -f agent-research` | 調査エージェントのログを表示（ゲートウェイは `webui`） |
 
 **注意**: `docker compose down -v` は、アカウントと会話履歴もすべて削除する。最初からやり直したいとき以外は使わない。
 
@@ -133,8 +147,8 @@ docker compose up -d
 | 返事が返ってこない・途中で止まる | 研究室サーバーが混んでいるか、一時的に止まっている（共有サーバーのため）。時間をおいて再度試す |
 | 「ウェブ検索」が見つからない | 「＋」の中ではなく、その右の「統合」ボタンの中にある。それでも出なければ `Ctrl+F5` で再読み込み |
 | http://localhost:3000 が開けない | `docker compose ps` で起動しているか確認。Docker Desktop が起動しているかも確認する |
-| モデル選択に `research-agent` が出ない | `docker compose ps` で `agent` が `Up` か確認。古い設定のままなら手順 5 の注意のとおり接続先を追加する |
-| `research-agent` が途中で止まる | `docker compose logs agent` でエラーを確認する。答えを待っている状態は 6 時間で消えるので、それより後に答えた場合は最初から調べ直す |
+| モデル選択に `research-agent` が出ない | `docker compose ps` で `webui` と `agent-research` が `Up` か確認。古い設定のままなら手順 5 の注意のとおり接続先を追加する |
+| `research-agent` が途中で止まる | `docker compose logs agent-research`（と `webui`）でエラーを確認する。答えを待っている状態は 6 時間で消えるので、それより後に答えた場合は最初から調べ直す |
 | `.env` を変えたのに反映されない | 接続先などの設定は初回起動時に保存され、以後は管理画面（管理者パネル →「設定」）の値が優先される。管理画面で変更する |
 
 ## 9. Python スクリプト（任意）
@@ -148,3 +162,13 @@ uv run scripts/chat.py      # ターミナルで会話
 ```
 
 難しい問題でモデルを試すときは [hard_prompts.md](hard_prompts.md) のプロンプトを使う。
+
+Docker を使わずにこの PC で画面とエージェントを動かすとき（開発用。SearXNG は Docker のものを使う）:
+
+```sh
+uv run uvicorn --factory my_llm_app.agents.research:create_app --port 8101   # 調査エージェント
+uv run uvicorn --factory my_llm_app.agents.chat:create_app --port 8102       # チャット
+uv run uvicorn --factory my_llm_app.gateway.app:create_app --port 8110       # ゲートウェイ → http://localhost:8110/ui/
+```
+
+接続先は `config/agents.toml` の `url`（環境変数 `AGENT_RESEARCH_URL`・`AGENT_CHAT_URL` があればそちら）。
