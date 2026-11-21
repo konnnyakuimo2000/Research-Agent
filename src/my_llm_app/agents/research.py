@@ -33,7 +33,7 @@ NODES = [("check_feasibility", "依頼の確認"), ("decide", "判断"), ("searc
          ("report_infeasible", "調べられないことの報告")]
 
 MANIFEST = {
-    "id": "research", "name": "調査エージェント", "version": VERSION, "protocol": "1",
+    "id": "research", "name": "Research-Agent", "version": VERSION, "protocol": "1",
     "description": "公開の Web とデータベースを調べ、引用を照合した事実だけで出典付きの報告を書く",
     "levels": [0, 1],
     "extensions": [EXTENSION],

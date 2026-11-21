@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <!-- Research-Agent のマーク: 調べる輪（レンズ）から伸びた柄が、2 つに枝分かれする（作業の流れの木）。 -->
+  <style>
+    .m { stroke: #0d0d0d; } .d { fill: #0d0d0d; }
+    @media (prefers-color-scheme: dark) { .m { stroke: #ececec; } .d { fill: #ececec; } }
+  </style>
+  <circle class="m" cx="12.5" cy="12.5" r="7.5" stroke-width="3"/>
+  <path class="m" d="M18 18l4.5 4.5M22.5 22.5h5.5M22.5 22.5v5.5" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle class="d" cx="28" cy="22.5" r="2.2"/>
+  <circle class="d" cx="22.5" cy="28" r="2.2"/>
+</svg>

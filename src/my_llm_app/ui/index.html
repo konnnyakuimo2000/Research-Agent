@@ -3,14 +3,22 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>調査エージェント</title>
+<title>Research-Agent</title>
+<link rel="icon" href="logo.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div class="app">
   <aside class="side" aria-label="調査の一覧">
     <div class="side-top">
-      <span class="brand">調査エージェント</span>
+      <span class="brand" aria-label="Research-Agent">
+        <svg class="mark" viewBox="0 0 32 32" aria-hidden="true">
+          <circle cx="12.5" cy="12.5" r="7.5"/>
+          <path d="M18 18l4.5 4.5M22.5 22.5h5.5M22.5 22.5v5.5"/>
+          <circle class="dot" cx="28" cy="22.5" r="2.2"/><circle class="dot" cx="22.5" cy="28" r="2.2"/>
+        </svg>
+        <span class="word">Research<span class="dash">-</span>Agent</span>
+      </span>
       <button type="button" id="newBtn" class="pill">＋ 新しい調査</button>
     </div>
     <div class="runs" id="runs"></div>
