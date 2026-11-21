@@ -63,7 +63,8 @@ class ResearchRuns(RunManager):
 
     def work(self, run: Run, payload: tuple[str, object]) -> Done | Waiting | Cancelled:
         kind, value = payload
-        graph_input = {"request": run.request, "models": run.models} if kind == "start" else Command(resume=value)
+        graph_input = ({"request": run.request, "models": run.models, "budget": run.id} if kind == "start"
+                       else Command(resume=value))
         config = {"configurable": {"thread_id": run.thread_id}, "recursion_limit": RECURSION_LIMIT}
         question = ""
         for mode, chunk in self.graph.stream(graph_input, config, stream_mode=["updates", "custom"]):

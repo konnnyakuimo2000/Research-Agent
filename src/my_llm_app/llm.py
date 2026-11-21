@@ -30,6 +30,9 @@ _RETRY_WAITS = (10, 30, 60)
 # 研究室の qwen 向けの既定（思考モード OFF。応答速度を優先）。窓口を使うときは窓口の設定（models.toml）に従う
 _DIRECT_EXTRA_BODY = {"chat_template_kwargs": {"enable_thinking": False}}
 
+# 費用を調査ごとに数えるための見出し。エージェントは調査の id を入れて窓口に送る（窓口は調査ごとの費用の上限に使う）
+BUDGET_HEADER = "X-Model-Budget"
+
 # やり直す失敗（一時的なもの）: 接続できない・待ち時間切れ（APIConnectionError とその子の APITimeoutError）と、
 # 状態コード 408（待ち時間切れ）・409（競合）・429（混雑）・5xx（サーバーの障害）。SDK が既定でやり直すものと同じ範囲
 _RETRY_STATUS = {408, 409, 429}
@@ -62,15 +65,16 @@ def gateway_failure(e: Exception) -> tuple[bool, float]:
 
 class LLM:
     def __init__(self, settings: Settings, http_client: httpx.Client | None = None,
-                 semaphore: Any = None, extra_body: dict | None = None) -> None:
+                 semaphore: Any = None, extra_body: dict | None = None, client: Any = None) -> None:
         self.model = settings.llm_model
         self.gateway = bool(getattr(settings, "llm_gateway", False))
         # 同時実行の上限: 窓口を呼ぶときは窓口が守るので、ここでは数えない
         self._sem = semaphore or (contextlib.nullcontext() if self.gateway else _semaphore)
         self.extra_body = extra_body if extra_body is not None else ({} if self.gateway else _DIRECT_EXTRA_BODY)
         # やり直しはこのクラス（_call）だけで行う。SDK のやり直し（既定 2 回）と重なると、
-        # 1 回の呼び出しで最大 12 回送ってしまい、待った時間も数えられないため、SDK 側は 0 回にする
-        self.client = OpenAI(
+        # 1 回の呼び出しで最大 12 回送ってしまい、待った時間も数えられないため、SDK 側は 0 回にする。
+        # client を渡すと、それを使う（窓口の中の Claude の部品など。同じ呼び方 .chat.completions.create を持つもの）
+        self.client = client or OpenAI(
             base_url=settings.llm_base_url,
             api_key=settings.llm_api_key,
             timeout=settings.llm_timeout,
@@ -112,16 +116,15 @@ class LLM:
         time.sleep(wait)
         on_wait(wait)
 
-    def for_role(self, role: str, models: dict | None = None) -> "RoleLLM":
+    def for_role(self, role: str, models: dict | None = None, budget: str | None = None) -> "RoleLLM":
         """役割（decide・extract・vision・report・chat）で頼む部品。
 
         依頼ごとの選び直し（models: 役割 → モデルの id）があればそのモデル、なければ窓口の役割の既定（role:<役割>）。
-        窓口を使わないときは、役割にかかわらず設定のモデル。
+        窓口を使わないときは、役割にかかわらず設定のモデル。budget（調査の id）は窓口が調査ごとの費用を数えるのに使う。
         """
         chosen = (models or {}).get(role)
-        if chosen:
-            return RoleLLM(self, chosen, role)
-        return RoleLLM(self, f"role:{role}" if self.gateway else self.model, role)
+        model = chosen or (f"role:{role}" if self.gateway else self.model)
+        return RoleLLM(self, model, role, budget if self.gateway else None)
 
     def call(self, messages: list[dict], model: str | None = None, **kwargs: Any) -> tuple[Any, float]:
         """応答の全体と、この呼び出しで待った秒数。やり直しても失敗したら、例外に model_wait を付けて投げる。"""
@@ -177,12 +180,12 @@ class LLM:
                     raise
                 self._retry(e, attempt, started, waited)
 
-    def _create(self, messages: list[dict], **kwargs: Any) -> str:
-        r, _ = self.call(messages, **kwargs)
+    def _create(self, messages: list[dict], headers: dict | None = None, **kwargs: Any) -> str:
+        r, _ = self.call(messages, **kwargs, **({"extra_headers": headers} if headers else {}))
         return r.choices[0].message.content or ""
 
     def chat_json(self, system: str, user: str, schema: dict, temperature: float = 0.2,
-                  image_data_url: str | None = None, model: str | None = None) -> dict:
+                  image_data_url: str | None = None, model: str | None = None, headers: dict | None = None) -> dict:
         """JSON スキーマに沿った出力を返す。壊れた JSON なら 1 回だけやり直す。画像を 1 枚添えられる。"""
         content: str | list = user
         if image_data_url:
@@ -191,47 +194,52 @@ class LLM:
         response_format = {"type": "json_schema", "json_schema": {"name": "output", "schema": schema}}
         last_error: Exception | None = None
         for _ in range(2):
-            text = self._create(messages, response_format=response_format, temperature=temperature, model=model)
+            text = self._create(messages, headers, response_format=response_format, temperature=temperature, model=model)
             try:
                 return json.loads(text)
             except json.JSONDecodeError as e:
                 last_error = e
         raise LLMOutputError(f"LLM の出力が JSON になりませんでした: {last_error}")
 
-    def chat_messages(self, messages: list[dict], temperature: float = 0.5, model: str | None = None) -> str:
+    def chat_messages(self, messages: list[dict], temperature: float = 0.5, model: str | None = None,
+                      headers: dict | None = None) -> str:
         """会話の履歴をそのまま送る。"""
-        return self._create(messages, temperature=temperature, model=model)
+        return self._create(messages, headers, temperature=temperature, model=model)
 
-    def stream_messages(self, messages: list[dict], temperature: float = 0.5, model: str | None = None) -> Iterator[str]:
+    def stream_messages(self, messages: list[dict], temperature: float = 0.5, model: str | None = None,
+                        headers: dict | None = None) -> Iterator[str]:
         """会話の履歴を送り、返ってくる文を少しずつ返す（チャットのエージェント用）。"""
-        for chunk in self.stream_chunks(messages, temperature=temperature, model=model):
+        extra = {"extra_headers": headers} if headers else {}
+        for chunk in self.stream_chunks(messages, temperature=temperature, model=model, **extra):
             text = chunk.choices[0].delta.content if chunk.choices else None
             if text:
                 yield text
 
-    def chat_text(self, system: str, user: str, temperature: float = 0.5, model: str | None = None) -> str:
+    def chat_text(self, system: str, user: str, temperature: float = 0.5, model: str | None = None,
+                  headers: dict | None = None) -> str:
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-        return self._create(messages, temperature=temperature, model=model)
+        return self._create(messages, headers, temperature=temperature, model=model)
 
 
 class RoleLLM:
-    """1 つの役割のモデルで頼む。待った秒数などは元の LLM に数える。"""
+    """1 つの役割のモデルで頼む。待った秒数などは元の LLM に数える。budget があれば、調査の id を見出しに入れて送る。"""
 
-    def __init__(self, base: LLM, model: str, role: str) -> None:
-        self.base, self.model, self.role = base, model, role
+    def __init__(self, base: LLM, model: str, role: str, budget: str | None = None) -> None:
+        self.base, self.model, self.role, self.budget = base, model, role, budget
+        self.headers = {BUDGET_HEADER: budget} if budget else None
 
     @property
     def waited(self) -> float:
         return self.base.waited
 
     def chat_json(self, *args: Any, **kwargs: Any) -> dict:
-        return self.base.chat_json(*args, model=self.model, **kwargs)
+        return self.base.chat_json(*args, model=self.model, headers=self.headers, **kwargs)
 
     def chat_text(self, *args: Any, **kwargs: Any) -> str:
-        return self.base.chat_text(*args, model=self.model, **kwargs)
+        return self.base.chat_text(*args, model=self.model, headers=self.headers, **kwargs)
 
     def chat_messages(self, *args: Any, **kwargs: Any) -> str:
-        return self.base.chat_messages(*args, model=self.model, **kwargs)
+        return self.base.chat_messages(*args, model=self.model, headers=self.headers, **kwargs)
 
     def stream_messages(self, *args: Any, **kwargs: Any) -> Iterator[str]:
-        return self.base.stream_messages(*args, model=self.model, **kwargs)
+        return self.base.stream_messages(*args, model=self.model, headers=self.headers, **kwargs)

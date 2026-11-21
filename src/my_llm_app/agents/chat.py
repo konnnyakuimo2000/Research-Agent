@@ -34,7 +34,7 @@ class ChatRuns(RunManager):
         messages = run.input.get("messages") or [{"role": "user", "content": run.request}]
         parts = []
         for_role = getattr(self.llm, "for_role", None)
-        llm = for_role("chat", run.models) if for_role else self.llm
+        llm = for_role("chat", run.models, run.id) if for_role else self.llm
         for delta in llm.stream_messages(messages):
             if run.cancelled:
                 return Cancelled()

@@ -104,6 +104,15 @@ class Gateway:
     def listing(self, limit: int = 50) -> list[dict]:
         return [_summary(r) for r in self.store.listing(limit)]
 
+    def usage(self, run_id: str) -> dict | None:
+        """調査の費用（モデルの窓口が数えたもの）。窓口を使わない構成・つながらないときは None。"""
+        rec = self.store.get(run_id)
+        if rec is None or self.catalog is None:
+            return None
+        if not rec.get("agent_run"):                        # 分ける前の記録（窓口を通していない）
+            return {"usd": 0.0, "models": {}, "limit_usd": None}
+        return self.catalog.run_usage(rec["agent_run"])
+
     def result(self, run_id: str) -> dict | None:
         return self.store.result(run_id)
 

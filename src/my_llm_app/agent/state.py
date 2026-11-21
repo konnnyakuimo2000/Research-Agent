@@ -95,6 +95,7 @@ class Feasibility(TypedDict):
 class AgentState(TypedDict, total=False):
     request: str                      # 利用者の依頼（原文）
     models: dict[str, str]            # 依頼ごとに選び直したモデル（役割 → モデルの窓口の id。なければ役割の既定）
+    budget: str                       # 窓口が調査ごとの費用を数える鍵（エージェントの依頼の id）
     feasibility: Feasibility          # 公開情報で調べられる依頼かの判定（設計書 4 章 ④）
     clarifications: list[str]         # 質問に対する利用者の回答
     known: list[Fact]                 # わかったこと（検索結果の要約から。次の行動を決める手がかりにだけ使う）

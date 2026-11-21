@@ -75,6 +75,26 @@ curl -X POST http://localhost:8100/api/runs -H "Content-Type: application/json" 
 選べるモデルは `GET /api/models` で見られる。役割に要る能力（画像の確認なら `vision`）がないモデルは、始める前に断る。
 どの依頼でどのモデルを使ったかは、一覧（`GET /api/runs` の `models`）に残る。エージェントを足すときはサービスを足して `agents.toml` に 1 項目、モデルを足すときは `models.toml` に 1 項目足す。
 
+### Web API のモデル（Claude・OpenAI）
+
+`models.toml` には Claude（`claude-opus`・`claude-haiku`）が入っている。`.env` に `ANTHROPIC_API_KEY` を書いて、
+`docker compose up -d model-gateway` で窓口を立ち上げ直すと使えるようになる（鍵がなければ、一覧に「使えない」と出る）。
+OpenAI は `models.toml` の例のコメントを外し、`OPENAI_API_KEY`・`OPENAI_MODEL` と値段を書く。
+
+- **外部に送られる**: Web API のモデルを選ぶと、依頼文と読んだページの本文がその会社に送られる（一覧の `external: true`）
+- **費用**: 値段（`price`）を書いたモデルは、呼び出しごとに費用を数える。上限は `models.toml` の `[limits]`
+  （既定は 1 日 $5・1 つの調査 $1）。上限に達すると、値段のあるモデルへは送らずに断る（研究室のモデルは止めない）。
+  送る前に確かめるので、同時に送っている分だけ少し超えることがある
+- 今日の費用とモデルごとの使用量は窓口の `GET /v1/usage`、1 つの調査の費用はゲートウェイの `GET /api/runs/{id}/usage`
+- 記録は `runs/model_spend.json`（立ち上げ直しても今日の分を覚えている）
+
+研究室のモデルと Claude で同じ依頼を比べる例:
+
+```sh
+curl -X POST http://localhost:8100/api/runs -H "Content-Type: application/json" \
+  -d '{"request": "...", "agent": "research", "models": {"decide": "claude-haiku", "extract": "claude-haiku", "vision": "claude-haiku", "report": "claude-haiku"}}'
+```
+
 ## 4. 初期設定
 
 1. ブラウザで **http://localhost:3000** を開く

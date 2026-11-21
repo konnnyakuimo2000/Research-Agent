@@ -10,7 +10,9 @@
     POST /api/runs/{id}/answer|pause|resume|cancel
     GET  /api/runs/{id}/result             結果（報告と成果物）
     GET  /api/status?agent=…               そのエージェントが使うモデルなどにつながるか
-    GET  /api/models                       モデルの窓口のモデル（役割の既定・能力）。POST /api/runs の models で選び直せる
+    GET  /api/models                       モデルの窓口のモデル（役割の既定・能力・外部か・値段・使えるか）。
+                                           POST /api/runs の models で選び直せる
+    GET  /api/runs/{id}/usage              その調査の費用（モデルの窓口が数えたもの）
     GET  /api/favicon, /api/image          サイトのアイコンと画像（ゲートウェイが取得して配る）
 OpenAI 互換の入口: /v1/models, /v1/chat/completions（openai_compat）
 
@@ -125,7 +127,18 @@ def create_app(registry: Registry | None = None, runs_dir: Path | None = None, a
                     "default": "", "roles": {}, "models": []}
         return {"available": True, "default": value.get("default", ""), "roles": value.get("roles", {}),
                 "models": [{k: m.get(k) for k in ("id", "title", "provider", "upstream_model", "capabilities",
-                                                  "context_tokens", "default")} for m in value.get("data", [])]}
+                                                  "context_tokens", "default", "external", "price", "available",
+                                                  "unavailable")} for m in value.get("data", [])]}
+
+    @app.get("/api/runs/{run_id}/usage")
+    def api_run_usage(run_id: str, authorization: str | None = Header(default=None)) -> dict:
+        check_key(authorization)
+        if gw.store.get(run_id) is None:
+            raise HTTPException(status_code=404, detail="その依頼はありません")
+        value = gw.usage(run_id)
+        if value is None:
+            raise HTTPException(status_code=503, detail="モデルの窓口につながりません")
+        return value
 
     @app.get("/api/runs")
     def api_runs(authorization: str | None = Header(default=None), key: str | None = None) -> dict:

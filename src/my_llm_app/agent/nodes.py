@@ -55,7 +55,8 @@ class Nodes:
         役割で頼めない LLM（テストの偽物など）は、そのまま使う。
         """
         for_role = getattr(self.llm, "for_role", None)
-        return for_role(role, (state or {}).get("models")) if for_role else self.llm
+        state = state or {}
+        return for_role(role, state.get("models"), state.get("budget")) if for_role else self.llm
 
     def check_feasibility(self, state: AgentState) -> dict:
         """公開情報で調べられる依頼かを、調査を始める前に判定する（設計書 4 章 ④、例 D）。"""

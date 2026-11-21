@@ -4,6 +4,8 @@
 - 依頼ごとの選び直し（役割 → モデル）は、エージェントの名乗りの model_roles（役割と必要な能力）と、
   窓口のモデルの能力（capabilities）を照らして、受け付ける前に確かめる
 - 記録には、選び直していない役割も含めて「実際に使う対応」を残す（あとで比べるため）
+- 使えないモデル（Web API の鍵がないなど）は、選び直しにも役割の既定にも使えない
+- 調査ごとの費用は、窓口の /v1/usage/runs/{エージェントの依頼の id} から読む
 """
 
 from __future__ import annotations
@@ -53,6 +55,17 @@ class ModelCatalog:
             self.error = f"{type(e).__name__}: {e}"
         return self._value
 
+    def run_usage(self, agent_run: str) -> dict | None:
+        """1 つの調査の費用（つながらなければ None）。"""
+        try:
+            headers = {"Authorization": f"Bearer {self.key}"} if self.key else {}
+            r = (self.http or httpx.Client(trust_env=False, timeout=10)).get(
+                self.url.rstrip("/") + f"/usage/runs/{agent_run}", headers=headers)
+            r.raise_for_status()
+            return r.json()
+        except (httpx.HTTPError, ValueError):
+            return None
+
 
 def effective_models(manifest: dict, requested: dict | None, catalog: dict | None) -> dict[str, str]:
     """役割ごとに実際に使うモデル。選べないものがあれば ModelChoiceError。
@@ -79,5 +92,8 @@ def effective_models(manifest: dict, requested: dict | None, catalog: dict | Non
         if missing:
             raise ModelChoiceError(f"{spec.get('title', role)}（{role}）には {', '.join(sorted(missing))} が要りますが、"
                                    f"{model.get('title', model_id)} は対応していません")
+        if model.get("available") is False:
+            raise ModelChoiceError(f"{spec.get('title', role)}（{role}）のモデル {model.get('title', model_id)} は"
+                                   f"使えません（{model.get('unavailable', '')}）")
         out[role] = model_id
     return out

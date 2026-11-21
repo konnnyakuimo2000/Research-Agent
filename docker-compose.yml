@@ -103,6 +103,13 @@ services:
       VL_MODEL: ${VL_MODEL:-qwen3.8-27b}
       VL_API_KEY: ${VL_API_KEY:-dummy}
       MODEL_GATEWAY_KEY: ${MODEL_GATEWAY_KEY:-}
+      # Web API の鍵（窓口だけが持つ。なければ、そのモデルは「使えない」として一覧に出る）
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      MODEL_SPEND_FILE: /app/runs/model_spend.json   # 費用の記録（立ち上げ直しても今日の分を覚えておく）
+    volumes:
+      - ./runs:/app/runs
     restart: unless-stopped
 
   searxng:

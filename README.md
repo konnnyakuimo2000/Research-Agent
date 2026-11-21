@@ -8,7 +8,7 @@
 - **テレメトリー画面**（ゲートウェイ, http://localhost:8100/ui/）: エージェントの作業の流れをノードと線で見ながら依頼する。
   画面とエージェントは契約（Agent Protocol v1, `/agent/v1/*`）だけで話すので、エージェントを差し替え・追加できる
   （`config/agents.toml`。今は調査エージェントとチャット）
-- **モデルの窓口**（model-gateway）: エージェントはモデルを直接呼ばず、ここに頼む。どのモデルに送るかは `config/models.toml`
+- **モデルの窓口**（model-gateway）: エージェントはモデルを直接呼ばず、ここに頼む。どのモデルに送るかは `config/models.toml`。研究室のモデルのほか、Web API のモデル（Claude・OpenAI）も選べ、費用を数えて上限で止める
   で決める（画面・エージェント・モデルの三層）
 - すべて Docker で動かし、`docker compose up -d` で起動する
 

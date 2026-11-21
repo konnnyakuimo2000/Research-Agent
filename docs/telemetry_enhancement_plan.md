@@ -1,7 +1,7 @@
 # テレメトリー画面の機能強化案（WebUI とエージェントの分離・モデルの切り替え）
 
 - 作成: 2026-11-21
-- 状態: X1（分離）は実装済み（2026-11-21）。X2 は三層の形（6 章）に改め、M1（モデルの窓口を分ける）は実装済み、M2（役割ごとのモデル）を実装中。M3 以降は案
+- 状態: X1（分離）は実装済み（2026-11-21）。X2 は三層の形（6 章）に改め、M1（モデルの窓口を分ける）・M2（役割ごとのモデル）は実装済み、M3（Web API のモデル）を実装中。M4 以降は案
 - 関係する文書: [テレメトリー画面の設計](telemetry_design.md)、[タスクフロー設計](task_flow_design.md)、[実装計画](implementation_plan.md)
 - 比べた Open WebUI: 0.12.3（このリポジトリの Docker で動いているもの。サーバーの機能の入り口 `routers/` の一覧で確認）
 
@@ -245,7 +245,7 @@ default = "lab-qwen"                  # 既定のモデル（役割に書いて�
 [[models]]
 id = "lab-qwen"
 title = "研究室 qwen3.8-27b"
-provider = "openai"                   # OpenAI 互換（llama.cpp・Ollama・vLLM・OpenAI）。M3 で "anthropic" などを足す
+provider = "openai"                   # OpenAI 互換（llama.cpp・Ollama・vLLM・OpenAI）。Claude は "anthropic"（M3）
 base_url_env = "VL_BASE_URL"          # 接続先と鍵は .env から読む（リポジトリに書かない）
 api_key_env = "VL_API_KEY"
 model_env = "VL_MODEL"                # モデル名も .env で替えられる（なければ model）
@@ -255,15 +255,21 @@ max_concurrency = 2                   # このモデルに同時に送る数（�
 context_tokens = 32768
 extra_body = { chat_template_kwargs = { enable_thinking = false } }   # モデルごとの癖（思考モード OFF）
 
-# M3 の例: Web API
-# [[models]]
-# id = "claude"
-# provider = "anthropic"
-# api_key_env = "ANTHROPIC_API_KEY"
-# model = "claude-sonnet-5-5"
-# capabilities = ["json_schema", "vision"]
-# max_concurrency = 4
-# price = { input_per_mtok = …, output_per_mtok = … }
+# M3: Web API（鍵がなければ一覧に「使えない」と出る）
+[[models]]
+id = "claude-opus"
+provider = "anthropic"
+api_key_env = "ANTHROPIC_API_KEY"
+model = "claude-opus-5-5"
+capabilities = ["json_schema", "vision"]
+max_concurrency = 4
+price = { input_per_mtok = 4.0, output_per_mtok = 20.0, cache_read_per_mtok = 0.20 }
+fallbacks = "default"                 # 安全の判定で断られたら、同じ呼び出しの中で別のモデルが答える
+
+# 費用の上限（値段のあるモデルの合計）
+[limits]
+daily_usd = 5.0
+run_usd = 1.0
 
 # 役割ごとの既定のモデル（M2）
 [roles]
@@ -274,6 +280,13 @@ report = "lab-qwen"      # 報告
 chat = "lab-qwen"        # チャットのエージェント
 ```
 
+- M3 の実装:
+  - Claude の変換の部品（`modelgw/anthropic_provider.py`）は OpenAI の SDK と同じ呼び方を持ち、Anthropic の公式 SDK で送って応答・失敗を OpenAI の形にそろえる。
+    そのため、やり直し・待ち時間の数え方・同時実行の上限は研究室のモデルと同じ部品（`llm.py`）が受け持つ。
+    temperature は送らず、JSON スキーマは Claude の構造化出力の形（object を閉じる・使えない制約を外す）にする。ツールの呼び出しは、まだ断る
+  - 費用は窓口が呼び出しごとに数え（応答の `x_model_cost`）、日ごとと調査ごとに足す（`runs/model_spend.json`）。
+    エージェントは調査の id を見出し `X-Model-Budget` に入れて頼む。上限に達すると、値段のあるモデルへは送る前に 402 で断る
+  - 鍵のない Web API のモデルは「使えない」（`available: false`）として一覧に残し、選び直しでも断る
 - M2 の実装: エージェントは `llm.for_role(役割, 依頼ごとの選び直し)` で頼む。調査エージェントでは選び直しを調査の状態（`models`）に入れ、
   並列に読むスレッドの中でも同じ対応を使う。ゲートウェイは依頼を受けたときに、役割ごとに実際に使うモデルを決めて（選び直し → `[roles]` → 既定）
   能力を確かめ、エージェントに渡して記録に残す
