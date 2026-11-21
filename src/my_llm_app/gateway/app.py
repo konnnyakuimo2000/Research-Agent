@@ -10,6 +10,7 @@
     POST /api/runs/{id}/answer|pause|resume|cancel
     GET  /api/runs/{id}/result             結果（報告と成果物）
     GET  /api/status?agent=…               そのエージェントが使うモデルなどにつながるか
+    GET  /api/models                       モデルの窓口のモデル（役割の既定・能力）。POST /api/runs の models で選び直せる
     GET  /api/favicon, /api/image          サイトのアイコンと画像（ゲートウェイが取得して配る）
 OpenAI 互換の入口: /v1/models, /v1/chat/completions（openai_compat）
 
@@ -31,6 +32,7 @@ from my_llm_app import assets
 from my_llm_app.agentkit import protocol
 from my_llm_app.gateway import openai_compat
 from my_llm_app.gateway.core import Gateway, Unavailable, flat_events
+from my_llm_app.gateway.models import ModelCatalog, ModelChoiceError
 from my_llm_app.gateway.registry import AgentError, Registry
 from my_llm_app.gateway.store import RunStore
 
@@ -48,13 +50,15 @@ class UIFiles(StaticFiles):
 
 
 def create_app(registry: Registry | None = None, runs_dir: Path | None = None, api_key: str | None = None,
-               resume: bool = True) -> FastAPI:
+               resume: bool = True, catalog: ModelCatalog | None | bool = True) -> FastAPI:
     from my_llm_app.config import REPO_ROOT
 
     runs_dir = runs_dir or REPO_ROOT / "runs"
     registry = registry or Registry.from_file(REPO_ROOT / "config" / "agents.toml")
     api_key = os.getenv("AGENT_API_KEY", "") if api_key is None else api_key
-    gw = Gateway(registry, RunStore(runs_dir))
+    if catalog is True:
+        catalog = ModelCatalog.from_env()          # MODEL_GATEWAY_URL がなければ、モデルの選び直しはできない
+    gw = Gateway(registry, RunStore(runs_dir), catalog or None)
     assets_dir = runs_dir / ".assets"
     app = FastAPI(title="my_llm_app gateway")
     app.state.gateway = gw
@@ -74,6 +78,8 @@ def create_app(registry: Registry | None = None, runs_dir: Path | None = None, a
             raise HTTPException(status_code=503, detail=f"エージェントにつながりません: {e}") from None
         except AgentError as e:
             raise HTTPException(status_code=e.status if e.status in (400, 404, 409) else 502, detail=e.detail) from None
+        except ModelChoiceError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from None
 
     compat = openai_compat.router(gw, check_key)
     app.state.sessions = compat.sessions
@@ -94,7 +100,10 @@ def create_app(registry: Registry | None = None, runs_dir: Path | None = None, a
         request = str(body.get("request", "")).strip()
         if not request:
             raise HTTPException(status_code=400, detail="依頼が空です")
-        return call(gw.start, str(body.get("agent", "")), request)
+        models = body.get("models") or {}
+        if not isinstance(models, dict):
+            raise HTTPException(status_code=400, detail="models は {役割: モデル} の形にしてください")
+        return call(lambda: gw.start(str(body.get("agent", "")), request, models=models))
 
     @app.post("/api/runs/{run_id}/answer")
     def api_answer(run_id: str, body: dict, authorization: str | None = Header(default=None)) -> dict:
@@ -106,6 +115,17 @@ def create_app(registry: Registry | None = None, runs_dir: Path | None = None, a
             check_key(authorization)
             return call(gw.control, run_id, _action)
         app.post(f"/api/runs/{{run_id}}/{action}", name=f"api_{action}")(control)
+
+    @app.get("/api/models")
+    def api_models(authorization: str | None = Header(default=None)) -> dict:
+        check_key(authorization)
+        value = gw.models()
+        if value is None:
+            return {"available": False, "error": gw.catalog.error if gw.catalog else "モデルの窓口を使っていない",
+                    "default": "", "roles": {}, "models": []}
+        return {"available": True, "default": value.get("default", ""), "roles": value.get("roles", {}),
+                "models": [{k: m.get(k) for k in ("id", "title", "provider", "upstream_model", "capabilities",
+                                                  "context_tokens", "default")} for m in value.get("data", [])]}
 
     @app.get("/api/runs")
     def api_runs(authorization: str | None = Header(default=None), key: str | None = None) -> dict:

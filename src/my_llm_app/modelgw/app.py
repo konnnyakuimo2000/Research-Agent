@@ -3,7 +3,7 @@
     uv run uvicorn --factory my_llm_app.modelgw.app:create_app --port 8103
 
     GET  /v1/models              使えるモデル（OpenAI の形 + title・capabilities など）
-    POST /v1/chat/completions    OpenAI 互換。model は id・モデル名・"default"・空（既定）・"role:<役割>"（M2 まで既定）
+    POST /v1/chat/completions    OpenAI 互換。model は id・モデル名・"default"・空（既定）・"role:<役割>"（[roles] の対応、なければ既定）
     GET  /v1/usage               モデルごとの使用量
     GET  /health                 モデルごとにつながるか（20 秒覚えておく）
 
@@ -11,7 +11,10 @@
   上限はこの窓口の中で守るので、エージェントがいくつあっても、モデルに同時に送る数は max_concurrency まで
 - 待った秒数を応答に x_model_wait として付ける（流しながらの応答は最初のかたまりに）。エージェントはそれを
   調査の時間の上限から除く。やり直した後の失敗には gateway: true を付ける（エージェントはやり直さない）
+- モデルが持たない能力を使う依頼（画像を読めないモデルに画像、JSON スキーマに沿えないモデルに json_schema）は、
+  送る前に 400 で断る
 - MODEL_GATEWAY_KEY を設定すると、/v1/* に鍵を求める
+- 設定ファイルは MODELS_CONFIG（なければ config/models.toml）
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ from openai import APIConnectionError, APIStatusError
 
 from my_llm_app.config import Settings
 from my_llm_app.llm import LLM
-from my_llm_app.modelgw.registry import ModelSpec, Usage, load
+from my_llm_app.modelgw.registry import ModelSpec, Usage, load_catalog
 
 log = logging.getLogger(__name__)
 
@@ -71,12 +74,28 @@ class Model:
                        extra_body=spec.extra_body)
 
 
+def needs_of(body: dict) -> set[str]:
+    """依頼が使う能力（画像を読む・JSON スキーマに沿う）。"""
+    out = set()
+    rf = body.get("response_format") or {}
+    if isinstance(rf, dict) and rf.get("type") == "json_schema":
+        out.add("json_schema")
+    for m in body.get("messages") or []:
+        content = m.get("content") if isinstance(m, dict) else None
+        if isinstance(content, list) and any(isinstance(p, dict) and p.get("type") == "image_url" for p in content):
+            out.add("vision")
+    return out
+
+
 def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = None, default: str | None = None,
-               key: str | None = None, http_client: httpx.Client | None = None) -> FastAPI:
+               key: str | None = None, http_client: httpx.Client | None = None,
+               roles: dict[str, str] | None = None) -> FastAPI:
     if specs is None:
         from my_llm_app.config import REPO_ROOT
-        specs, default = load(models_path or REPO_ROOT / "config" / "models.toml")
+        catalog = load_catalog(models_path or Path(os.getenv("MODELS_CONFIG", "") or REPO_ROOT / "config" / "models.toml"))
+        specs, default, roles = catalog.specs, catalog.default, catalog.roles
     default = default or specs[0].id
+    roles = dict(roles or {})
     key = os.getenv("MODEL_GATEWAY_KEY", "") if key is None else key
     models = {s.id: Model(s, http_client) for s in specs}
     app = FastAPI(title="model-gateway")
@@ -88,8 +107,10 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
 
     def resolve(name: str) -> Model:
         name = (name or "").strip()
-        if name in ("", "default") or name.startswith("role:"):      # 役割ごとの選択は M2。今は既定のモデル
+        if name in ("", "default"):
             return models[default]
+        if name.startswith("role:"):                                # 役割の既定のモデル（書いていなければ既定）
+            return models[roles.get(name[5:]) or default]
         if name in models:
             return models[name]
         for m in models.values():                                   # 上流のモデル名でも受ける（qwen3.8-27b など）
@@ -119,7 +140,7 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
     @app.get("/v1/models")
     def list_models(authorization: str | None = Header(default=None)) -> dict:
         check(authorization)
-        return {"object": "list", "default": default,
+        return {"object": "list", "default": default, "roles": roles,
                 "data": [m.spec.public(m.spec.id == default) for m in models.values()]}
 
     @app.get("/v1/usage")
@@ -134,6 +155,9 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
         messages = body.get("messages") or []
         if not messages:
             raise HTTPException(status_code=400, detail="messages が空です")
+        missing = needs_of(body) - set(model.spec.capabilities)
+        if missing:
+            raise HTTPException(status_code=400, detail=f"モデル {model.spec.id} は {', '.join(sorted(missing))} に対応していません")
         kwargs = {k: v for k, v in body.items() if k in SDK_PARAMS}
         extra = {k: v for k, v in body.items() if k not in SDK_PARAMS | {"model", "messages", "stream", "extra_body"}}
         extra.update(body.get("extra_body") or {})

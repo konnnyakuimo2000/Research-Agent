@@ -1,7 +1,7 @@
 # テレメトリー画面の機能強化案（WebUI とエージェントの分離・モデルの切り替え）
 
 - 作成: 2026-11-21
-- 状態: X1（分離）は実装済み（2026-11-21）。X2 は三層の形（6 章）に改め、M1（モデルの窓口を分ける）を実装中。M2 以降は案
+- 状態: X1（分離）は実装済み（2026-11-21）。X2 は三層の形（6 章）に改め、M1（モデルの窓口を分ける）は実装済み、M2（役割ごとのモデル）を実装中。M3 以降は案
 - 関係する文書: [テレメトリー画面の設計](telemetry_design.md)、[タスクフロー設計](task_flow_design.md)、[実装計画](implementation_plan.md)
 - 比べた Open WebUI: 0.12.3（このリポジトリの Docker で動いているもの。サーバーの機能の入り口 `routers/` の一覧で確認）
 
@@ -240,7 +240,7 @@ WebUI は、名乗られた段の機能だけを出す（対応していない�
 ### 6.2 モデルの一覧（`config/models.toml`）
 
 ```toml
-default = "lab-qwen"                  # 既定のモデル（M2 で [roles] に広げる）
+default = "lab-qwen"                  # 既定のモデル（役割に書いていないとき）
 
 [[models]]
 id = "lab-qwen"
@@ -265,13 +265,18 @@ extra_body = { chat_template_kwargs = { enable_thinking = false } }   # モデ�
 # max_concurrency = 4
 # price = { input_per_mtok = …, output_per_mtok = … }
 
-# M2: 役割ごとの既定のモデル
-# [roles]
-# decide = "lab-qwen"
-# extract = "lab-qwen"
-# vision = "lab-qwen"
-# report = "lab-qwen"
+# 役割ごとの既定のモデル（M2）
+[roles]
+decide = "lab-qwen"      # 判断・依頼の確認・観点の分類・食い違い
+extract = "lab-qwen"     # 検索結果・ページの読み取り
+vision = "lab-qwen"      # 画像の確認（vision が要る）
+report = "lab-qwen"      # 報告
+chat = "lab-qwen"        # チャットのエージェント
 ```
+
+- M2 の実装: エージェントは `llm.for_role(役割, 依頼ごとの選び直し)` で頼む。調査エージェントでは選び直しを調査の状態（`models`）に入れ、
+  並列に読むスレッドの中でも同じ対応を使う。ゲートウェイは依頼を受けたときに、役割ごとに実際に使うモデルを決めて（選び直し → `[roles]` → 既定）
+  能力を確かめ、エージェントに渡して記録に残す
 
 ### 6.3 決まりごと
 

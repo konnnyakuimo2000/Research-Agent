@@ -1,7 +1,7 @@
 """契約の API（docs/telemetry_enhancement_plan.md 4.1）を出す FastAPI アプリを作る。
 
     GET  /agent/v1/manifest              名乗り
-    POST /agent/v1/runs                  依頼を受ける {input: {text, ...}, settings, models} → {run_id, status}
+    POST /agent/v1/runs                  依頼を受ける {input: {text, ...}, settings, models: {役割: モデル}} → {run_id, status}
     GET  /agent/v1/runs/{id}             状態
     GET  /agent/v1/runs/{id}/events      イベントの流れ（SSE。?after= か Last-Event-ID より後から）
     POST /agent/v1/runs/{id}/input       {kind: "answer", text}
@@ -63,7 +63,12 @@ def agent_app(manifest: dict, manager: RunManager, health: Callable[[], dict],
         input_ = body.get("input") or {}
         if not str(input_.get("text", "")).strip():
             raise HTTPException(status_code=400, detail="依頼が空です")
-        return manager.start(input_, body.get("settings") or {}).summary()
+        models = body.get("models") or {}
+        roles = {r["role"] for r in manifest.get("model_roles", [])}
+        unknown = set(models) - roles
+        if unknown:
+            raise HTTPException(status_code=400, detail=f"この役割はありません: {', '.join(sorted(unknown))}")
+        return manager.start(input_, body.get("settings") or {}, models).summary()
 
     @app.get("/agent/v1/runs/{run_id}")
     def get_run(run_id: str, authorization: str | None = Header(default=None)) -> dict:

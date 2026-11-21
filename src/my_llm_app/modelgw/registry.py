@@ -46,6 +46,26 @@ def _env_or(item: dict, key: str) -> str:
     return (os.getenv(env, "") if env else "") or str(item.get(key, ""))
 
 
+@dataclass
+class Catalog:
+    specs: list[ModelSpec]
+    default: str
+    roles: dict[str, str] = field(default_factory=dict)
+
+    def model_for_role(self, role: str) -> str:
+        return self.roles.get(role) or self.default
+
+
+def load_catalog(path: Path) -> Catalog:
+    specs, default = load(path)
+    roles = {str(k): str(v) for k, v in tomllib.loads(path.read_text(encoding="utf-8")).get("roles", {}).items()}
+    ids = {s.id for s in specs}
+    for role, model in roles.items():
+        if model not in ids:
+            raise ConfigError(f"役割 {role} のモデル {model} が一覧にありません")
+    return Catalog(specs, default, roles)
+
+
 def load(path: Path) -> tuple[list[ModelSpec], str]:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     specs = []

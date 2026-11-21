@@ -47,6 +47,7 @@ class Run:
     input: dict
     settings: dict
     recorder: Recorder
+    models: dict = field(default_factory=dict)      # 依頼ごとに選び直したモデル（役割 → モデルの窓口の id）
     status: str = "running"          # running / paused / waiting / done / error / cancelled
     question: str = ""
     created: float = field(default_factory=time.time)
@@ -95,14 +96,15 @@ class RunManager:
 
     # ---- 操作 ----
 
-    def start(self, input: dict, settings: dict | None = None) -> Run:
+    def start(self, input: dict, settings: dict | None = None, models: dict | None = None) -> Run:
         self._prune()
         run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:4]
         text = str(input.get("text", ""))
-        run = Run(run_id, text, input, settings or {}, Recorder(run_id))
+        models = {str(k): str(v) for k, v in (models or {}).items() if v}
+        run = Run(run_id, text, input, settings or {}, Recorder(run_id), models)
         with self._lock:
             self.runs[run_id] = run
-        run.emit("run.start", request=text)
+        run.emit("run.start", request=text, **({"models": models} if models else {}))
         self._spawn(run, ("start", input))
         return run
 

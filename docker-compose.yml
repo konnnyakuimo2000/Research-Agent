@@ -45,6 +45,9 @@ services:
       AGENT_SERVICE_KEY: ${AGENT_SERVICE_KEY:-}
       AGENT_RESEARCH_URL: http://agent-research:8000
       AGENT_CHAT_URL: http://agent-chat:8000
+      # モデルの一覧を読み、依頼ごとのモデルの選び直しを確かめる（役割に要る能力があるか）
+      MODEL_GATEWAY_URL: http://model-gateway:8000/v1
+      MODEL_GATEWAY_KEY: ${MODEL_GATEWAY_KEY:-}
     volumes:
       - ./runs:/app/runs        # 依頼の記録（一覧の SQLite とイベントの jsonl。git 管理外）
     networks:
@@ -54,6 +57,7 @@ services:
     depends_on:
       - agent-research
       - agent-chat
+      - model-gateway
     restart: unless-stopped
 
   # 調査エージェント（契約の 0・1 段と research/v1）。外には出さず、ゲートウェイからだけ呼ぶ。

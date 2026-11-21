@@ -64,7 +64,16 @@ docker compose ps
 | `agent-chat` | モデルとそのまま話すだけのエージェント。Open WebUI の裏処理も受け持つ |
 | `model-gateway` | モデルの窓口。エージェントはモデルを直接呼ばず、ここに頼む。どのモデルに送るか（`config/models.toml`）、やり直し、モデルごとの同時実行の上限（研究室のモデルは全エージェント合わせて 2 件まで）、使用量を受け持つ。LLM の接続先と鍵を持つのはここだけ |
 
-つなぐエージェントは `config/agents.toml`、使うモデルは `config/models.toml` に書く。エージェントを足すときはサービスを足して `agents.toml` に 1 項目、モデルを足すときは `models.toml` に 1 項目足す。
+つなぐエージェントは `config/agents.toml`、使うモデルは `config/models.toml` に書く。
+`models.toml` の `[roles]` で、役割（判断 `decide`・読み取り `extract`・画像の確認 `vision`・報告 `report`・チャット `chat`）ごとに使うモデルを決める。
+依頼ごとに選び直すこともできる（今は API から。画面の選択は M4）:
+
+```sh
+curl -X POST http://localhost:8100/api/runs -H "Content-Type: application/json"   -d '{"request": "...", "agent": "research", "models": {"report": "<モデルの id>"}}'
+```
+
+選べるモデルは `GET /api/models` で見られる。役割に要る能力（画像の確認なら `vision`）がないモデルは、始める前に断る。
+どの依頼でどのモデルを使ったかは、一覧（`GET /api/runs` の `models`）に残る。エージェントを足すときはサービスを足して `agents.toml` に 1 項目、モデルを足すときは `models.toml` に 1 項目足す。
 
 ## 4. 初期設定
 

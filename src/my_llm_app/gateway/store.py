@@ -20,7 +20,7 @@ from my_llm_app.agentkit import protocol
 LEGACY_AGENT, LEGACY_EXTENSION = "research", "research/v1"
 RECENT_SECONDS = 600.0
 COLUMNS = ("id", "agent", "agent_version", "agent_run", "request", "status", "question", "created", "updated",
-           "seconds", "events", "settings", "hidden")
+           "seconds", "events", "settings", "hidden", "models")
 
 
 def safe_id(run_id: str) -> bool:
@@ -37,18 +37,22 @@ class RunStore:
         self.db.execute("""CREATE TABLE IF NOT EXISTS runs (
             id TEXT PRIMARY KEY, agent TEXT, agent_version TEXT, agent_run TEXT, request TEXT, status TEXT,
             question TEXT, created REAL, updated REAL, seconds REAL, events INTEGER, settings TEXT,
-            hidden INTEGER DEFAULT 0)""")
+            hidden INTEGER DEFAULT 0, models TEXT DEFAULT '{}')""")
+        # 前の版の記録（models の列がない）に列を足す
+        if "models" not in {r[1] for r in self.db.execute("PRAGMA table_info(runs)").fetchall()}:
+            self.db.execute("ALTER TABLE runs ADD COLUMN models TEXT DEFAULT '{}'")
         self.db.commit()
         self.import_legacy()
 
     # ---- 一覧 ----
 
     def create(self, run_id: str, agent: str, agent_version: str, agent_run: str, request: str,
-               settings: dict | None = None, hidden: bool = False) -> dict:
+               settings: dict | None = None, hidden: bool = False, models: dict | None = None) -> dict:
         now = time.time()
         row = {"id": run_id, "agent": agent, "agent_version": agent_version, "agent_run": agent_run, "request": request,
                "status": "running", "question": "", "created": now, "updated": now, "seconds": 0, "events": 0,
-               "settings": json.dumps(settings or {}, ensure_ascii=False), "hidden": int(hidden)}
+               "settings": json.dumps(settings or {}, ensure_ascii=False), "hidden": int(hidden),
+               "models": json.dumps(models or {}, ensure_ascii=False)}
         with self._lock:
             self.db.execute(f"INSERT INTO runs ({','.join(COLUMNS)}) VALUES ({','.join('?' * len(COLUMNS))})",
                             [row[c] for c in COLUMNS])
@@ -132,7 +136,7 @@ class RunStore:
             with self._lock:
                 self.db.execute(f"INSERT INTO runs ({','.join(COLUMNS)}) VALUES ({','.join('?' * len(COLUMNS))})",
                                 [run_id, LEGACY_AGENT, "", "", first["data"].get("request", ""), status, "", mtime,
-                                 mtime, last.get("t", 0), last.get("seq", 0), "{}", 0])
+                                 mtime, last.get("t", 0), last.get("seq", 0), "{}", 0, "{}"])
                 self.db.commit()
             n += 1
         return n

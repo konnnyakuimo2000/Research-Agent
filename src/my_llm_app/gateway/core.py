@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -17,6 +18,7 @@ from collections.abc import Iterator
 import httpx
 
 from my_llm_app.agentkit import protocol
+from my_llm_app.gateway.models import ModelCatalog, effective_models
 from my_llm_app.gateway.registry import AgentClient, AgentError, Registry
 from my_llm_app.gateway.store import Feed, RunStore
 
@@ -35,9 +37,10 @@ class Unavailable(Exception):
 
 
 class Gateway:
-    def __init__(self, registry: Registry, store: RunStore) -> None:
+    def __init__(self, registry: Registry, store: RunStore, catalog: ModelCatalog | None = None) -> None:
         self.registry = registry
         self.store = store
+        self.catalog = catalog
         self.feeds: dict[str, Feed] = {}
         self._wanted: dict[str, bool] = {}
         self._lock = threading.Lock()
@@ -52,25 +55,32 @@ class Gateway:
             out.append({"id": c.id, "name": m.get("name", c.id), "version": m.get("version", ""),
                         "description": m.get("description", ""), "levels": m.get("levels", [0]),
                         "extensions": m.get("extensions", []), "capabilities": m.get("capabilities", []),
-                        "graph": m.get("graph"), "ok": bool(m) and not c.error, "error": c.error,
+                        "graph": m.get("graph"), "model_roles": m.get("model_roles", []),
+                        "ok": bool(m) and not c.error, "error": c.error,
                         "default": c.id == self.registry.default})
         return out
 
     # ---- 依頼 ----
 
+    def models(self) -> dict | None:
+        """モデルの窓口の一覧（窓口を使わない構成・つながらないときは None）。"""
+        return self.catalog.get() if self.catalog else None
+
     def start(self, agent_id: str, text: str, extra: dict | None = None, hidden: bool = False,
-              settings: dict | None = None) -> dict:
+              settings: dict | None = None, models: dict | None = None) -> dict:
+        """依頼を始める。models は役割ごとの選び直し（選べないモデルなら ModelChoiceError）。"""
         client = self.registry.get(agent_id)
         manifest = client.manifest()
         if manifest is None:
             raise Unavailable(client.error or "エージェントにつながりません")
+        chosen = effective_models(manifest, models, self.models())   # 役割ごとに実際に使うモデル（記録に残す）
         try:
-            r = client.start({"text": text, **(extra or {})}, settings)
+            r = client.start({"text": text, **(extra or {})}, settings, chosen)
         except httpx.HTTPError as e:
             raise Unavailable(f"{type(e).__name__}: {e}") from None
         self._prune()
         run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:4]
-        self.store.create(run_id, client.id, manifest.get("version", ""), r["run_id"], text, settings, hidden)
+        self.store.create(run_id, client.id, manifest.get("version", ""), r["run_id"], text, settings, hidden, chosen)
         self.feeds[run_id] = Feed()
         self._ensure_relay(run_id)
         return self.summary(run_id)
@@ -89,12 +99,10 @@ class Gateway:
         return self.summary(run_id)
 
     def summary(self, run_id: str) -> dict:
-        rec = self.store.get(run_id) or {}
-        return {k: rec.get(k) for k in ("id", "agent", "request", "status", "question", "created", "events", "seconds")}
+        return _summary(self.store.get(run_id) or {})
 
     def listing(self, limit: int = 50) -> list[dict]:
-        keys = ("id", "agent", "request", "status", "question", "created", "events", "seconds")
-        return [{k: r[k] for k in keys} for r in self.store.listing(limit)]
+        return [_summary(r) for r in self.store.listing(limit)]
 
     def result(self, run_id: str) -> dict | None:
         return self.store.result(run_id)
@@ -225,6 +233,15 @@ class Gateway:
             self.feeds.pop(k, None)
             self._finished_at.pop(k, None)
             self._wanted.pop(k, None)
+
+
+def _summary(rec: dict) -> dict:
+    out = {k: rec.get(k) for k in ("id", "agent", "request", "status", "question", "created", "events", "seconds")}
+    try:
+        out["models"] = json.loads(rec.get("models") or "{}")
+    except ValueError:
+        out["models"] = {}
+    return out
 
 
 def flat_events(envs: list[dict]) -> list[dict]:

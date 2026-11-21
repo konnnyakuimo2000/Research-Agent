@@ -28,6 +28,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from my_llm_app.gateway.core import Gateway, Unavailable
+from my_llm_app.gateway.models import ModelChoiceError
 from my_llm_app.gateway.registry import AgentError
 
 HEARTBEAT_SECONDS = 15   # 応答待ちの間も接続が切れないよう、空のチャンクを送る間隔
@@ -120,7 +121,7 @@ def router(gw: Gateway, check_key) -> APIRouter:
                 run_id = waiting
             else:
                 run_id = gw.start(agent_id, text)["id"]
-        except (Unavailable, AgentError) as e:
+        except (Unavailable, AgentError, ModelChoiceError) as e:
             yield f"エージェントにつながりません: {e}"
             return
         think = 1 in levels
@@ -178,7 +179,7 @@ def router(gw: Gateway, check_key) -> APIRouter:
             history = [{"role": m["role"], "content": text_of(m.get("content"))} for m in messages]
             try:
                 run_id = gw.start(bg.id, history[-1]["content"], {"messages": history}, hidden=True)["id"]
-            except (Unavailable, AgentError) as e:
+            except (Unavailable, AgentError, ModelChoiceError) as e:
                 raise HTTPException(status_code=503, detail=str(e)) from None
             parts: Iterator[str | None] = iter([wait_report(run_id)])
             model = model or bg.entry.openai_model

@@ -49,9 +49,17 @@ class Nodes:
         self.settings = settings
         self.llm = llm
 
+    def _llm(self, role: str, state: AgentState | None = None):
+        """役割（decide・extract・vision・report）のモデルで頼む部品。依頼ごとの選び直し（state["models"]）に従う。
+
+        役割で頼めない LLM（テストの偽物など）は、そのまま使う。
+        """
+        for_role = getattr(self.llm, "for_role", None)
+        return for_role(role, (state or {}).get("models")) if for_role else self.llm
+
     def check_feasibility(self, state: AgentState) -> dict:
         """公開情報で調べられる依頼かを、調査を始める前に判定する（設計書 4 章 ④、例 D）。"""
-        out = self.llm.chat_json(prompts.FEASIBILITY_SYSTEM, state["request"], prompts.FEASIBILITY_SCHEMA)
+        out = self._llm("decide", state).chat_json(prompts.FEASIBILITY_SYSTEM, state["request"], prompts.FEASIBILITY_SCHEMA)
         feasibility = {
             "verdict": out.get("verdict", "unsure"),
             "reason": out.get("reason", ""),
@@ -69,7 +77,7 @@ class Nodes:
         return {"answer": answer, "trace": [{"node": "report_infeasible", "answer": answer}]}
 
     def decide(self, state: AgentState) -> dict:
-        raw = self.llm.chat_json(prompts.DECIDE_SYSTEM, prompts.decide_user(state), prompts.DECIDE_SCHEMA)
+        raw = self._llm("decide", state).chat_json(prompts.DECIDE_SYSTEM, prompts.decide_user(state), prompts.DECIDE_SCHEMA)
         decision = check_decision(state, raw)
         telemetry.emitter()("decision", llm={k: raw.get(k) for k in ("action", "reason", "query")},
                             action=decision["action"], query=decision.get("query", ""), guard=decision.get("guard", ""),
@@ -116,7 +124,7 @@ class Nodes:
                 f"Web 検索の結果が 0 件だった（応答しない検索エンジン: {', '.join(web.unresponsive)}。"
                 "アクセスが多すぎて一時的に止められている可能性がある）")
 
-        update = self.llm.chat_json(
+        update = self._llm("extract", state).chat_json(
             prompts.UPDATE_SYSTEM,
             prompts.update_user(state, query, entities, web.results),
             prompts.UPDATE_SCHEMA,
@@ -155,7 +163,7 @@ class Nodes:
             # 抜粋にだけある別の文字の表記で対象を決めると、その名前で検索し、その名前で読むページを絞ってしまう
             # （題名の「DÜRST, Martin J.」が抜粋の「テュールスト マーティン ヤコブ」と一致しない）。1 回だけ書き直させる
             errors.append(f"specific_subject not in titles: {subject!r}")
-            fixed = self.llm.chat_json(prompts.SUBJECT_FIX_SYSTEM, prompts.subject_fix_user(subject, web.results),
+            fixed = self._llm("extract", state).chat_json(prompts.SUBJECT_FIX_SYSTEM, prompts.subject_fix_user(subject, web.results),
                                        prompts.SUBJECT_FIX_SCHEMA).get("specific_subject", "").strip()
             if fixed and mentions(titles, [fixed]):
                 subject = fixed
@@ -294,7 +302,7 @@ class Nodes:
         if not state.get("aspects"):
             # 観点は LLM が依頼に合わせて作る（種類のチェックリストがお手本）。
             # 確かめるのはプログラム。使えない出力ならチェックリストに戻す（設計書 6.1）
-            out = self.llm.chat_json(prompts.CLASSIFY_SYSTEM, prompts.classify_user(state, cov.type_guides()),
+            out = self._llm("decide", state).chat_json(prompts.CLASSIFY_SYSTEM, prompts.classify_user(state, cov.type_guides()),
                                      prompts.classify_schema(cov.type_names()))
             subject_type = out.get("subject_type")
             if subject_type not in cov.type_names():
@@ -460,7 +468,7 @@ class Nodes:
         base = page_tier(source, state)
         ev("page.llm", url=url)
         try:
-            out = self.llm.chat_json(prompts.EXTRACT_SYSTEM, prompts.extract_user(state, page.title, text, base),
+            out = self._llm("extract", state).chat_json(prompts.EXTRACT_SYSTEM, prompts.extract_user(state, page.title, text, base),
                                      prompts.extract_schema(names))
         except LLMOutputError as err:
             # このページだけの失敗にする（並行して読んでいる他のページの結果を失わない）
@@ -497,7 +505,8 @@ class Nodes:
         groups = cov.facts_to_compare(state.get("verified", []))
         started = time.perf_counter()
         with ThreadPoolExecutor(max_workers=2) as pool:   # 1 回の呼び出しで 1 つの観点だけを扱う（M-1）
-            outs = list(pool.map(lambda item: self.llm.chat_json(
+            llm = self._llm("decide", state)
+            outs = list(pool.map(lambda item: llm.chat_json(
                 prompts.CONFLICT_SYSTEM, prompts.conflict_user(*item), prompts.CONFLICT_SCHEMA), groups.items()))
 
         conflicts = []
@@ -636,7 +645,7 @@ class Nodes:
                 row["license"] = images.commons_license(c.src)   # Wikimedia の画像なら利用条件を取りに行く
             except Exception:  # noqa: BLE001 - 取れなければ「不明」と書く
                 pass
-        out = self.llm.chat_json(prompts.IMAGE_SYSTEM, prompts.image_user(state, c.title, c.caption, c.page_url),
+        out = self._llm("vision", state).chat_json(prompts.IMAGE_SYSTEM, prompts.image_user(state, c.title, c.caption, c.page_url),
                                  prompts.IMAGE_SCHEMA, image_data_url=fetched.data_url)
         # 画像の中の文字（刻印・型番）と対象の名前の照合はプログラムが行う（型番のある名前は型番で見るので兄弟機種は通らない）
         label = (state.get("target") or {}).get("label", "")
@@ -669,7 +678,7 @@ class Nodes:
         # 回答を選択肢と照らし合わせて、その場で対象を決める（決めないまま進むと同じ質問を繰り返すため）
         # 番号での回答はプログラムが対応づける（LLM には番号付きの選択肢が見えないため）
         picked = pick_candidate(answer, candidates)
-        matched = [picked] if picked else self._match_answer(question, answer, candidates)
+        matched = [picked] if picked else self._match_answer(question, answer, candidates, state)
         if len(matched) == 1:
             result["target"] = matched[0]
             answer_text = f"{answer}（{matched[0]['label']}: {matched[0]['description']}）"
@@ -688,11 +697,12 @@ class Nodes:
                             "matched": [c["id"] for c in matched], "target": result.get("target")}]
         return result
 
-    def _match_answer(self, question: str, answer: str, candidates: list[Candidate]) -> list[Candidate]:
+    def _match_answer(self, question: str, answer: str, candidates: list[Candidate],
+                      state: AgentState | None = None) -> list[Candidate]:
         """文章での回答が、どの選択肢を指しているかを LLM に判定させる（1 回の呼び出しで 1 件だけ扱う）。"""
         if not candidates:
             return []
-        out = self.llm.chat_json(prompts.MATCH_SYSTEM, prompts.match_user(question, answer, candidates),
+        out = self._llm("decide", state).chat_json(prompts.MATCH_SYSTEM, prompts.match_user(question, answer, candidates),
                                  prompts.MATCH_SCHEMA)
         valid = {c["id"]: c for c in candidates}
         return [valid[i] for i in dict.fromkeys(out.get("matched_ids", [])) if i in valid]
@@ -700,13 +710,13 @@ class Nodes:
     def respond(self, state: AgentState) -> dict:
         sources = collect_sources(state)
         materials = prompts.respond_user(state, sources)
-        body = strip_program_sections(self.llm.chat_text(prompts.RESPOND_SYSTEM, materials))
+        body = strip_program_sections(self._llm("report", state).chat_text(prompts.RESPOND_SYSTEM, materials))
         if bad := unsupported_names(body, materials):
             # 材料にない名前（読みから作った英語名など）を書いた → 1 回だけ書き直させ、それでも残る文は除く
             log.info("respond: unsupported names %s -> retry", bad)
             retry = materials + ("\n\n注意: 前の回答に、材料にない名前・表記（" + "、".join(bad)
                                  + "）がありました。材料にある表記だけを使って書き直してください。")
-            body = strip_program_sections(self.llm.chat_text(prompts.RESPOND_SYSTEM, retry))
+            body = strip_program_sections(self._llm("report", state).chat_text(prompts.RESPOND_SYSTEM, retry))
             if bad := unsupported_names(body, materials):
                 body = drop_sentences_with(body, bad)
         parts = [body.strip()]

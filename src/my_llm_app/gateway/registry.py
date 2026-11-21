@@ -80,8 +80,8 @@ class AgentClient:
     def health(self) -> dict:
         return self._call("GET", "/health")
 
-    def start(self, input: dict, settings: dict | None = None) -> dict:
-        return self._call("POST", "/runs", {"input": input, "settings": settings or {}})
+    def start(self, input: dict, settings: dict | None = None, models: dict | None = None) -> dict:
+        return self._call("POST", "/runs", {"input": input, "settings": settings or {}, "models": models or {}})
 
     def answer(self, run_id: str, text: str) -> dict:
         return self._call("POST", f"/runs/{run_id}/input", {"kind": "answer", "text": text})

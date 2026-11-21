@@ -73,7 +73,7 @@ class FakeLLM:
 
 
 class Stack:
-    def __init__(self, tmp_path, graph=None, extra: list[AgentClient] | None = None):
+    def __init__(self, tmp_path, graph=None, extra: list[AgentClient] | None = None, catalog=None):
         self.graph = graph or _tagged_graph()
         self.llm = FakeLLM()
         self.research = research.create_app(graph=self.graph, settings=SETTINGS, key="")
@@ -83,7 +83,7 @@ class Stack:
             AgentClient(AgentEntry("chat", "http://testserver", "", "", True), TestClient(self.chat)),
             *(extra or [])])
         self.tmp = tmp_path
-        self.app = create_app(registry=self.registry, runs_dir=tmp_path, api_key="")
+        self.app = create_app(registry=self.registry, runs_dir=tmp_path, api_key="", catalog=catalog)
         self.c = TestClient(self.app)
 
     @property
@@ -310,7 +310,7 @@ def test_records_made_before_the_split_are_listed_and_replayed(tmp_path):
     st = Stack(tmp_path)
     listed = st.c.get("/api/runs").json()["runs"]
     assert listed[0] == {"id": "20261101-000000-abcd", "agent": "research", "request": "水星について", "status": "done",
-                         "question": "", "created": listed[0]["created"], "events": 3, "seconds": 2}
+                         "question": "", "created": listed[0]["created"], "events": 3, "seconds": 2, "models": {}}
     envs = _envs(st.c.get("/api/runs/20261101-000000-abcd/events").text)
     assert [e["type"] for e in envs] == ["run.start", "research/v1:page.done", "run.end"]
     assert envs[-1]["data"] == {"report": "水星は惑星 [1]。"}
@@ -321,7 +321,7 @@ def test_restarted_gateway_picks_up_a_waiting_run(tmp_path):
     st = Stack(tmp_path)
     run = st.c.post("/api/runs", json={"request": "マーキュリー"}).json()
     assert wait_for(lambda: st.gw.store.get(run["id"])["status"] == "waiting")
-    again = TestClient(create_app(registry=st.registry, runs_dir=tmp_path, api_key=""))   # 立ち上げ直した
+    again = TestClient(create_app(registry=st.registry, runs_dir=tmp_path, api_key="", catalog=None))   # 立ち上げ直した
     gw2 = again.app.state.gateway
     assert gw2.store.get(run["id"])["status"] == "waiting"
     assert again.post(f"/api/runs/{run['id']}/answer", json={"answer": "2"}).status_code == 200

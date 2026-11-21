@@ -33,7 +33,9 @@ class ChatRuns(RunManager):
     def work(self, run: Run, payload: tuple[str, object]) -> Done | Cancelled:
         messages = run.input.get("messages") or [{"role": "user", "content": run.request}]
         parts = []
-        for delta in self.llm.stream_messages(messages):
+        for_role = getattr(self.llm, "for_role", None)
+        llm = for_role("chat", run.models) if for_role else self.llm
+        for delta in llm.stream_messages(messages):
             if run.cancelled:
                 return Cancelled()
             parts.append(delta)

@@ -6,7 +6,19 @@
 #   max_concurrency  このモデルに同時に送る数。すべてのエージェントをまたいで、窓口が守る
 #   extra_body       モデルごとの癖（そのまま送る項目）
 
-default = "lab-qwen"   # 既定のモデル（M2 で役割ごとに選べるようにする）
+default = "lab-qwen"   # 既定のモデル（役割に書いていないとき、モデルを指定しないときに使う）
+
+# 役割ごとの既定のモデル。エージェントは「どのモデルか」ではなく「どの役割か」で頼む（model = "role:<役割>"）。
+# 依頼ごとに選び直すこともできる（画面・ゲートウェイから。能力が足りないモデルは選べない）
+#   decide  判断（次に何をするか・依頼の確認・観点の分類・食い違い）   extract  ページ・検索結果の読み取り
+#   vision  画像の確認（vision の能力が要る）                       report   報告を書く
+#   chat    チャットのエージェント
+[roles]
+decide = "lab-qwen"
+extract = "lab-qwen"
+vision = "lab-qwen"
+report = "lab-qwen"
+chat = "lab-qwen"
 
 [[models]]
 id = "lab-qwen"

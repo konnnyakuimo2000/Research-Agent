@@ -112,7 +112,18 @@ class LLM:
         time.sleep(wait)
         on_wait(wait)
 
-    def call(self, messages: list[dict], **kwargs: Any) -> tuple[Any, float]:
+    def for_role(self, role: str, models: dict | None = None) -> "RoleLLM":
+        """役割（decide・extract・vision・report・chat）で頼む部品。
+
+        依頼ごとの選び直し（models: 役割 → モデルの id）があればそのモデル、なければ窓口の役割の既定（role:<役割>）。
+        窓口を使わないときは、役割にかかわらず設定のモデル。
+        """
+        chosen = (models or {}).get(role)
+        if chosen:
+            return RoleLLM(self, chosen, role)
+        return RoleLLM(self, f"role:{role}" if self.gateway else self.model, role)
+
+    def call(self, messages: list[dict], model: str | None = None, **kwargs: Any) -> tuple[Any, float]:
         """応答の全体と、この呼び出しで待った秒数。やり直しても失敗したら、例外に model_wait を付けて投げる。"""
         waited = 0.0
 
@@ -126,7 +137,7 @@ class LLM:
             started = time.perf_counter()
             try:
                 with self._sem:
-                    r = self.client.chat.completions.create(model=self.model, messages=messages, **kwargs)
+                    r = self.client.chat.completions.create(model=model or self.model, messages=messages, **kwargs)
             except (APIConnectionError, APIStatusError) as e:
                 try:
                     self._retry(e, attempt, started, on_wait)
@@ -142,7 +153,7 @@ class LLM:
         raise RuntimeError("unreachable")
 
     def stream_chunks(self, messages: list[dict], on_wait: Callable[[float], None] | None = None,
-                      **kwargs: Any) -> Iterator[Any]:
+                      model: str | None = None, **kwargs: Any) -> Iterator[Any]:
         """流しながらの応答のかたまり。やり直すのは、まだ何も受け取っていないときだけ（途中から送り直すと、文が重なるため）。"""
         def waited(seconds: float) -> None:
             self._add_wait(seconds)
@@ -154,7 +165,7 @@ class LLM:
             started, got = time.perf_counter(), False
             try:
                 with self._sem:
-                    stream = self.client.chat.completions.create(model=self.model, messages=messages, **kwargs)
+                    stream = self.client.chat.completions.create(model=model or self.model, messages=messages, **kwargs)
                     for chunk in stream:
                         if not got:
                             waited(float(_extra(chunk).get("x_model_wait") or 0))
@@ -171,7 +182,7 @@ class LLM:
         return r.choices[0].message.content or ""
 
     def chat_json(self, system: str, user: str, schema: dict, temperature: float = 0.2,
-                  image_data_url: str | None = None) -> dict:
+                  image_data_url: str | None = None, model: str | None = None) -> dict:
         """JSON スキーマに沿った出力を返す。壊れた JSON なら 1 回だけやり直す。画像を 1 枚添えられる。"""
         content: str | list = user
         if image_data_url:
@@ -180,24 +191,47 @@ class LLM:
         response_format = {"type": "json_schema", "json_schema": {"name": "output", "schema": schema}}
         last_error: Exception | None = None
         for _ in range(2):
-            text = self._create(messages, response_format=response_format, temperature=temperature)
+            text = self._create(messages, response_format=response_format, temperature=temperature, model=model)
             try:
                 return json.loads(text)
             except json.JSONDecodeError as e:
                 last_error = e
         raise LLMOutputError(f"LLM の出力が JSON になりませんでした: {last_error}")
 
-    def chat_messages(self, messages: list[dict], temperature: float = 0.5) -> str:
+    def chat_messages(self, messages: list[dict], temperature: float = 0.5, model: str | None = None) -> str:
         """会話の履歴をそのまま送る。"""
-        return self._create(messages, temperature=temperature)
+        return self._create(messages, temperature=temperature, model=model)
 
-    def stream_messages(self, messages: list[dict], temperature: float = 0.5) -> Iterator[str]:
+    def stream_messages(self, messages: list[dict], temperature: float = 0.5, model: str | None = None) -> Iterator[str]:
         """会話の履歴を送り、返ってくる文を少しずつ返す（チャットのエージェント用）。"""
-        for chunk in self.stream_chunks(messages, temperature=temperature):
+        for chunk in self.stream_chunks(messages, temperature=temperature, model=model):
             text = chunk.choices[0].delta.content if chunk.choices else None
             if text:
                 yield text
 
-    def chat_text(self, system: str, user: str, temperature: float = 0.5) -> str:
+    def chat_text(self, system: str, user: str, temperature: float = 0.5, model: str | None = None) -> str:
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-        return self._create(messages, temperature=temperature)
+        return self._create(messages, temperature=temperature, model=model)
+
+
+class RoleLLM:
+    """1 つの役割のモデルで頼む。待った秒数などは元の LLM に数える。"""
+
+    def __init__(self, base: LLM, model: str, role: str) -> None:
+        self.base, self.model, self.role = base, model, role
+
+    @property
+    def waited(self) -> float:
+        return self.base.waited
+
+    def chat_json(self, *args: Any, **kwargs: Any) -> dict:
+        return self.base.chat_json(*args, model=self.model, **kwargs)
+
+    def chat_text(self, *args: Any, **kwargs: Any) -> str:
+        return self.base.chat_text(*args, model=self.model, **kwargs)
+
+    def chat_messages(self, *args: Any, **kwargs: Any) -> str:
+        return self.base.chat_messages(*args, model=self.model, **kwargs)
+
+    def stream_messages(self, *args: Any, **kwargs: Any) -> Iterator[str]:
+        return self.base.stream_messages(*args, model=self.model, **kwargs)
