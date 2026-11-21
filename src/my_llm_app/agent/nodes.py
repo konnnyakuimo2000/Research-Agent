@@ -204,6 +204,7 @@ class Nodes:
             "aspect_searched": state.get("aspect_searched", []) + ([decision["aspect"]] if decision.get("aspect") else []),
             "conflict_searched": state.get("conflict_searched", [])
             + ([decision["conflict_topic"]] if decision.get("conflict_topic") else []),
+            "rephrase_searched": state.get("rephrase_searched", []) + ([query] if decision.get("rephrase") else []),
             "unresponsive": sorted(set(state.get("unresponsive", []) + web.unresponsive)),
             "pages": pages,
             # 使えなかった道具は記録して、報告で申告する（調べ尽くしていないのに調べたように見せない。設計書 G-6）

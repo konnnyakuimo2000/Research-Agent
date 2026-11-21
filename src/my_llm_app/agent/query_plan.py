@@ -30,6 +30,49 @@ SITE_SEEN = 0.6          # 対象の名前を含む結果が出た、まだ事�
 FAIL_PENALTY = 0.5       # 同じ観点で空振りする（新しいページが出ない）たびに掛ける
 
 
+# 依頼文の終わりの決まり文句（「について調べて」など）と、人を呼ぶときの敬称
+_REQUEST_TAIL = re.compile(r"(について|に関して|に関する|のこと)?(を)?(詳しく|くわしく)?"
+                           r"(調べて|教えて|知りたい|まとめて)(ください|下さい|ほしい|欲しい)?[。．.!！?？\s]*$")
+_ABOUT_TAIL = re.compile(r"(について|に関して|のこと)[。．.!！?？\s]*$")
+_HONORIFIC = re.compile(r"(先生|准教授|教授|助教|講師|さん|様|氏|くん|ちゃん)$")
+_TITLES = ("准教授", "教授", "助教", "講師")
+_SCHOOL = re.compile(r"大学|学科|学部|研究科|研究室|高校|高等学校|学校|学院")
+
+
+def request_parts(request: str) -> list[str]:
+    """依頼文を、手がかりの語に分ける（「AのBのC先生について調べて」→ A・B・C）。敬称は外す。"""
+    core = _ABOUT_TAIL.sub("", _REQUEST_TAIL.sub("", request.strip()))
+    parts = []
+    for p in re.split(r"[の、,，\s　]+", core):
+        p = p.strip()
+        m = _HONORIFIC.search(p)
+        if m and len(p) > len(m.group(0)):
+            p = p[:m.start()]
+        if len(p) >= 2:
+            parts.append(p)
+    return list(dict.fromkeys(parts))
+
+
+def request_query(request: str) -> str:
+    """依頼文の手がかりをそのまま並べた検索語（LLM が言葉を選び直さない）。
+
+    「先生」は、学校の文脈なら「教員」にする（「先生」は医師・作家にも使われ、検索結果が散らばる）。
+    「教授」などの職名は残す。
+    """
+    core = _ABOUT_TAIL.sub("", _REQUEST_TAIL.sub("", request.strip()))
+    school = bool(_SCHOOL.search(core))
+    words = list(request_parts(request))
+    for p in re.split(r"[の、,，\s　]+", core):
+        m = _HONORIFIC.search(p.strip())
+        if not m:
+            continue
+        if m.group(0) in _TITLES:
+            words.append(m.group(0))
+        elif m.group(0) == "先生" and school:
+            words.append("教員")
+    return " ".join(dict.fromkeys(words))
+
+
 def host(url: str) -> str:
     return (urlparse(url).hostname or "").removeprefix("www.")
 

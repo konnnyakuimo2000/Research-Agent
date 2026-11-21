@@ -79,7 +79,11 @@ def judge(page_tier: int, fetched_ok: bool, context: str, visual: str, text_matc
     if visual == "unknown" and page_tier >= 3:
         # 一般のサイトで、写っているものが対象と合うか判断できない（読み込み中の白い仮画像など）→ 採らない
         return REJECTED
-    if (context == "high" and page_tier <= 4) or (context == "mid" and page_tier <= 2):
+    if context == "high" and page_tier <= 4:
+        return PROBABLE
+    if context == "mid" and page_tier <= 2 and visual == "consistent":
+        # 文脈が弱い（対象の記事かどうか確かでない）ときは、写っているものが対象の説明と合うと確かめられた場合だけ採る。
+        # 「大学の記事の写真だが、この人物が対象かは不明」を「おそらく正しい」にしない（別人の写真を出さない）
         return PROBABLE
     return REJECTED
 

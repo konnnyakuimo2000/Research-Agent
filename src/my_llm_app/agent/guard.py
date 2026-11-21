@@ -11,6 +11,7 @@ import re
 
 from my_llm_app.agent import query_plan
 from my_llm_app.agent.coverage import MISSING, WEAK
+from my_llm_app.agent.names import fix_spelling, mentions
 from my_llm_app.agent.state import (EXTRA_PAGES, MAX_ASPECT_SEARCHES, MAX_CANDIDATES, MAX_CONFLICT_SEARCHES,
                                     MAX_FREE_SEARCHES, MAX_PAGE_ATTEMPTS, MAX_PAGES, MAX_QUESTIONS, MAX_SECONDS,
                                     MAX_STALE_READS, MAX_STEPS, MAX_WEB_FAILURES, RESERVE_SECONDS, AgentState,
@@ -64,9 +65,43 @@ def _name(state: AgentState) -> str:
 
 
 def free_searches(state: AgentState) -> int:
-    """LLM が自分で選んだ検索の回数（観点・食い違いを狙ってプログラムが決めた検索は除く）。"""
+    """LLM が自分で選んだ検索の回数（観点・食い違い・言い換えでプログラムが決めた検索は除く）。"""
     return (len(state.get("searched", [])) - len(state.get("aspect_searched", []))
-            - len(state.get("conflict_searched", [])))
+            - len(state.get("conflict_searched", [])) - len(state.get("rephrase_searched", [])))
+
+
+def candidates_fit(state: AgentState) -> bool:
+    """同名の候補のどれかが、依頼文の手がかりに合うか。
+
+    依頼文に名前以外の手がかり（「青山学院大学の情報テクノロジー学科の」など）があるのに、どの候補の説明にも
+    それが出てこない → 名前だけで引いた的外れな候補（米国の市の「マーティン」など）。手がかりがない依頼
+    （「マーキュリーについて」）は、どれのことか聞くしかないので合うとみなす。
+    """
+    parts = query_plan.request_parts(state.get("request", ""))
+    if len(parts) < 2:
+        return True
+    for c in state.get("candidates", []):
+        label = c.get("label", "")
+        others = [p for p in parts if not mentions(label, [p]) and not mentions(p, [label])]
+        if not others or any(mentions(c.get("description", ""), [p]) for p in others):
+            return True
+    return False
+
+
+def rephrase_step(state: AgentState, d: Decision) -> Decision | None:
+    """聞き返す前に、1 回だけ依頼文の言葉で検索し直す（問題 1・2）。
+
+    検索結果は、そのとき応答した検索エンジンと検索の言葉で大きく揺れる（「…マーティン 先生」で関係ない結果ばかりの
+    ことがある）。対象が決まらず、候補が依頼文の手がかりに合わないまま聞き返すと、正しい答えのない選択肢を出してしまう。
+    """
+    if (state.get("target") or state.get("clarifications") or not state.get("searched")
+            or state.get("rephrase_searched") or not is_ambiguous(state) or candidates_fit(state)):
+        return None
+    query = query_plan.request_query(state.get("request", ""))
+    if not query or query in state.get("searched", []):
+        return None
+    return {**d, "action": "search", "query": query, "names": [], "rephrase": True,
+            "guard": "候補が依頼文の手がかりに合わないため、聞き返す前に依頼文の言葉で検索し直す"}
 
 
 def wants_more_images(state: AgentState) -> bool:
@@ -174,6 +209,11 @@ def check_decision(state: AgentState, decision: Decision) -> Decision:
             # 応答に切り替える。応答の前に必要な調査（ページを読む・画像・調べ直し）は下の research_step が決める
             d, action = {**d, "action": "respond", "guard": why}, "respond"
 
+    if action in ("ask_user", "respond", "search") and not d.get("confirm_target"):
+        step = rephrase_step(state, d)
+        if step:
+            return step
+
     target = state.get("target")
     if action == "respond" and target and target.get("id") and not state.get("target_summary"):
         # 対象が決まったのに、その対象自体をまだ調べていない（聞き返しの回答で決まった場合など）
@@ -217,6 +257,13 @@ def check_decision(state: AgentState, decision: Decision) -> Decision:
             return {**d, "action": "ask_user", "question": build_question(state),
                     "guard": "候補が複数見つかったので、さらに調べる前に聞き返す"}
         query = (d.get("query") or "").strip() or state.get("request", "")
+        if target and not d.get("aspect") and not d.get("site"):
+            # 対象の名前が決まった後は、LLM が書き写した名前の綴りの誤り（Dürrst）を、確かめた表記に直す（問題 3）
+            names = [target.get("label", "")] + sorted(state.get("name_variants", {}),
+                                                       key=lambda v: -state["name_variants"][v])
+            query, fixed = fix_spelling(query, [n for n in names if n])
+            if fixed:
+                d["guard"] = "名前の綴りを直した（" + "、".join(fixed) + "）"
         if query in state.get("searched", []):
             fallback = "ask_user" if is_ambiguous(state) and asked < MAX_QUESTIONS else "respond"
             extra = {"question": build_question(state)} if fallback == "ask_user" else {}

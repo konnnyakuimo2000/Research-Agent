@@ -45,6 +45,56 @@ def mentions(text: str, names: list[str]) -> bool:
     return False
 
 
+def _distance(a: str, b: str) -> int:
+    """編集距離（文字の挿入・削除・置き換えの回数）。"""
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+_WORD = re.compile(rf"{_LATIN_WORD}{{4,}}", re.IGNORECASE)
+
+
+def fix_spelling(query: str, names: list[str]) -> tuple[str, list[str]]:
+    """検索語の中の、確かめた名前と 1〜2 文字だけ違う語（綴りの誤り）を、名前の表記に直す。
+
+    LLM は検索語を作るたびに名前を書き写すので、「Dürst」を「Dürrst」と書くことがある。誤った綴りで検索すると、
+    対象と関係のない結果ばかりになる。ラテン文字の 5 文字以上の語だけを直す（短い語・日本語は直さない）。
+    正しい綴りがすでに検索語にあれば、似ているだけの別の語（「Martin」に対する「Martian」）なので直さない。
+    直した語の組（「Dürrst→Dürst」）も返す。
+    """
+    words: dict[str, str] = {}
+    for name in names:                       # 先に渡した名前の表記を優先する。大文字だけの表記より普通の書き方を使う
+        for w in _WORD.findall(unicodedata.normalize("NFC", name)):
+            key = w.lower()
+            if key not in words or (words[key].isupper() and not w.isupper()):
+                words[key] = w
+    fixed: list[str] = []
+    present = {w.lower() for w in _WORD.findall(unicodedata.normalize("NFC", query))}
+
+    def repl(m: re.Match) -> str:
+        w = m.group(0)
+        key = w.lower()
+        if key in words or len(key) < 5:
+            return w
+        limit = 1 if len(key) < 8 else 2
+        near = [(d, v) for k, v in words.items()
+                if k not in present and k[0] == key[0] and abs(len(k) - len(key)) <= limit
+                and 0 < (d := _distance(k, key)) <= limit]
+        if not near:
+            return w
+        right = min(near)[1]
+        fixed.append(f"{w}→{right}")
+        return right
+
+    out = _WORD.sub(repl, unicodedata.normalize("NFC", query))
+    return out, fixed
+
+
 # 題名の区切り（「研究者情報 - DÜRST, Martin J. | 青山学院大学」）
 _TITLE_SEP = re.compile(r"\s+[-–—:：|｜]\s+|[|｜【】「」]")
 _PAREN = re.compile(r"[（(][^）)]*[）)]")
