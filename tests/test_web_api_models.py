@@ -263,3 +263,33 @@ def test_unavailable_models_cannot_be_chosen():
     with pytest.raises(ModelChoiceError, match="使えません"):
         effective_models(research.MANIFEST, {"report": "claude"}, catalog)
     assert effective_models(research.MANIFEST, {}, catalog)["report"] == "lab"
+
+
+# ---- 画面（M4）: モデルの一覧・状態と使用量 ----
+
+def test_the_screen_gets_models_with_status_usage_and_spend(tmp_path):
+    from my_llm_app.gateway.app import create_app as gateway_app
+    from my_llm_app.gateway.models import ModelCatalog
+    from my_llm_app.gateway.registry import Registry
+
+    no_key = claude_spec(id="claude-off", unavailable="ANTHROPIC_API_KEY が設定されていません")
+    mg, _ = gateway(specs=[claude_spec(), no_key, lab_spec()], limits={"daily_usd": 5.0})
+    ask(mg, budget="r1")
+    web = TestClient(gateway_app(registry=Registry([]), runs_dir=tmp_path, api_key="",
+                                 catalog=ModelCatalog("http://testserver/v1", http=mg)))
+    listed = {m["id"]: m for m in web.get("/api/models").json()["models"]}
+    assert listed["claude"]["external"] and listed["claude"]["available"] and listed["claude"]["price"]["input_per_mtok"] == 4.0
+    assert listed["claude-off"]["available"] is False and "ANTHROPIC_API_KEY" in listed["claude-off"]["unavailable"]
+    assert listed["lab"]["external"] is False
+    st = web.get("/api/models/status").json()
+    assert st["available"] and st["models"]["claude"]["calls"] == 1
+    assert st["models"]["claude"]["cost_usd"] == pytest.approx(0.014)
+    assert st["models"]["claude-off"]["ok"] is False                       # 鍵のないモデルは、つながらないと出す
+    assert st["spend"]["today_usd"] == pytest.approx(0.014) and st["spend"]["limits"]["daily_usd"] == 5.0
+
+
+def test_model_status_without_a_model_gateway(tmp_path):
+    from my_llm_app.gateway.app import create_app as gateway_app
+    from my_llm_app.gateway.registry import Registry
+    web = TestClient(gateway_app(registry=Registry([]), runs_dir=tmp_path, api_key="", catalog=None))
+    assert web.get("/api/models/status").json() == {"available": False, "models": {}, "spend": {}}

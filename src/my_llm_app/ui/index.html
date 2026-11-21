@@ -22,6 +22,7 @@
       <h1 class="hello">何を調べましょうか？</h1>
       <div class="examples" id="examples" aria-label="最近の依頼"></div>
       <form class="composer" id="composer">
+        <div class="model-pop" id="modelPop" role="dialog" aria-label="モデルの選択と状態" hidden></div>
         <textarea id="input" rows="1" autocomplete="off" placeholder="調べたいことを入力" aria-label="依頼"></textarea>
         <div class="crow">
           <button type="button" class="cbtn" id="plusBtn" aria-label="新しい調査" title="新しい調査">
@@ -32,6 +33,10 @@
           </button>
           <span class="cspace"></span>
           <select class="agent-sel" id="agentSel" aria-label="エージェント" hidden></select>
+          <button type="button" class="model-btn" id="modelBtn" aria-haspopup="dialog" aria-expanded="false" aria-controls="modelPop" hidden>
+            <span id="modelLabel">既定のモデル</span><span class="ext" id="modelExt" hidden>外部</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg>
+          </button>
           <span class="conn" id="conn" title="エージェントと、エージェントが使うモデル・検索への接続"><i class="dot"></i><span id="connText"></span><span class="model" id="modelName"></span></span>
           <button type="submit" class="send" id="sendBtn" aria-label="送る">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path class="i-send" d="M12 19V5M6 11l6-6 6 6"/><path class="i-pause" d="M9 6v12M15 6v12"/><path class="i-play" d="M8 5l11 7-11 7z"/></svg>

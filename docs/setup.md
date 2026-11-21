@@ -66,7 +66,8 @@ docker compose ps
 
 つなぐエージェントは `config/agents.toml`、使うモデルは `config/models.toml` に書く。
 `models.toml` の `[roles]` で、役割（判断 `decide`・読み取り `extract`・画像の確認 `vision`・報告 `report`・チャット `chat`）ごとに使うモデルを決める。
-依頼ごとに選び直すこともできる（今は API から。画面の選択は M4）:
+依頼ごとに選び直すこともできる。画面では入力欄のモデルのボタン（「既定のモデル」）から選ぶ（全部まとめて 1 つ、または「役割ごとに選ぶ」）。
+同じ窓に、モデルごとの接続の状態・使用量・今日の費用と上限が出る。API から選ぶときは:
 
 ```sh
 curl -X POST http://localhost:8100/api/runs -H "Content-Type: application/json"   -d '{"request": "...", "agent": "research", "models": {"report": "<モデルの id>"}}'

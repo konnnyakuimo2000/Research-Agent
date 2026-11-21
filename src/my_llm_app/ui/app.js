@@ -54,14 +54,168 @@ async function loadAgents() {
     sel.hidden = agents.length < 2; sel.title = AGENTS[agentId]?.description || "";
     setLayout(runId ? runAgent : agentId);   // 名乗りが届く前に開いた依頼も、段に合わせて出し直す
     if (runId && N) layout();
-    checkConnection(); loadRuns();
+    checkConnection(); loadChoice(); loadModels();
   } catch (err) { /* 一覧が取れなければ、既定のエージェントに送る */ }
 }
 $("agentSel").addEventListener("change", (ev) => {
   agentId = ev.target.value; ev.target.title = AGENTS[agentId]?.description || "";
   try { localStorage.setItem("agent", agentId); } catch (e) { /* 覚えられなくても動く */ }
-  newResearch(); checkConnection();
+  newResearch(); checkConnection(); loadChoice(); renderModels();
 });
+
+// ---- モデル（モデルの窓口のもの。docs/telemetry_enhancement_plan.md 6.3・M4） ----
+// ふだんは「全部まとめて 1 つ」を選ぶ。詳しくは役割ごとに選べる（役割の選択が優先）。何も選ばなければ窓口の役割の既定。
+// 使えないモデル（鍵がない）・役割に要る能力がないモデルは選べない。外部のモデルを選んでいるときは「外部」と出す
+let CATALOG = null, choice = { all: "", roles: {} }, modelStatus = null, statusTimer = null;
+const roleList = (id) => AGENTS[id]?.model_roles || [];
+const modelOf = (id) => CATALOG?.models.find((m) => m.id === id);
+const mTitle = (id) => modelOf(id)?.title || id;
+const fmtUsd = (v) => "$" + (v >= 1 ? v.toFixed(2) : v >= 0.01 ? v.toFixed(3) : v.toFixed(4));
+const fmtNum = (v) => (v || 0).toLocaleString("ja-JP");
+// そのモデルを、その役割（なければこのエージェントのすべての役割）に使えない理由（使えるなら空）
+function whyNot(m, roles) {
+  if (!m) return "一覧にない";
+  if (m.available === false) return m.unavailable || "使えない";
+  for (const r of roles) {
+    const miss = (r.needs || []).filter((n) => !(m.capabilities || []).includes(n));
+    if (miss.length) return `${r.title}に要る ${miss.join("・")} に対応していない`;
+  }
+  return "";
+}
+function loadChoice() {
+  try { choice = JSON.parse(localStorage.getItem("models:" + agentId) || "null") || { all: "", roles: {} }; }
+  catch (e) { choice = { all: "", roles: {} }; }
+  choice.roles = choice.roles || {};
+}
+function saveChoice() { try { localStorage.setItem("models:" + agentId, JSON.stringify(choice)); } catch (e) { /* 覚えられなくても動く */ } }
+// 送る選び直し（役割 → モデル）。使えなくなったモデル（鍵を外したなど）は送らない（窓口の既定に戻る）
+function chosenModels() {
+  if (!CATALOG) return {};
+  const out = {};
+  for (const r of roleList(agentId)) {
+    const v = choice.roles[r.role] || choice.all;
+    if (v && !whyNot(modelOf(v), [r])) out[r.role] = v;
+  }
+  return out;
+}
+function effective(role) { return chosenModels()[role] || CATALOG?.roles?.[role] || CATALOG?.default || ""; }
+function priceText(m) {
+  const p = m.price || {};
+  return p.input_per_mtok != null ? `入力 $${p.input_per_mtok}・出力 $${p.output_per_mtok}（100 万トークン）` : "費用なし";
+}
+async function loadModels() {
+  try {
+    const v = await api("/api/models");
+    CATALOG = v.available ? v : null;
+  } catch (err) { CATALOG = null; }
+  renderModels(); await loadRuns();
+  if (runId && !$("runMeta")) showRunModels(runId, RUNS[runId]?.models);   // 一覧が届く前に開いた調査にも、使ったモデルを出す
+  if (new URLSearchParams(location.search).get("panel") === "models" && CATALOG && $("modelPop").hidden) openModels();   // 確認用: 開いた状態で出す
+}
+function renderModels() {
+  const btn = $("modelBtn"), roles = roleList(agentId);
+  btn.hidden = !CATALOG || !roles.length;
+  $("modelName").hidden = !btn.hidden;            // 窓口のモデルを選べるときは、エージェントの設定のモデル名は出さない
+  if (btn.hidden) { closeModels(); return; }
+  const overrides = roles.filter((r) => choice.roles[r.role] && chosenModels()[r.role]);
+  const all = choice.all && chosenModels()[roles[0].role] === choice.all ? choice.all : "";
+  $("modelLabel").textContent = overrides.length ? "役割ごと" : all ? mTitle(all) : "既定のモデル";
+  const used = [...new Set(roles.map((r) => effective(r.role)))];
+  $("modelExt").hidden = !used.some((id) => modelOf(id)?.external);
+  btn.title = roles.map((r) => `${r.title}: ${mTitle(effective(r.role))}${modelOf(effective(r.role))?.external ? "（外部）" : ""}`).join("\n");
+  if (!$("modelPop").hidden) renderPop();
+}
+function defaultsText(roles) {
+  const ids = [...new Set(roles.map((r) => CATALOG.roles?.[r.role] || CATALOG.default))];
+  return ids.length === 1 ? `役割の既定（${mTitle(ids[0])}）` : "役割ごとの既定（窓口の設定どおり）";
+}
+// 窓は入力欄の上に開く。上に場所がなければ下に開き、高さを画面に収める
+function placePop() {
+  const pop = $("modelPop"), r = $("composer").getBoundingClientRect();
+  const above = r.top - 16, below = window.innerHeight - r.bottom - 16, down = above < 320 && below > above;
+  pop.classList.toggle("below", down);
+  pop.style.maxHeight = Math.max(160, Math.min(560, down ? below : above)) + "px";
+}
+function renderPop() {
+  const roles = roleList(agentId), st = modelStatus?.models || {}, spend = modelStatus?.spend || {};
+  const dot = (id) => { const s = st[id]; return `<i class="dot ${s?.ok ? "ok" : s && s.ok === false ? "ng" : ""}" title="${esc(s?.ok ? `応答 ${s.seconds ?? "?"} 秒` : s?.error || "状態を確かめていない")}"></i>`; };
+  const opt = (id, title, sub, why) => `<button type="button" class="opt${(choice.all || "") === id ? " on" : ""}" data-all="${esc(id)}"${why ? ` disabled title="${esc(why)}"` : ""}>
+      <span class="ot">${id ? dot(id) : ""}${esc(title)}${id && modelOf(id).external ? `<span class="ext">外部</span>` : ""}</span><span class="os">${esc(why || sub)}</span></button>`;
+  const anyRole = roles.some((r) => choice.roles[r.role]);
+  const limits = spend.limits || {};
+  $("modelPop").innerHTML = `
+    <h4>モデル</h4>
+    <div class="opts">${opt("", "既定", defaultsText(roles), "")}
+      ${CATALOG.models.map((m) => opt(m.id, m.title, `${m.external ? "外部の Web API" : "研究室・手元"} · ${priceText(m)}`, whyNot(m, roles))).join("")}</div>
+    ${roles.length > 1 ? `<details class="roles"${anyRole ? " open" : ""}><summary>役割ごとに選ぶ</summary>
+      ${roles.map((r) => `<label class="rrow"><span>${esc(r.title)}</span><select data-role="${esc(r.role)}">
+        <option value="">上と同じ（${esc(mTitle(choice.all && !whyNot(modelOf(choice.all), [r]) ? choice.all : CATALOG.roles?.[r.role] || CATALOG.default))}）</option>
+        ${CATALOG.models.map((m) => { const why = whyNot(m, [r]); return `<option value="${esc(m.id)}"${choice.roles[r.role] === m.id ? " selected" : ""}${why ? " disabled" : ""}>${esc(m.title)}${m.external ? "（外部）" : ""}${why ? `（${esc(why)}）` : ""}</option>`; }).join("")}
+      </select></label>`).join("")}</details>` : ""}
+    ${CATALOG.models.some((m) => m.external) ? `<p class="note">外部のモデルを選ぶと、依頼文と読んだページの本文がその会社に送られます。</p>` : ""}
+    <h4>状態と使用量 <span class="since">窓口を立ち上げてから</span></h4>
+    ${modelStatus ? `<table class="usage"><thead><tr><th>モデル</th><th>呼び出し</th><th>トークン（入力・出力）</th><th>費用</th></tr></thead><tbody>
+      ${CATALOG.models.map((m) => { const s = st[m.id] || {}; return `<tr><td>${dot(m.id)}${esc(m.title)}</td><td class="mono">${fmtNum(s.calls)}${s.errors ? `（失敗 ${fmtNum(s.errors)}）` : ""}${s.refused ? `（上限で断った ${fmtNum(s.refused)}）` : ""}</td>
+        <td class="mono">${fmtNum(s.prompt_tokens)}・${fmtNum(s.completion_tokens)}</td><td class="mono">${m.price && Object.keys(m.price).length ? fmtUsd(s.cost_usd || 0) : "—"}</td></tr>`; }).join("")}
+      </tbody></table>
+      <p class="spend">今日の費用 <b class="mono">${fmtUsd(spend.today_usd || 0)}</b>${limits.daily_usd ? ` / 上限 ${fmtUsd(limits.daily_usd)}` : "（上限なし）"}${limits.run_usd ? ` · 1 つの調査の上限 ${fmtUsd(limits.run_usd)}` : ""}</p>`
+      : `<p class="note">モデルの窓口の状態を読めません。</p>`}`;
+  $("modelPop").querySelectorAll(".opt").forEach((b) => b.addEventListener("click", () => {
+    choice.all = b.dataset.all; saveChoice(); renderModels();
+  }));
+  $("modelPop").querySelectorAll("select[data-role]").forEach((s) => s.addEventListener("change", () => {
+    if (s.value) choice.roles[s.dataset.role] = s.value; else delete choice.roles[s.dataset.role];
+    saveChoice(); renderModels();
+  }));
+}
+async function loadModelStatus() {
+  try { const v = await api("/api/models/status"); modelStatus = v.available ? v : null; } catch (err) { modelStatus = null; }
+  if (!$("modelPop").hidden) renderPop();
+}
+function openModels() {
+  $("modelPop").hidden = false; $("modelBtn").setAttribute("aria-expanded", "true");
+  renderPop(); placePop(); loadModelStatus(); statusTimer = setInterval(loadModelStatus, 10000);
+}
+function closeModels() {
+  $("modelPop").hidden = true; $("modelBtn").setAttribute("aria-expanded", "false");
+  if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
+}
+$("modelBtn").addEventListener("click", () => ($("modelPop").hidden ? openModels() : closeModels()));
+document.addEventListener("click", (ev) => {
+  if (!$("modelPop").hidden && !$("modelPop").contains(ev.target) && !$("modelBtn").contains(ev.target)) closeModels();
+});
+document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && !$("modelPop").hidden) { closeModels(); $("modelBtn").focus(); } });
+setInterval(loadModels, 60000);
+// 調査で使ったモデル（役割ごと）を、チャットの頭に小さく出す。値段のあるモデルを使ったら、費用も出す
+function modelSummary(models) {
+  if (!CATALOG || !models || !Object.keys(models).length) return "";
+  const titles = Object.fromEntries((AGENTS[runAgent]?.model_roles || []).map((r) => [r.role, r.title]));
+  const groups = {};
+  for (const [role, id] of Object.entries(models)) (groups[id] = groups[id] || []).push(titles[role] || role);
+  return Object.entries(groups).map(([id, rs]) => `${Object.keys(groups).length > 1 ? rs.join("・") + " " : ""}${mTitle(id)}${modelOf(id)?.external ? "（外部）" : ""}`).join(" / ");
+}
+function showRunModels(id, models) {
+  const text = modelSummary(models);
+  if (!text) return;
+  const d = document.createElement("div"); d.className = "runmeta"; d.id = "runMeta";
+  d.innerHTML = `<span>モデル: ${esc(text)}</span><span class="cost mono" id="runCost"></span>`;
+  $("chat").prepend(d);
+  if (Object.values(models).some((m) => Object.keys(modelOf(m)?.price || {}).length)) { d.dataset.priced = "1"; showRunCost(id); }
+}
+async function showRunCost(id) {
+  try {
+    const u = await api(`/api/runs/${encodeURIComponent(id)}/usage`);
+    const el = $("runCost"); if (el && id === runId) el.textContent = `費用 ${fmtUsd(u.usd || 0)}${u.limit_usd ? ` / 上限 ${fmtUsd(u.limit_usd)}` : ""}`;
+  } catch (err) { /* 費用を読めなくても、調査の表示は続ける */ }
+}
+// 一覧に出す短いモデルの名前（窓口の役割の既定と違うときだけ）
+function runModelTag(models) {
+  if (!CATALOG || !models) return "";
+  const diff = Object.entries(models).filter(([role, id]) => id !== (CATALOG.roles?.[role] || CATALOG.default));
+  if (!diff.length) return "";
+  const ids = [...new Set(Object.values(models))];
+  return ids.length === 1 ? mTitle(ids[0]) : "役割ごとのモデル";
+}
 // 契約の封筒の形（{v, seq, t, type, data}）を、画面の中の平らな形にする。知っている拡張（research/v1）のイベントは拡張の名前を外す。
 // 知らない拡張のイベントは名前がそのまま残り、描かれない（画面は止まらない）
 const KNOWN_EXT = ["research/v1"];
@@ -1116,7 +1270,7 @@ $("composer").addEventListener("submit", async (ev) => {
   const text = input.value.trim(); if (!text) return;
   input.value = ""; growInput();
   if (waitingRun) { sendAnswer(text); return; }
-  try { const r = await api("/api/runs", { request: text, agent: agentId }); open(r.id, true, r.agent); loadRuns(); }
+  try { const r = await api("/api/runs", { request: text, agent: agentId, models: chosenModels() }); open(r.id, true, r.agent, r.models); loadRuns(); }
   catch (err) { chatAgent(`<p>調査を始められませんでした: ${esc(err.message)}</p>`); }
 });
 function newResearch() {
@@ -1163,15 +1317,17 @@ function showRecent(runs) {
 }
 
 // 再生: 終わった調査は、記録の時刻どおりに（速さを掛けて）流す。動いている調査は届いたらすぐ描く
+let RUNS = {};   // 一覧の依頼（id → 要約。使ったモデルを出すため）
 let queue = [], clock = 0, speed = 8, playing = true, replay = false, lastTs = null, stopAt = Infinity;
 function closeSource() { if (source) { source.close(); source = null; } queue = []; }
-function open(id, live, agent) {
+function open(id, live, agent, models) {
   closeSource(); reset(); runId = id; runAgent = agent || "research"; setLayout(runAgent); $("chat").innerHTML = "";
+  showRunModels(id, models || RUNS[id]?.models);
   replay = !live; clock = 0; playing = true; liveState = live ? "running" : "";
   setComposer(false); highlightRun();
   source = new EventSource(withKey(`/api/runs/${encodeURIComponent(id)}/events`));
   source.onmessage = (m) => { const e = norm(JSON.parse(m.data)); if (replay) queue.push(e); else handle(e); };
-  source.addEventListener("end", () => { if (source) { source.close(); source = null; } updateSend(); });
+  source.addEventListener("end", () => { if (source) { source.close(); source = null; } updateSend(); if ($("runMeta")?.dataset.priced) showRunCost(id); });
   source.addEventListener("missing", () => { if (source) { source.close(); source = null; } chatAgent("<p>この調査の記録が見つかりません。</p>"); });
 }
 function frame(ts) {
@@ -1193,10 +1349,11 @@ function frame(ts) {
 async function loadRuns() {
   try {
     const { runs } = await api(withKey("/api/runs"));
+    RUNS = Object.fromEntries(runs.map((r) => [r.id, r]));
     const label = { running: "調べている", paused: "一時停止中", waiting: "答え待ち", done: "完了", error: "エラー", stopped: "途中で止まった", cancelled: "止めた" };
     const defAgent = Object.values(AGENTS).find((a) => a.default)?.id;
     $("runs").innerHTML = runs.map((r) => `<button type="button" class="run" data-id="${esc(r.id)}" data-agent="${esc(r.agent || "")}" data-live="${["running", "waiting", "paused"].includes(r.status)}">
-      <span class="r1">${esc(r.request || "(依頼なし)")}</span><span class="r2">${esc(r.id.slice(0, 13).replace(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2}).*/, "$2/$3 $4:$5"))} · ${label[r.status] || r.status}${AGENTS[r.agent] && r.agent !== defAgent ? " · " + esc(AGENTS[r.agent].name) : ""}</span></button>`).join("")
+      <span class="r1">${esc(r.request || "(依頼なし)")}</span><span class="r2">${esc(r.id.slice(0, 13).replace(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2}).*/, "$2/$3 $4:$5"))} · ${label[r.status] || r.status}${AGENTS[r.agent] && r.agent !== defAgent ? " · " + esc(AGENTS[r.agent].name) : ""}${runModelTag(r.models) ? " · " + esc(runModelTag(r.models)) : ""}</span></button>`).join("")
       || `<p class="r2" style="padding:8px;color:var(--muted)">まだ調査はありません</p>`;
     $("runs").querySelectorAll(".run").forEach((b) => b.addEventListener("click", () => open(b.dataset.id, b.dataset.live === "true", b.dataset.agent)));
     showRecent(runs);
@@ -1213,6 +1370,6 @@ if (params.has("at")) stopAt = +params.get("at");   // この時刻（秒）の�
 const first = params.get("run");
 if (first) api(withKey("/api/runs")).then(({ runs }) => {
   const r = runs.find((x) => x.id === first);
-  open(first, !!r && ["running", "waiting", "paused"].includes(r.status), r?.agent);
+  open(first, !!r && ["running", "waiting", "paused"].includes(r.status), r?.agent, r?.models);
 }).catch(() => open(first, false));
 })();

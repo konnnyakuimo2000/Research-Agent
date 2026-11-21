@@ -55,16 +55,36 @@ class ModelCatalog:
             self.error = f"{type(e).__name__}: {e}"
         return self._value
 
-    def run_usage(self, agent_run: str) -> dict | None:
-        """1 つの調査の費用（つながらなければ None）。"""
+    def _read(self, path: str, root: bool = False) -> dict | None:
+        """窓口から読む（つながらなければ None）。root は /v1 の外（/health）。"""
+        base = self.url.rstrip("/")
+        if root and base.endswith("/v1"):
+            base = base[:-3]
         try:
             headers = {"Authorization": f"Bearer {self.key}"} if self.key else {}
-            r = (self.http or httpx.Client(trust_env=False, timeout=10)).get(
-                self.url.rstrip("/") + f"/usage/runs/{agent_run}", headers=headers)
+            r = (self.http or httpx.Client(trust_env=False, timeout=10)).get(base + path, headers=headers)
             r.raise_for_status()
             return r.json()
         except (httpx.HTTPError, ValueError):
             return None
+
+    def run_usage(self, agent_run: str) -> dict | None:
+        """1 つの調査の費用（つながらなければ None）。"""
+        return self._read(f"/usage/runs/{agent_run}")
+
+    def status(self) -> dict | None:
+        """モデルごとの接続の状態と使用量、今日の費用と上限（画面のモデルの窓に出す）。つながらなければ None。"""
+        usage = self._read("/usage")
+        if usage is None:
+            return None
+        health = self._read("/health", root=True) or {}
+        out = {}
+        for model_id, u in usage.get("models", {}).items():
+            h = health.get("models", {}).get(model_id, {})
+            out[model_id] = {"ok": h.get("ok"), "error": h.get("error", ""), "seconds": h.get("seconds"),
+                             **{k: u.get(k) for k in ("calls", "errors", "active", "prompt_tokens",
+                                                      "completion_tokens", "cost_usd", "refused")}}
+        return {"models": out, "spend": usage.get("spend", {})}
 
 
 def effective_models(manifest: dict, requested: dict | None, catalog: dict | None) -> dict[str, str]:

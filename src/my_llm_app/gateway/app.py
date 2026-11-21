@@ -13,6 +13,7 @@
     GET  /api/models                       モデルの窓口のモデル（役割の既定・能力・外部か・値段・使えるか）。
                                            POST /api/runs の models で選び直せる
     GET  /api/runs/{id}/usage              その調査の費用（モデルの窓口が数えたもの）
+    GET  /api/models/status                モデルごとの接続の状態・使用量、今日の費用と上限
     GET  /api/favicon, /api/image          サイトのアイコンと画像（ゲートウェイが取得して配る）
 OpenAI 互換の入口: /v1/models, /v1/chat/completions（openai_compat）
 
@@ -129,6 +130,14 @@ def create_app(registry: Registry | None = None, runs_dir: Path | None = None, a
                 "models": [{k: m.get(k) for k in ("id", "title", "provider", "upstream_model", "capabilities",
                                                   "context_tokens", "default", "external", "price", "available",
                                                   "unavailable")} for m in value.get("data", [])]}
+
+    @app.get("/api/models/status")
+    def api_models_status(authorization: str | None = Header(default=None)) -> dict:
+        check_key(authorization)
+        value = gw.catalog.status() if gw.catalog else None
+        if value is None:
+            return {"available": False, "models": {}, "spend": {}}
+        return {"available": True, **value}
 
     @app.get("/api/runs/{run_id}/usage")
     def api_run_usage(run_id: str, authorization: str | None = Header(default=None)) -> dict:
