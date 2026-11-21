@@ -449,6 +449,7 @@ const HANDLERS = {
   "page.start": (e) => { pageNode(e, "running"); step("p:" + e.url, 0, "work"); now(`${e.host} を${e.db ? "（データベースの記録として）" : ""}読んでいる`); },
   "page.fetched": (e) => {
     const id = "p:" + e.url; if (!N[id]) return;
+    redirected(id, e);
     if (!e.ok) { setState(id, "failed"); step(id, 0, "ng"); setSub(id, e.reason); info[id].kv.push(["結果", esc(e.reason)]); return; }
     step(id, 0, "on"); if (e.title) setTitle(id, e.title); setSub(id, `取得した · ${e.chars.toLocaleString()} 文字`);
     info[id].title = e.title || info[id].title;
@@ -460,6 +461,7 @@ const HANDLERS = {
   },
   "page.done": (e) => {
     const id = "p:" + e.url; if (!N[id]) return;
+    redirected(id, e);
     if (e.error) { setState(id, "failed"); step(id, 1, "ng"); setSub(id, e.error); info[id].kv.push(["結果", esc(e.error)]); return; }
     setState(id, "done"); step(id, 1, "on"); step(id, 2, "on");
     const moved = e.tier !== e.base_tier ? ` · T${e.base_tier}→T${e.tier}` : "";
@@ -472,8 +474,8 @@ const HANDLERS = {
     e.facts.forEach((f, i) => flyFact(id, f, e.tier, i * 160));
   },
   "page.reprint": (e) => {
-    const id = order.find((k) => k.startsWith("p:") && sameUrl(k.slice(2), e.url));
-    const orig = order.find((k) => k.startsWith("p:") && sameUrl(k.slice(2), e.original));
+    const id = pageIdFor(e.url);
+    const orig = pageIdFor(e.original);
     if (!id) return;
     setSub(id, `ほぼ同じ文章: ${host(e.original)}（独立した出典に数えない）`);
     if (orig) N[id].extra.push(orig);
@@ -559,6 +561,23 @@ const HANDLERS = {
   "run.paused": () => { if (!replay) liveState = "paused"; now("一時停止している（今の作業が終わったところで止まる）"); updateSend(); },
   "run.resumed": () => { if (!replay) liveState = "running"; now("再開した"); updateSend(); },
 };
+// 転送されたページ: 本文の発行元（転送先）をノードに覚えさせ、サイト名・アイコン・流れの図のアイコンを切り替える。
+// 報告の出典は転送先の URL なので、出典番号から飛ぶときはこれで探す
+function redirected(id, e) {
+  const final = e.final_url;
+  if (!final || sameUrl(final, e.url) || N[id].final) return;
+  N[id].final = final;
+  const h = host(final);
+  const k = N[id].el.querySelector(".k span"); if (k) k.textContent = `ページ · ${host(e.url)} から転送`;
+  const ico = N[id].el.querySelector(".ico"); if (ico) ico.outerHTML = icon(h);
+  info[id].title = h; info[id].kv.push(["転送先", link(final)]);
+  const chip = FLOW.pageChip[e.url];
+  if (chip) { chip.title = `${h}（${host(e.url)} から転送）`; const ci = chip.querySelector(".ico"); if (ci) ci.outerHTML = icon(h); }
+}
+// 出典の URL（転送先のこともある）から、ページのノードを探す
+function pageIdFor(url) {
+  return order.find((k) => k.startsWith("p:") && (sameUrl(k.slice(2), url) || (N[k].final && sameUrl(N[k].final, url))));
+}
 function sameUrl(a, b) { const n = (u) => u.replace(/[?#].*$/, "").replace(/\/$/, ""); return n(a) === n(b); }
 function pageNode(e, state) {
   const id = "p:" + e.url;
@@ -597,10 +616,10 @@ function renderReport(md) {
 function wireCites(el) {
   el?.querySelectorAll(".cite").forEach((b) => b.addEventListener("click", () => {
     const s = sources[b.dataset.src - 1]; if (!s) return;
-    const id = order.find((k) => k.startsWith("p:") && sameUrl(k.slice(2), s.url)) || (N.sum && sameUrl(N.sum.url, s.url) ? "sum" : null);
+    const id = pageIdFor(s.url) || (N.sum && sameUrl(N.sum.url, s.url) ? "sum" : null);
     if (!id) return;
     reveal(id); select(id);
-    if (view === "flow") FLOW.pageDetails(s.url); else jumpTo(id);
+    if (view === "flow") showDetails(info[id]); else jumpTo(id);
   }));
 }
 
@@ -1001,7 +1020,7 @@ const FLOW = {
     document.querySelectorAll(".fnode.sel").forEach((x) => x.classList.remove("sel")); n.el.classList.add("sel");
     const kv = [["通った回数", this.visits[id] ? `${this.visits[id]} 回` : ""], ["かかった時間", this.seconds[id] ? `${Math.round(this.seconds[id])} 秒` : ""]];
     let list = n.hist.map((x) => esc(x));
-    if (id === "pages") list = Object.keys(this.pageChip).map((u) => `${esc(host(u))} — ${link(u)}`);
+    if (id === "pages") list = Object.keys(this.pageChip).map((u) => { const f = N["p:" + u]?.final || u; return `${esc(host(f))} — ${link(f)}`; });
     if (id === "imgs") {
       list = Object.entries(this.thumb).map(([u, th]) => `${esc(th.dataset.done || "未確認")} — ${link(u)}`);
       if (this.unchecked) kv.push(["未確認", `${this.unchecked} 枚。${esc(this.uncheckedWhy)}`]);

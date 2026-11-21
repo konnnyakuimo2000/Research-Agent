@@ -449,7 +449,8 @@ class Nodes:
             page = fetch.Page(url, title=record["title"], text=record["text"], ok=True)
         else:
             page = fetch.fetch_page(url)
-        ev("page.fetched", url=url, ok=page.ok, reason=getattr(page, "reason", ""), title=page.title,
+        ev("page.fetched", url=url, final_url=getattr(page, "final_url", "") or url, ok=page.ok,
+           reason=getattr(page, "reason", ""), title=page.title,
            chars=len(page.text or ""), images=len(getattr(page, "images", []) or []))
         if not page.ok:
             return page, [], [], "", {}
