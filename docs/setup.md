@@ -122,7 +122,7 @@ docker compose ps
 | `docker compose ps` | 状態を確認 |
 | `docker compose logs -f open-webui` | ログを表示（Ctrl+C で終了） |
 | `docker compose restart open-webui` | Open WebUI だけ再起動 |
-| `docker compose up -d --build webui agent-research agent-chat` | コードを変えた後に作り直して再起動 |
+| `docker build -t my_llm_app-app:local .` → `docker compose up -d webui agent-research agent-chat` | コードを変えた後に作り直して再起動（3 つのサービスは同じイメージを使う） |
 | `docker compose logs -f agent-research` | 調査エージェントのログを表示（ゲートウェイは `webui`） |
 
 **注意**: `docker compose down -v` は、アカウントと会話履歴もすべて削除する。最初からやり直したいとき以外は使わない。
