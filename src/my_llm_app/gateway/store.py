@@ -19,6 +19,7 @@ from my_llm_app.agentkit import protocol
 
 LEGACY_AGENT, LEGACY_EXTENSION = "research", "research/v1"
 RECENT_SECONDS = 600.0
+LEGACY_SCAN_SECONDS = 30.0   # CLI の記録を探しにフォルダーを見る間隔
 COLUMNS = ("id", "agent", "agent_version", "agent_run", "request", "status", "question", "created", "updated",
            "seconds", "events", "settings", "hidden", "models")
 
@@ -32,6 +33,7 @@ class RunStore:
         self.dir = dir_
         dir_.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        self._legacy_at = 0.0
         self.db = sqlite3.connect(dir_ / "gateway.sqlite", check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.execute("""CREATE TABLE IF NOT EXISTS runs (
@@ -115,7 +117,13 @@ class RunStore:
 
     # ---- 分ける前の記録 ----
 
-    def import_legacy(self) -> int:
+    def import_legacy(self, force: bool = False) -> int:
+        """CLI で実行した調査の記録を一覧に入れる。フォルダーを見るのは LEGACY_SCAN_SECONDS に 1 回まで
+        （Windows の Docker のフォルダー共有では、100 個ほどのファイルを見るのに 2 秒かかり、一覧を開くたびに待たせていた）。"""
+        now = time.time()
+        if not force and now - self._legacy_at < LEGACY_SCAN_SECONDS:
+            return 0
+        self._legacy_at = now
         with self._lock:
             known = {r[0] for r in self.db.execute("SELECT id FROM runs").fetchall()}
         n = 0
@@ -148,6 +156,8 @@ class Feed:
     events: list[dict] = field(default_factory=list)
     finished: bool = False
     relaying: bool = False
+    generation: int = 0          # 中継をつなぎ直すたびに増やす（古い中継は、目が覚めたら自分で抜ける）
+    seen: float = 0.0            # 中継がエージェントから最後に何か（イベント・生存の合図）を受け取った時刻
     condition: threading.Condition = field(default_factory=threading.Condition)
 
     @property

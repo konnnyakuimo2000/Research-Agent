@@ -64,7 +64,10 @@ def sse_signal(name: str, data: dict | None = None) -> str:
 
 
 def read_sse(lines: Iterable[str]) -> Iterator[tuple[str, dict]]:
-    """SSE の行を (種類, 中身) にする。種類は、ふつうのイベントなら "message"。"""
+    """SSE の行を (種類, 中身) にする。種類は、ふつうのイベントなら "message"。
+
+    生存の合図（": ping" などの注釈の行）は ("ping", {}) にする（受け手が、接続が生きているかを数えるため）。
+    """
     name, data = "message", []
     for line in lines:
         if line == "":
@@ -75,7 +78,7 @@ def read_sse(lines: Iterable[str]) -> Iterator[tuple[str, dict]]:
                     pass
             name, data = "message", []
         elif line.startswith(":"):
-            continue
+            yield "ping", {}
         elif line.startswith("event:"):
             name = line[6:].strip()
         elif line.startswith("data:"):

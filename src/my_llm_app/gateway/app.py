@@ -224,4 +224,5 @@ def create_app(registry: Registry | None = None, runs_dir: Path | None = None, a
     app.mount("/ui", UIFiles(directory=UI_DIR, html=True), name="ui")
     if resume:
         gw.resume_live()
+        gw.watch()          # 止まった中継をつなぎ直す見張り
     return app

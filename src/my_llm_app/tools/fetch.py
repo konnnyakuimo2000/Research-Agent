@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 
 from urllib.parse import urljoin, urlparse
@@ -48,6 +50,15 @@ def is_skipped_domain(url: str) -> bool:
     return tier_of(url) == EXCLUDED_TIER
 
 
+_LABEL_TAG = re.compile(r"<(/?)label\b", re.IGNORECASE)
+
+
+def _unwrap_labels(html: str) -> str:
+    """<label> を <span> にする。本文の取り出し（trafilatura）はフォームの部品として <label> の中身を捨てるが、
+    大学の研究者データベース（青山学院大学の raweb など）は、表のセルの中身（職歴・論文名）を <label> に入れている。"""
+    return _LABEL_TAG.sub(lambda m: f"<{m.group(1)}span", html)
+
+
 def fetch_page(url: str, timeout: float = 20.0) -> Page:
     """ページを取得して本文を取り出す。公開の宛先だけ（http.get の公開取得）、HTML は MAX_BYTES まで。
 
@@ -73,7 +84,8 @@ def fetch_page(url: str, timeout: float = 20.0) -> Page:
         # PDF などは未対応（本文を読めないものは出典にしない）
         return Page(url, reason=f"未対応の形式（{ctype.split(';')[0] or '不明'}）", final_url=final)
 
-    text = trafilatura.extract(r.text, include_comments=False, include_tables=True, favor_precision=True) or ""
+    text = trafilatura.extract(_unwrap_labels(r.text), include_comments=False, include_tables=True,
+                               favor_precision=True) or ""
     meta = trafilatura.extract_metadata(r.text)
     title = (meta.title if meta and meta.title else "") or final
     if len(text) < 100:

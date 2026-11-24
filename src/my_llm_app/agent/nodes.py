@@ -22,7 +22,7 @@ from my_llm_app.agent import prompts
 from my_llm_app.agent import query_plan
 from my_llm_app.agent import reprints
 from my_llm_app.agent import telemetry
-from my_llm_app.agent.guard import check_decision, is_ambiguous
+from my_llm_app.agent.guard import check_decision, is_ambiguous, pages_to_read
 from my_llm_app.agent.names import mentions, same_name
 from my_llm_app.agent.quotes import normalize, quote_in_text
 from my_llm_app.agent.state import (DOMINANCE_RATIO, MAX_CANDIDATES, MAX_FEATURES, MAX_IMAGE_CHECKS,
@@ -319,14 +319,9 @@ class Nodes:
             extra.update(self._lookup_databases(state, ev))
             state = {**state, **extra}
 
-        # 読んだページは、要求した URL と転送先の URL の両方で既読とする（同じ転送元・転送先を読み直さない）
-        done = {canonical(u) for p in state.get("pages_read", []) for u in (p["url"], p.get("final_url") or p["url"])}
-        queue = by_tier(state.get("priority_urls", [])) + state.get("reading_list", [])
-        urls = []
-        for u in queue:
-            if canonical(u) not in done and canonical(u) not in {canonical(x) for x in urls}:
-                urls.append(u)
-        urls = urls[:PAGES_PER_READ]
+        # 読んだページは、要求した URL と転送先の URL の両方で既読とする（同じ転送元・転送先を読み直さない）。
+        # 読むかどうかの判断（guard.research_step）と同じ関数で選ぶ
+        urls = pages_to_read(state, PAGES_PER_READ)
         started = time.perf_counter()
         for u in urls:   # 読む順番が来たページ（2 つずつ並行に読むので、残りは「予定」）
             ev("page.planned", **telemetry.page_info(u, state),

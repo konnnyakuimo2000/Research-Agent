@@ -12,6 +12,7 @@ import re
 from my_llm_app.agent import query_plan
 from my_llm_app.agent.coverage import MISSING, WEAK
 from my_llm_app.agent.names import fix_spelling, mentions
+from my_llm_app.tiers import by_tier, canonical
 from my_llm_app.agent.state import (EXTRA_PAGES, MAX_ASPECT_SEARCHES, MAX_CANDIDATES, MAX_CONFLICT_SEARCHES,
                                     MAX_FREE_SEARCHES, MAX_PAGE_ATTEMPTS, MAX_PAGES, MAX_QUESTIONS, MAX_SECONDS,
                                     MAX_STALE_READS, MAX_STEPS, MAX_WEB_FAILURES, RESERVE_SECONDS, AgentState,
@@ -104,6 +105,28 @@ def rephrase_step(state: AgentState, d: Decision) -> Decision | None:
             "guard": "候補が依頼文の手がかりに合わないため、聞き返す前に依頼文の言葉で検索し直す"}
 
 
+def read_keys(state: AgentState) -> set[str]:
+    """読んだページ。要求した URL と転送先の URL の両方を、表記をそろえた形で持つ。"""
+    return {canonical(u) for p in state.get("pages_read", []) for u in (p["url"], p.get("final_url") or p["url"])}
+
+
+def pages_to_read(state: AgentState, limit: int | None = None) -> list[str]:
+    """次に読むページ（狙って探したページが先）。read_pages と、読むかどうかの判断（research_step）で同じものを使う。
+
+    前は判断の側が URL をそのまま比べていたので、転送先として読み終えたページ（研究者データベースの
+    kyoinId=… → resid/… など）を「まだ読んでいない」と見て、何も読めない read_pages を上限まで繰り返した。
+    """
+    done = read_keys(state)
+    out: list[str] = []
+    seen: set[str] = set()
+    for u in by_tier(state.get("priority_urls", [])) + state.get("reading_list", []):
+        key = canonical(u)
+        if key not in done and key not in seen:
+            seen.add(key)
+            out.append(u)
+    return out[:limit] if limit else out
+
+
 def wants_more_images(state: AgentState) -> bool:
     return bool(state.get("wants_images")) and not state.get("images_checked")
 
@@ -119,8 +142,9 @@ def research_step(state: AgentState, d: Decision) -> Decision | None:
     missing = [r for r in rows if r["status"] == MISSING]
     weak = [r for r in rows if r["status"] == WEAK]
     read = [p["url"] for p in state.get("pages_read", [])]
-    unread = [u for u in state.get("reading_list", []) if u not in read]
-    priority_unread = [u for u in state.get("priority_urls", []) if u not in read]
+    done = read_keys(state)                    # read_pages と同じ数え方（転送先・表記ゆれも読んだとみなす）
+    unread = [u for u in state.get("reading_list", []) if canonical(u) not in done]
+    priority_unread = [u for u in state.get("priority_urls", []) if canonical(u) not in done]
     verified = state.get("verified", [])
     converged = state.get("stale_reads", 0) >= MAX_STALE_READS
     web_ok = state.get("web_failures_in_row", 0) < MAX_WEB_FAILURES
