@@ -107,8 +107,10 @@ def test_a_stalled_relay_is_restarted_by_the_watch(tmp_path):
     time.sleep(0.1)
     assert gw.check_relays() == []                                   # まだ止まったとはみなさない
     assert gw.check_relays(now=time.time() + core.STALL_SECONDS + 1) == ["r1"]
+    # 状態は run.error を書いた時点で error になり、流れは、その後の end を受け取ってから閉じる。両方を待つ
+    # （状態だけを待つと、PC が混んでいるときに、流れが閉じる前に確かめて落ちていた）
     end = time.time() + 5
-    while gw.store.get("r1")["status"] != "error" and time.time() < end:
+    while not (gw.store.get("r1")["status"] == "error" and gw.feeds["r1"].finished) and time.time() < end:
         time.sleep(0.02)
     assert gw.store.get("r1")["status"] == "error" and gw.feeds["r1"].finished
     client.hang.set()                                                # 古い中継が目を覚ます

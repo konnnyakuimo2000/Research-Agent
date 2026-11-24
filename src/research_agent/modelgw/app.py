@@ -51,6 +51,7 @@ SDK_PARAMS = {"temperature", "top_p", "max_tokens", "max_completion_tokens", "re
               "presence_penalty", "frequency_penalty", "n", "tools", "tool_choice", "parallel_tool_calls",
               "stream_options", "logprobs", "top_logprobs", "user"}
 HEALTH_SECONDS = 20
+PROBE_SECONDS = 4.0      # 接続の確認を打ち切る秒数（やり直さない）
 
 
 class Gate:
@@ -123,6 +124,8 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
     roles = dict(roles or {})
     key = os.getenv("MODEL_GATEWAY_KEY", "") if key is None else key
     models = {s.id: Model(s, http_client, anthropic_http) for s in specs}
+    # 接続の確認に使う HTTP の部品。窓口がモデルを呼ぶのと同じもので、やり直しをせずに 1 回だけ確かめる
+    probe = http_client or httpx.Client(trust_env=False)
     spend = Spend(limits, spend_file)
     app = FastAPI(title="model-gateway")
     app.state.models = models
@@ -276,9 +279,12 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
 
     @app.get("/health")
     def health() -> dict:
+        """モデルごとに、今つながるかを素早く確かめる（画面のモデルの窓・エージェントの接続の表示）。
+
+        前は汎用の取得の部品（やり直しあり）を使っていたので、VPN が切れていると、つながらないことが分かるまで
+        1 分近く待たせていた。確認はやり直さず、PROBE_SECONDS で打ち切る。"""
         if health_cache and time.time() - health_cache["at"] < HEALTH_SECONDS:
             return health_cache["value"]
-        from research_agent.tools import http as http_tools
 
         def check_model(m: Model) -> dict:
             started = time.time()
@@ -288,10 +294,10 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
                 return {**out, "ok": False, "error": m.spec.unavailable}
             try:
                 if m.spec.provider == "anthropic":           # 一覧を 1 件だけ読む（費用はかからない）
-                    m.llm.client.client.with_options(timeout=4).models.list(limit=1)
+                    m.llm.client.client.with_options(timeout=PROBE_SECONDS, max_retries=0).models.list(limit=1)
                     return {**out, "ok": True, "seconds": round(time.time() - started, 1)}
-                r = http_tools.get(m.spec.base_url.rstrip("/") + "/models", timeout=4, cache=False, public=False,
-                                   headers={"Authorization": f"Bearer {m.spec.api_key}"})
+                r = probe.get(m.spec.base_url.rstrip("/") + "/models", timeout=PROBE_SECONDS,
+                              headers={"Authorization": f"Bearer {m.spec.api_key}"})
                 return {**out, "ok": r.status_code == 200, "seconds": round(time.time() - started, 1)}
             except Exception as e:  # noqa: BLE001 - つながらない理由を画面に出す
                 return {**out, "ok": False, "error": type(e).__name__}
