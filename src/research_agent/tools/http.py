@@ -234,7 +234,10 @@ def _receive(client: httpx.Client, url: str, params: dict | None, headers: dict,
                     raise ResponseTooLarge(f"{max_bytes:,} バイトを超えた: {url[:80]}")
                 chunks.append(chunk)
             body = b"".join(chunks)
-        out_headers = [(k, v) for k, v in r.headers.multi_items() if k.lower() not in _DROP_HEADERS]
+        # 見出しは受け取ったバイトのまま渡す。文字に直した形で渡すと、httpx が ASCII で書き戻そうとして、
+        # 日本語の入った見出し（ファイル名の Content-Disposition など）で UnicodeEncodeError になり、
+        # 調査ごと止まっていた（2026-11-24 の「はやぶさ」の調査で 2 回）
+        out_headers = [(k, v) for k, v in r.headers.raw if k.decode("latin-1").lower() not in _DROP_HEADERS]
         return httpx.Response(r.status_code, headers=out_headers, content=body, request=r.request)
 
 

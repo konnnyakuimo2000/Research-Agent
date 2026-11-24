@@ -57,6 +57,8 @@ def fetch_image(src: str, timeout: float = 20.0) -> FetchedImage:
         return FetchedImage(False, "公開されていない宛先のため取得しない")
     except httpx.HTTPError as e:
         return FetchedImage(False, f"取得できない（{type(e).__name__}）")
+    except Exception as e:  # noqa: BLE001 - 1 枚の想定外の失敗で、並行して取っている他の画像と調査を止めない
+        return FetchedImage(False, f"取得できない（{type(e).__name__}）")
     if r.status_code != 200:
         return FetchedImage(False, f"取得できない（HTTP {r.status_code}）")
     if not r.headers.get("content-type", "").startswith("image/"):

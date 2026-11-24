@@ -74,6 +74,8 @@ def fetch_page(url: str, timeout: float = 20.0) -> Page:
         return Page(url, reason="公開されていない宛先のため取得しない")
     except httpx.HTTPError as e:
         return Page(url, reason=f"取得できない（{type(e).__name__}）")
+    except Exception as e:  # noqa: BLE001 - 1 ページの想定外の失敗で、並行して読んでいる他のページと調査を止めない
+        return Page(url, reason=f"取得できない（{type(e).__name__}）")
     final = str(r.url)
     if final != url and is_skipped_domain(final):
         return Page(url, reason="転送先が出典にしないサイト（転載・まとめ）", final_url=final)
