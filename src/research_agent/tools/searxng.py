@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 from research_agent.tools import http
 
@@ -29,6 +30,16 @@ class WebSearchResponse:
     retried: bool = False    # 0 件だったので時間をおいてやり直したか
 
 
+def _readable(url: str) -> bool:
+    """取りに行ける URL か。サイト名のない中継用の URL（「http:///go/v1/…」。ある検索エンジンが返す）は、
+    読めないまま読むページの枠を使うので捨てる（2026-11-24 のロペズ先生の調査で 3 件あった）。"""
+    try:
+        u = urlparse(url)
+    except ValueError:
+        return False
+    return u.scheme in ("http", "https") and bool(u.hostname)
+
+
 def parse_response(data: dict, limit: int) -> WebSearchResponse:
     results = [
         WebResult(
@@ -38,7 +49,7 @@ def parse_response(data: dict, limit: int) -> WebSearchResponse:
             engines=r.get("engines", []),
         )
         for r in data.get("results", [])[:limit]
-        if r.get("url")
+        if _readable(r.get("url", ""))
     ]
     return WebSearchResponse(
         results=results,

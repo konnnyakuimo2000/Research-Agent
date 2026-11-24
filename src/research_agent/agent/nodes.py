@@ -18,6 +18,7 @@ from langgraph.types import interrupt
 
 from research_agent.agent import coverage as cov
 from research_agent.agent import imaging
+from research_agent.agent import name_facts
 from research_agent.agent import prompts
 from research_agent.agent import query_plan
 from research_agent.agent import reprints
@@ -486,6 +487,15 @@ class Nodes:
             else:
                 dropped.append(f)
         meta = page_meta(out, text, source, base, from_database=bool(record))
+        # 名前の観点は、対象についての事実が取れたページ（データベースの記録）の題名・本文から、プログラムが作る
+        # （LLM はどのページにもある名前を事実として出さないので、氏名・別名がいつまでも埋まらなかった）。
+        # 名前の候補には、このページで LLM が見つけた別の呼び方も入れる（英語名・本名などの別名が書ける）
+        aspect = name_facts.name_aspect(names)
+        if aspect and (facts or record) and not any(f["aspect"] == aspect for f in facts):
+            body = name_facts.source_text(page.title, text)
+            nf = name_facts.name_fact(body, name_facts.candidates(state, meta.get("new_terms", [])), aspect, source)
+            if nf and quote_in_text(nf["quote"], body):
+                facts.append(nf)
         ev("page.done", url=url, final_url=source, title=page.title, base_tier=base, tier=meta.get("tier", base),
            tier_reason=meta.get("tier_reason", ""), other_entity=out.get("other_entity", "").strip(),
            facts=[{k: f[k] for k in ("text", "aspect", "quote")} for f in facts],
