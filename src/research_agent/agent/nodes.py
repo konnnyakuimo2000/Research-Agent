@@ -28,7 +28,7 @@ from research_agent.agent.quotes import normalize, quote_in_text
 from research_agent.agent.state import (DOMINANCE_RATIO, MAX_CANDIDATES, MAX_FEATURES, MAX_IMAGE_CHECKS,
                                     MAX_IMAGE_FETCHES, MAX_REF_DEPTH, MAX_REFERENCE_IMAGES,
                                     PAGES_PER_READ, REFS_PER_PAGE, WANTED_IMAGES, AgentState,
-                                    Candidate, PageRead, Source)
+                                    Candidate, PageRead, Source, setting)
 from research_agent.config import Settings
 from research_agent.llm import LLM, LLMOutputError
 from research_agent.tiers import UrlNumbers, adjusted_tier, by_tier, canonical, host_of, page_tier, tier_of
@@ -69,7 +69,8 @@ class Nodes:
         }
         log.info("feasibility: %s (%s)", feasibility["verdict"], feasibility["reason"])
         telemetry.emitter()("feasibility", **feasibility)
-        return {"feasibility": feasibility, "wants_images": imaging.wants_images(state["request"]),
+        wants = setting(state, "images") and imaging.wants_images(state["request"])   # 設定で切れる
+        return {"feasibility": feasibility, "wants_images": wants,
                 "trace": [{"node": "check_feasibility", "llm": out}]}
 
     def report_infeasible(self, state: AgentState) -> dict:

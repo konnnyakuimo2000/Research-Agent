@@ -92,8 +92,34 @@ class Feasibility(TypedDict):
     suggestions: list[str]            # 代わりにできること
 
 
+# 依頼ごとに変えられる上限（エージェントの名乗りの settings_schema。画面の設定の欄から送られる）
+SETTINGS = {
+    "max_seconds": {"type": "integer", "title": "時間の上限（秒）", "default": MAX_SECONDS, "minimum": 420, "maximum": 3600,
+                    "description": "利用者の答えを待つ時間は数えない。報告をまとめる時間（5 分）を含む"},
+    "max_pages": {"type": "integer", "title": "読むページの数", "default": MAX_PAGES, "minimum": 2, "maximum": 30,
+                  "description": "読めたページだけで数える"},
+    "images": {"type": "boolean", "title": "画像も探す", "default": True},
+}
+PRESETS = {"quick": {"title": "すばやく", "values": {"max_seconds": 420, "max_pages": 6}},
+           "thorough": {"title": "くわしく", "values": {"max_seconds": 1800, "max_pages": 24}}}
+
+
+def setting(state: "AgentState", name: str):
+    """依頼の設定の値（なければ既定）。範囲の外の値は範囲に収める（ゲートウェイでも確かめている）。"""
+    spec = SETTINGS[name]
+    value = (state.get("settings") or {}).get(name, spec["default"])
+    if spec["type"] == "integer":
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return spec["default"]
+        return min(spec["maximum"], max(spec["minimum"], value))
+    return bool(value)
+
+
 class AgentState(TypedDict, total=False):
     request: str                      # 利用者の依頼（原文）
+    settings: dict                    # 依頼ごとの設定（SETTINGS。なければ既定）
     models: dict[str, str]            # 依頼ごとに選び直したモデル（役割 → モデルの窓口の id。なければ役割の既定）
     budget: str                       # 窓口が調査ごとの費用を数える鍵（エージェントの依頼の id）
     feasibility: Feasibility          # 公開情報で調べられる依頼かの判定（設計書 4 章 ④）

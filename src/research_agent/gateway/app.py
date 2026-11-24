@@ -4,7 +4,8 @@
 
 画面の API（/api/*）:
     GET  /api/agents                       つないでいるエージェント（名乗りの要約と、つながるか）
-    POST /api/runs                         {request, agent} → 依頼を始める
+    POST /api/runs                         {request, agent, settings, models} → 依頼を始める。settings は
+                                           エージェントの settings_schema で確かめる
     GET  /api/runs                         これまでの依頼（新しい順）
     GET  /api/runs/{id}/events             イベントの流れ（SSE。契約の封筒の形。?after= か Last-Event-ID より後から）
     POST /api/runs/{id}/answer|pause|resume|cancel
@@ -37,6 +38,7 @@ from research_agent.gateway import openai_compat
 from research_agent.gateway.core import Gateway, Unavailable, flat_events
 from research_agent.gateway.models import ModelCatalog, ModelChoiceError
 from research_agent.gateway.registry import AgentError, Registry
+from research_agent.gateway.settings import SettingsError
 from research_agent.gateway.store import RunStore
 
 HEARTBEAT_SECONDS = 15
@@ -81,7 +83,7 @@ def create_app(registry: Registry | None = None, runs_dir: Path | None = None, a
             raise HTTPException(status_code=503, detail=f"エージェントにつながりません: {e}") from None
         except AgentError as e:
             raise HTTPException(status_code=e.status if e.status in (400, 404, 409) else 502, detail=e.detail) from None
-        except ModelChoiceError as e:
+        except (ModelChoiceError, SettingsError) as e:
             raise HTTPException(status_code=400, detail=str(e)) from None
 
     compat = openai_compat.router(gw, check_key)
@@ -106,7 +108,10 @@ def create_app(registry: Registry | None = None, runs_dir: Path | None = None, a
         models = body.get("models") or {}
         if not isinstance(models, dict):
             raise HTTPException(status_code=400, detail="models は {役割: モデル} の形にしてください")
-        return call(lambda: gw.start(str(body.get("agent", "")), request, models=models))
+        settings = body.get("settings") or {}
+        if not isinstance(settings, dict):
+            raise HTTPException(status_code=400, detail="settings は {名前: 値} の形にしてください")
+        return call(lambda: gw.start(str(body.get("agent", "")), request, models=models, settings=settings))
 
     @app.post("/api/runs/{run_id}/answer")
     def api_answer(run_id: str, body: dict, authorization: str | None = Header(default=None)) -> dict:

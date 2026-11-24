@@ -20,6 +20,7 @@ import httpx
 from research_agent.agentkit import protocol
 from research_agent.gateway.models import ModelCatalog, effective_models
 from research_agent.gateway.registry import AgentClient, AgentError, Registry
+from research_agent.gateway.settings import check_settings
 from research_agent.gateway.store import Feed, RunStore
 
 log = logging.getLogger(__name__)
@@ -61,6 +62,7 @@ class Gateway:
                         "description": m.get("description", ""), "levels": m.get("levels", [0]),
                         "extensions": m.get("extensions", []), "capabilities": m.get("capabilities", []),
                         "graph": m.get("graph"), "model_roles": m.get("model_roles", []),
+                        "settings_schema": m.get("settings_schema") or {}, "presets": m.get("presets") or {},
                         "ok": bool(m) and not c.error, "error": c.error,
                         "default": c.id == self.registry.default})
         return out
@@ -79,6 +81,7 @@ class Gateway:
         if manifest is None:
             raise Unavailable(client.error or "エージェントにつながりません")
         chosen = effective_models(manifest, models, self.models())   # 役割ごとに実際に使うモデル（記録に残す）
+        settings = check_settings(manifest.get("settings_schema") or {}, settings or {})
         try:
             r = client.start({"text": text, **(extra or {})}, settings, chosen)
         except httpx.HTTPError as e:
@@ -298,10 +301,11 @@ class Gateway:
 
 def _summary(rec: dict) -> dict:
     out = {k: rec.get(k) for k in ("id", "agent", "request", "status", "question", "created", "events", "seconds")}
-    try:
-        out["models"] = json.loads(rec.get("models") or "{}")
-    except ValueError:
-        out["models"] = {}
+    for key in ("models", "settings"):          # 依頼ごとに選び直したモデルと設定（画面のチャットの頭に出す）
+        try:
+            out[key] = json.loads(rec.get(key) or "{}")
+        except ValueError:
+            out[key] = {}
     return out
 
 

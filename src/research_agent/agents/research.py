@@ -19,12 +19,13 @@ from pathlib import Path
 from langgraph.types import Command
 
 from research_agent.agent.progress import describe
+from research_agent.agent.state import PRESETS, SETTINGS
 from research_agent.agentkit.runs import Cancelled, Done, Run, RunManager, Waiting
 from research_agent.agentkit.service import agent_app
 
 log = logging.getLogger(__name__)
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 EXTENSION = "research/v1"
 RECURSION_LIMIT = 40
 
@@ -38,7 +39,8 @@ MANIFEST = {
     "levels": [0, 1],
     "extensions": [EXTENSION],
     "capabilities": ["questions", "pause", "cancel"],
-    "settings_schema": {"type": "object", "properties": {}},
+    "settings_schema": {"type": "object", "properties": SETTINGS},
+    "presets": PRESETS,
     "model_roles": [{"role": "decide", "title": "判断", "needs": ["json_schema"]},
                     {"role": "extract", "title": "ページの読み取り", "needs": ["json_schema"]},
                     {"role": "vision", "title": "画像の確認", "needs": ["json_schema", "vision"]},
@@ -63,7 +65,8 @@ class ResearchRuns(RunManager):
 
     def work(self, run: Run, payload: tuple[str, object]) -> Done | Waiting | Cancelled:
         kind, value = payload
-        graph_input = ({"request": run.request, "models": run.models, "budget": run.id} if kind == "start"
+        graph_input = ({"request": run.request, "models": run.models, "budget": run.id, "settings": run.settings}
+                       if kind == "start"
                        else Command(resume=value))
         config = {"configurable": {"thread_id": run.thread_id}, "recursion_limit": RECURSION_LIMIT}
         question = ""

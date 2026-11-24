@@ -14,9 +14,8 @@ from research_agent.agent.coverage import MISSING, WEAK
 from research_agent.agent.names import fix_spelling, mentions
 from research_agent.tiers import by_tier, canonical
 from research_agent.agent.state import (EXTRA_PAGES, MAX_ASPECT_SEARCHES, MAX_CANDIDATES, MAX_CONFLICT_SEARCHES,
-                                    MAX_FREE_SEARCHES, MAX_PAGE_ATTEMPTS, MAX_PAGES, MAX_QUESTIONS, MAX_SECONDS,
-                                    MAX_STALE_READS, MAX_STEPS, MAX_WEB_FAILURES, RESERVE_SECONDS, AgentState,
-                                    Decision)
+                                    MAX_FREE_SEARCHES, MAX_PAGE_ATTEMPTS, MAX_QUESTIONS, MAX_STALE_READS, MAX_STEPS,
+                                    MAX_WEB_FAILURES, RESERVE_SECONDS, AgentState, Decision, setting)
 
 # 画像を探すための検索の言葉（画像はプログラムが find_images で探すので、LLM の検索ではしない）
 _IMAGE_QUERY = re.compile(r"画像|写真|photo|image|picture|jpe?g|png|commons|file:", re.IGNORECASE)
@@ -57,8 +56,8 @@ def elapsed(state: AgentState) -> float:
 
 
 def time_over(state: AgentState) -> bool:
-    """報告をまとめる時間を残すと、もう調査を続けられないか。"""
-    return elapsed(state) >= MAX_SECONDS - RESERVE_SECONDS
+    """報告をまとめる時間を残すと、もう調査を続けられないか（時間の上限は依頼の設定。既定は MAX_SECONDS）。"""
+    return elapsed(state) >= setting(state, "max_seconds") - RESERVE_SECONDS
 
 
 def _name(state: AgentState) -> str:
@@ -150,9 +149,10 @@ def research_step(state: AgentState, d: Decision) -> Decision | None:
     web_ok = state.get("web_failures_in_row", 0) < MAX_WEB_FAILURES
     # 読むページの枠は、読めたページだけで数える（PDF・接続できないページで枠を使わない）
     ok_read = sum(1 for p in state.get("pages_read", []) if p.get("ok"))
-    can_try = len(read) < MAX_PAGE_ATTEMPTS
-    can_read = ok_read < MAX_PAGES and can_try
-    can_read_extra = ok_read < MAX_PAGES + EXTRA_PAGES and can_try   # 狙って探したページだけに使える枠
+    max_pages = setting(state, "max_pages")    # 依頼の設定（既定は MAX_PAGES）
+    can_try = len(read) < max(MAX_PAGE_ATTEMPTS, 2 * max_pages)
+    can_read = ok_read < max_pages and can_try
+    can_read_extra = ok_read < max_pages + EXTRA_PAGES and can_try   # 狙って探したページだけに使える枠
 
     # R-5: 聞き返さずに決めた対象について、途中で同名の別の対象が見つかった → 利用者に確認する
     if state.get("new_ambiguity") and not state.get("ambiguity_asked") and asked < MAX_QUESTIONS:
