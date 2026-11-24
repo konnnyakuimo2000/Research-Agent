@@ -15,8 +15,8 @@ Python のスクリプト（`scripts/`）も使う場合は [uv](https://docs.as
 ## 1. リポジトリを取得する
 
 ```sh
-git clone https://github.com/konnnyakuimo2000/my_llm_app.git
-cd my_llm_app
+git clone https://github.com/konnnyakuimo2000/Research-Agent.git
+cd Research-Agent
 ```
 
 ## 2. .env を作る

@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(REPO_ROOT / ".env")
 
 # Wikimedia などの API は、誰がアクセスしているかわかる User-Agent を求めている
-USER_AGENT = "Research-Agent/0.1 (https://github.com/konnnyakuimo2000/my_llm_app)"
+USER_AGENT = "Research-Agent/0.1 (https://github.com/konnnyakuimo2000/Research-Agent)"
 
 
 @dataclass(frozen=True)
