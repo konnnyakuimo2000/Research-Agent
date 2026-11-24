@@ -7,10 +7,10 @@ from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
 from langgraph.types import Command
 
-from my_llm_app.agentkit import protocol
-from my_llm_app.agentkit.runs import StateError
-from my_llm_app.agents import research
-from my_llm_app.agents.research import ResearchRuns
+from research_agent.agentkit import protocol
+from research_agent.agentkit.runs import StateError
+from research_agent.agents import research
+from research_agent.agents.research import ResearchRuns
 
 
 class FakeGraph:
@@ -149,7 +149,7 @@ def test_failed_runs_delete_their_checkpoints(tmp_path):
 
 
 def test_events_go_out_in_the_protocol_shape_and_rest_while_waiting():
-    from my_llm_app.config import Settings
+    from research_agent.config import Settings
     app = research.create_app(graph=FakeGraph(), settings=Settings("http://localhost:1/v1", "m", "k", "http://x"),
                               key="")
     c = TestClient(app)

@@ -4,17 +4,17 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from my_llm_app.agent import coverage as cov
-from my_llm_app.agent import imaging
-from my_llm_app.agent import prompts
-from my_llm_app.agent.guard import check_decision
-from my_llm_app.agent.nodes import Nodes, drop_sentences_with, mentions, unsupported_names
-from my_llm_app.config import Settings
-from my_llm_app.tiers import by_tier
-from my_llm_app.tools import images
-from my_llm_app.tools.images import ImageCandidate
-from my_llm_app.tools.searxng import WebResult, WebSearchResponse
-from my_llm_app.tools.wikimedia import Entity
+from research_agent.agent import coverage as cov
+from research_agent.agent import imaging
+from research_agent.agent import prompts
+from research_agent.agent.guard import check_decision
+from research_agent.agent.nodes import Nodes, drop_sentences_with, mentions, unsupported_names
+from research_agent.config import Settings
+from research_agent.tiers import by_tier
+from research_agent.tools import images
+from research_agent.tools.images import ImageCandidate
+from research_agent.tools.searxng import WebResult, WebSearchResponse
+from research_agent.tools.wikimedia import Entity
 
 SETTINGS = Settings(llm_base_url="http://unused/v1", llm_model="m", llm_api_key="k", searxng_url="http://unused")
 
@@ -81,7 +81,7 @@ def test_facts_about_sibling_models_are_dropped():
     page = type("P", (), {"ok": True, "url": "https://x.jp/pen", "title": "ペン",
                           "text": "初代のペンEEは1961年に発売された。ペンEE-3は1973年に発売された。"})()
     state = {"request": "ペン EE-3", "aspects": cov.aspects_for("製品・機械")}
-    with patch("my_llm_app.agent.nodes.fetch.fetch_page", return_value=page):
+    with patch("research_agent.agent.nodes.fetch.fetch_page", return_value=page):
         _, facts, dropped, _, _ = Nodes(SETTINGS, ExtractLLM())._read_one(state, page.url)
     assert [f["text"] for f in facts] == ["EE-3は1973年発売"]
     assert dropped[0]["dropped"] == "対象そのものについての記述ではない"
@@ -188,10 +188,10 @@ WEB = WebSearchResponse([WebResult("Martin J. Dürst", "https://www.sw.it.aoyama
 
 def run_search(llm, request, web=WEB):
     state = {"request": request, "decision": {"action": "search", "query": "q", "names": ["マーティン"]}}
-    with patch("my_llm_app.agent.nodes.wikimedia.search_entities", return_value=[CITY, NAME]), \
-         patch("my_llm_app.agent.nodes.wikimedia.get_entities", return_value={"Q1": CITY, "Q2": NAME}), \
-         patch("my_llm_app.agent.nodes.wikimedia.summary_for_entity", return_value=None), \
-         patch("my_llm_app.agent.nodes.searxng.web_search", return_value=web):
+    with patch("research_agent.agent.nodes.wikimedia.search_entities", return_value=[CITY, NAME]), \
+         patch("research_agent.agent.nodes.wikimedia.get_entities", return_value={"Q1": CITY, "Q2": NAME}), \
+         patch("research_agent.agent.nodes.wikimedia.summary_for_entity", return_value=None), \
+         patch("research_agent.agent.nodes.searxng.web_search", return_value=web):
         return Nodes(SETTINGS, llm).search(state)
 
 
@@ -284,9 +284,9 @@ def test_unrelated_results_are_not_read_once_target_is_known():
         def chat_json(self, system, user, schema, temperature=0.2):
             return {"known": [], "unknown": [], "candidate_ids": [], "target_id": "", "target_evidence": "",
                     "specific_subject": "", "specific_evidence": ""}
-    with patch("my_llm_app.agent.nodes.wikimedia.search_entities", return_value=[]), \
-         patch("my_llm_app.agent.nodes.wikimedia.get_entities", return_value={}), \
-         patch("my_llm_app.agent.nodes.searxng.web_search", return_value=web):
+    with patch("research_agent.agent.nodes.wikimedia.search_entities", return_value=[]), \
+         patch("research_agent.agent.nodes.wikimedia.get_entities", return_value={}), \
+         patch("research_agent.agent.nodes.searxng.web_search", return_value=web):
         out = Nodes(SETTINGS, LLM()).search(state)
     assert out["reading_list"] == ["https://www.sw.it.aoyama.ac.jp/D%C3%BCrst/"]
     assert out["priority_urls"] == ["https://www.sw.it.aoyama.ac.jp/D%C3%BCrst/"]

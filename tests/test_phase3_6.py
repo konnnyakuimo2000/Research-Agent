@@ -4,14 +4,14 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 
-from my_llm_app.agent import coverage as cov
-from my_llm_app.agent import imaging, reprints
-from my_llm_app.agent.nodes import Nodes, images_section, page_meta, sources_text
-from my_llm_app.config import Settings
-from my_llm_app.tiers import adjusted_tier, page_tier
-from my_llm_app.tools import databases, http, images, searxng
-from my_llm_app.tools.databases import lookup as real_lookup   # conftest が差し替える前の本物
-from my_llm_app.tools.images import FetchedImage, ImageCandidate
+from research_agent.agent import coverage as cov
+from research_agent.agent import imaging, reprints
+from research_agent.agent.nodes import Nodes, images_section, page_meta, sources_text
+from research_agent.config import Settings
+from research_agent.tiers import adjusted_tier, page_tier
+from research_agent.tools import databases, http, images, searxng
+from research_agent.tools.databases import lookup as real_lookup   # conftest が差し替える前の本物
+from research_agent.tools.images import FetchedImage, ImageCandidate
 
 import http_mock  # noqa: E402  （tests/http_mock.py）
 
@@ -173,7 +173,7 @@ class RecordLLM:
 
 
 def unreadable(url):
-    from my_llm_app.tools.fetch import Page
+    from research_agent.tools.fetch import Page
     return Page(url, reason="取得できない")
 
 
@@ -182,9 +182,9 @@ def test_read_pages_reads_database_records_first_without_fetching():
                            "ORCID の研究者情報\n氏名: Martin J. Dürst\n所属機関: Aoyama Gakuin University", "ORCID")
     state = {"request": "Dürst 先生", "target": {"id": "", "label": "Martin J. Dürst", "description": "教授"},
              "reading_list": ["https://www.example.ac.jp/durst"]}
-    with patch("my_llm_app.agent.nodes.databases.lookup", return_value=([rec], ["国立国会図書館サーチ（著者）（ReadTimeout）"],
+    with patch("research_agent.agent.nodes.databases.lookup", return_value=([rec], ["国立国会図書館サーチ（著者）（ReadTimeout）"],
                                                                          ["ORCID", "国立国会図書館サーチ（著者）"])), \
-         patch("my_llm_app.agent.nodes.fetch.fetch_page", side_effect=lambda u: unreadable(u)) as fetch_page:
+         patch("research_agent.agent.nodes.fetch.fetch_page", side_effect=lambda u: unreadable(u)) as fetch_page:
         out = Nodes(SETTINGS, RecordLLM()).read_pages(state)
     assert [c.args[0] for c in fetch_page.call_args_list] == ["https://www.example.ac.jp/durst"]   # 記録は取りに行かない
     assert out["pages_read"][0]["url"] == "https://orcid.org/0000-0001" and out["pages_read"][0]["verified"] == 1
@@ -221,7 +221,7 @@ def test_find_images_falls_back_to_reference_images_from_related_items():
          patch.object(images, "commons_search", return_value=[]), \
          patch.object(images, "searxng_images", return_value=[]), \
          patch.object(images, "fetch_image", return_value=ok), \
-         patch("my_llm_app.agent.nodes.images.related_images", return_value=[rel]):
+         patch("research_agent.agent.nodes.images.related_images", return_value=[rel]):
         out = Nodes(SETTINGS, RejectVLM()).find_images(state)
     assert out["image_counts"]["L3-分野別データベース"] == 1
     assert [(i["src"], i["level"]) for i in out["images"]] == [("https://up/genus.jpg", imaging.REFERENCE)]
@@ -231,7 +231,7 @@ def test_find_images_falls_back_to_reference_images_from_related_items():
 
 
 def test_image_prompt_gets_distinguishing_features():
-    from my_llm_app.agent import prompts
+    from research_agent.agent import prompts
     state = {"target": {"label": "EE-3", "description": "カメラ"}, "features": [{"text": "赤いマーク", "source": "u"}]}
     assert "赤いマーク" in prompts.image_user(state, "t", "c", "https://p")
 

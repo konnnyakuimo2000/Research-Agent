@@ -12,15 +12,15 @@ import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
-from my_llm_app import llm as llm_module
-from my_llm_app.agents import research
-from my_llm_app.config import Settings
-from my_llm_app.gateway.models import ModelChoiceError, effective_models
-from my_llm_app.llm import BUDGET_HEADER, LLM
-from my_llm_app.modelgw.anthropic_provider import FALLBACK_BETA, strict_schema, to_anthropic
-from my_llm_app.modelgw.app import create_app
-from my_llm_app.modelgw.registry import ModelSpec, load_catalog
-from my_llm_app.modelgw.spend import Spend
+from research_agent import llm as llm_module
+from research_agent.agents import research
+from research_agent.config import Settings
+from research_agent.gateway.models import ModelChoiceError, effective_models
+from research_agent.llm import BUDGET_HEADER, LLM
+from research_agent.modelgw.anthropic_provider import FALLBACK_BETA, strict_schema, to_anthropic
+from research_agent.modelgw.app import create_app
+from research_agent.modelgw.registry import ModelSpec, load_catalog
+from research_agent.modelgw.spend import Spend
 
 
 @pytest.fixture(autouse=True)
@@ -195,7 +195,7 @@ def test_models_without_a_key_are_listed_but_refused(tmp_path, monkeypatch):
 
 
 def test_the_shipped_models_toml_lists_web_api_models(monkeypatch):
-    from my_llm_app.config import REPO_ROOT
+    from research_agent.config import REPO_ROOT
     monkeypatch.setenv("VL_BASE_URL", "http://x/v1")
     catalog = load_catalog(REPO_ROOT / "config" / "models.toml")
     claude = [s for s in catalog.specs if s.provider == "anthropic"]
@@ -232,7 +232,7 @@ def test_spend_forgets_yesterday(tmp_path, monkeypatch):
     s = Spend({"daily_usd": 1.0})
     s.add("claude", "r", 2.0)
     assert s.refusal("r")
-    monkeypatch.setattr("my_llm_app.modelgw.spend.today", lambda: "2999-01-01")
+    monkeypatch.setattr("research_agent.modelgw.spend.today", lambda: "2999-01-01")
     assert s.refusal("r") == "" and s.as_dict()["today_usd"] == 0
 
 
@@ -268,9 +268,9 @@ def test_unavailable_models_cannot_be_chosen():
 # ---- 画面（M4）: モデルの一覧・状態と使用量 ----
 
 def test_the_screen_gets_models_with_status_usage_and_spend(tmp_path):
-    from my_llm_app.gateway.app import create_app as gateway_app
-    from my_llm_app.gateway.models import ModelCatalog
-    from my_llm_app.gateway.registry import Registry
+    from research_agent.gateway.app import create_app as gateway_app
+    from research_agent.gateway.models import ModelCatalog
+    from research_agent.gateway.registry import Registry
 
     no_key = claude_spec(id="claude-off", unavailable="ANTHROPIC_API_KEY が設定されていません")
     mg, _ = gateway(specs=[claude_spec(), no_key, lab_spec()], limits={"daily_usd": 5.0})
@@ -289,7 +289,7 @@ def test_the_screen_gets_models_with_status_usage_and_spend(tmp_path):
 
 
 def test_model_status_without_a_model_gateway(tmp_path):
-    from my_llm_app.gateway.app import create_app as gateway_app
-    from my_llm_app.gateway.registry import Registry
+    from research_agent.gateway.app import create_app as gateway_app
+    from research_agent.gateway.registry import Registry
     web = TestClient(gateway_app(registry=Registry([]), runs_dir=tmp_path, api_key="", catalog=None))
     assert web.get("/api/models/status").json() == {"available": False, "models": {}, "spend": {}}

@@ -3,12 +3,12 @@ from unittest.mock import MagicMock, patch
 
 from PIL import Image
 
-from my_llm_app.agent import imaging
-from my_llm_app.agent.guard import check_decision
-from my_llm_app.agent.nodes import Nodes, images_section
-from my_llm_app.config import Settings
-from my_llm_app.tools import images
-from my_llm_app.tools.images import ImageCandidate, fetch_image, page_images
+from research_agent.agent import imaging
+from research_agent.agent.guard import check_decision
+from research_agent.agent.nodes import Nodes, images_section
+from research_agent.config import Settings
+from research_agent.tools import images
+from research_agent.tools.images import ImageCandidate, fetch_image, page_images
 
 SETTINGS = Settings(llm_base_url="http://unused/v1", llm_model="m", llm_api_key="k", searxng_url="http://unused")
 
@@ -47,8 +47,8 @@ def test_judge_table():
 
 def test_commons_category_images_are_used_only_for_matching_categories():
     from unittest.mock import patch
-    from my_llm_app.agent.nodes import Nodes
-    from my_llm_app.tools.images import ImageCandidate
+    from research_agent.agent.nodes import Nodes
+    from research_agent.tools.images import ImageCandidate
 
     def cat(name, file):
         return ImageCandidate(src=f"https://upload.wikimedia.org/{file}", page_url=f"https://commons.wikimedia.org/wiki/File:{file}",
@@ -63,10 +63,10 @@ def test_commons_category_images_are_used_only_for_matching_categories():
 
     state = {"request": "EE-3", "target": {"id": "", "label": "Olympus PEN EE-3", "description": "カメラ"}}
     ok = images.FetchedImage(ok=True, data_url="data:,", width=400, height=300)
-    with patch("my_llm_app.agent.nodes.images.commons_category", return_value=found), \
-         patch("my_llm_app.agent.nodes.images.commons_search", return_value=[]), \
-         patch("my_llm_app.agent.nodes.images.searxng_images", return_value=[]), \
-         patch("my_llm_app.agent.nodes.images.fetch_image", return_value=ok):
+    with patch("research_agent.agent.nodes.images.commons_category", return_value=found), \
+         patch("research_agent.agent.nodes.images.commons_search", return_value=[]), \
+         patch("research_agent.agent.nodes.images.searxng_images", return_value=[]), \
+         patch("research_agent.agent.nodes.images.fetch_image", return_value=ok):
         out = Nodes(SETTINGS, VLM()).find_images(state)
     assert out["image_counts"]["L2-Commonsカテゴリ"] == 1                      # EE-2 のカテゴリは使わない
     assert [i["src"] for i in out["images"]] == ["https://upload.wikimedia.org/Olympus_pen_ee3.jpg"]
@@ -74,8 +74,8 @@ def test_commons_category_images_are_used_only_for_matching_categories():
 
 
 def test_engraved_model_number_is_checked_by_program():
-    from my_llm_app.agent.nodes import Nodes
-    from my_llm_app.tools.images import FetchedImage, ImageCandidate
+    from research_agent.agent.nodes import Nodes
+    from research_agent.tools.images import FetchedImage, ImageCandidate
 
     class VLM:
         def __init__(self, text):
@@ -192,7 +192,7 @@ def test_guard_finds_images_before_responding_only_when_asked():
 
 
 def test_image_key_merges_thumbnail_sizes_and_query_strings():
-    from my_llm_app.tools.images import image_key
+    from research_agent.tools.images import image_key
     a = "https://upload.wikimedia.org/wikipedia/commons/thumb/9/93/Mercury_Records.JPG/250px-Mercury_Records.JPG?utm=x"
     b = "https://upload.wikimedia.org/wikipedia/commons/9/93/Mercury_Records.JPG"
     assert image_key(a) == image_key(b)

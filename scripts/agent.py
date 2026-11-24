@@ -20,9 +20,9 @@ import uuid
 
 from langgraph.types import Command
 
-from my_llm_app.agent.graph import build_graph
-from my_llm_app.agent.telemetry import Recorder
-from my_llm_app.config import REPO_ROOT
+from research_agent.agent.graph import build_graph
+from research_agent.agent.telemetry import Recorder
+from research_agent.config import REPO_ROOT
 
 
 def summarize(node: str, update: dict) -> str:

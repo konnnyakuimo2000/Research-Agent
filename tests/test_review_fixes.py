@@ -1,10 +1,10 @@
 """レビュー指摘（docs/claude_review_fixes.md）の回帰テスト。外部サービスは使わない。"""
 
-from my_llm_app.agent.guard import check_decision
-from my_llm_app.agent.names import mentions
-from my_llm_app.agent.nodes import confirm_target
-from my_llm_app.agent.state import MAX_STEPS
-from my_llm_app.tiers import UrlNumbers, by_tier, canonical
+from research_agent.agent.guard import check_decision
+from research_agent.agent.names import mentions
+from research_agent.agent.nodes import confirm_target
+from research_agent.agent.state import MAX_STEPS
+from research_agent.tiers import UrlNumbers, by_tier, canonical
 
 TARGET = {"id": "Q1", "label": "水星", "description": "惑星", "sitelinks": 100}
 
@@ -46,8 +46,8 @@ def test_model_numbers_need_a_boundary():
 
 
 def test_engraved_text_check_uses_the_same_boundary():
-    from my_llm_app.agent.nodes import Nodes
-    from my_llm_app.tools.images import FetchedImage, ImageCandidate
+    from research_agent.agent.nodes import Nodes
+    from research_agent.tools.images import FetchedImage, ImageCandidate
 
     class VLM:
         def __init__(self, text):
@@ -89,8 +89,8 @@ def test_unicode_spelling_and_tracking_parameters_still_merge():
 def _llm_with(handler):
     import httpx
 
-    from my_llm_app.config import Settings
-    from my_llm_app.llm import LLM
+    from research_agent.config import Settings
+    from research_agent.llm import LLM
     settings = Settings(llm_base_url="http://llm.test/v1", llm_model="m", llm_api_key="k", searxng_url="http://unused")
     return LLM(settings, http_client=httpx.Client(transport=httpx.MockTransport(handler)))
 
@@ -105,7 +105,7 @@ def test_llm_sends_at_most_four_times_on_repeated_transient_errors(monkeypatch):
     import pytest
     from openai import InternalServerError
 
-    from my_llm_app import llm as llm_module
+    from research_agent import llm as llm_module
     monkeypatch.setattr(llm_module.time, "sleep", lambda s: None)
     sent = []
 
@@ -123,7 +123,7 @@ def test_llm_sends_at_most_four_times_on_repeated_transient_errors(monkeypatch):
 def test_llm_stops_retrying_after_a_success_and_retries_429(monkeypatch):
     import httpx
 
-    from my_llm_app import llm as llm_module
+    from research_agent import llm as llm_module
     monkeypatch.setattr(llm_module.time, "sleep", lambda s: None)
     replies = [httpx.Response(429, json={"error": "rate"}), httpx.Response(200, json=_ok_body())]
     sent = []
@@ -141,7 +141,7 @@ def test_llm_does_not_retry_client_errors(monkeypatch):
     import pytest
     from openai import BadRequestError
 
-    from my_llm_app import llm as llm_module
+    from research_agent import llm as llm_module
     monkeypatch.setattr(llm_module.time, "sleep", lambda s: None)
     sent = []
 
@@ -159,11 +159,11 @@ def test_llm_does_not_retry_client_errors(monkeypatch):
 def test_one_page_with_broken_llm_output_does_not_lose_other_pages():
     from unittest.mock import patch
 
-    from my_llm_app.agent import prompts
-    from my_llm_app.agent.nodes import Nodes
-    from my_llm_app.config import Settings
-    from my_llm_app.llm import LLMOutputError
-    from my_llm_app.tools.fetch import Page
+    from research_agent.agent import prompts
+    from research_agent.agent.nodes import Nodes
+    from research_agent.config import Settings
+    from research_agent.llm import LLMOutputError
+    from research_agent.tools.fetch import Page
 
     good_text = "水星は太陽系で最も内側を公転する惑星である。" * 5
     pages = {"https://bad.example/1": Page("https://bad.example/1", title="壊れる", text="何か" * 80, ok=True),
@@ -181,7 +181,7 @@ def test_one_page_with_broken_llm_output_does_not_lose_other_pages():
              "aspects": [{"name": "特徴", "words": "特徴"}], "subject_type": "自然物", "databases_checked": True,
              "reading_list": list(pages)}
     settings = Settings(llm_base_url="http://unused/v1", llm_model="m", llm_api_key="k", searxng_url="http://unused")
-    with patch("my_llm_app.agent.nodes.fetch.fetch_page", side_effect=lambda u: pages[u]):
+    with patch("research_agent.agent.nodes.fetch.fetch_page", side_effect=lambda u: pages[u]):
         out = Nodes(settings, LLM()).read_pages(state)
     by_url = {p["url"]: p for p in out["pages_read"]}
     assert by_url["https://bad.example/1"]["ok"] is False
@@ -199,7 +199,7 @@ def test_public_fetch_allows_public_and_refuses_private_destinations(monkeypatch
     import pytest
 
     import http_mock
-    from my_llm_app.tools import http
+    from research_agent.tools import http
     sent = http_mock.install(monkeypatch, lambda r: httpx.Response(200, text="ok"),
                              ips={"intra.example": "10.0.0.5", "meta.example": "169.254.169.254", "v6.example": "::1"})
     assert http.get("https://pub.example/a").text == "ok"
@@ -215,7 +215,7 @@ def test_redirects_are_followed_one_by_one_with_the_same_check(monkeypatch):
     import pytest
 
     import http_mock
-    from my_llm_app.tools import http
+    from research_agent.tools import http
 
     def handler(request):
         if request.url.host == "pub.example" and request.url.path == "/to-public":
@@ -237,7 +237,7 @@ def test_connection_is_made_to_the_checked_address_only(monkeypatch):
     import httpcore
     import pytest
 
-    from my_llm_app.tools import http
+    from research_agent.tools import http
     monkeypatch.setattr(http, "resolve", lambda host, port: {"pub.example": ["93.184.216.34"],
                                                              "mixed.example": ["93.184.216.34", "10.1.2.3"]}[host])
     connected = []
@@ -255,7 +255,7 @@ def test_internal_services_and_proxy_settings(monkeypatch):
     import httpx
 
     import http_mock
-    from my_llm_app.tools import http
+    from research_agent.tools import http
     http_mock.install(monkeypatch, lambda r: httpx.Response(200, json={"results": []}), ips={"searxng": "172.18.0.3"})
     assert http.get("http://searxng:8080/search", public=False).status_code == 200   # 設定済みの内部サービスは従来どおり
     assert http._public_client().trust_env is False                     # 環境変数のプロキシ設定で迂回しない
@@ -268,7 +268,7 @@ def test_size_limit_is_applied_while_receiving(monkeypatch):
     import pytest
 
     import http_mock
-    from my_llm_app.tools import http
+    from research_agent.tools import http
     pulled = []
 
     def chunks():
@@ -291,7 +291,7 @@ def test_too_large_page_and_image_are_one_candidate_failures(monkeypatch):
     import httpx
 
     import http_mock
-    from my_llm_app.tools import fetch, images
+    from research_agent.tools import fetch, images
     monkeypatch.setattr(fetch, "MAX_BYTES", 1000)
     monkeypatch.setattr(images, "MAX_BYTES", 1000)
     http_mock.install(monkeypatch, lambda r: httpx.Response(200, headers={"content-type": "text/html"},
@@ -318,9 +318,9 @@ def _redirecting(monkeypatch, target):
 
 
 def test_redirected_page_is_cited_and_tiered_as_its_final_url(monkeypatch):
-    from my_llm_app.agent import prompts
-    from my_llm_app.agent.nodes import Nodes
-    from my_llm_app.config import Settings
+    from research_agent.agent import prompts
+    from research_agent.agent.nodes import Nodes
+    from research_agent.config import Settings
     final = "https://ja.wikipedia.org/wiki/%E6%B0%B4%E6%98%9F"     # Location は符号化した形で届く
     sent = _redirecting(monkeypatch, final)
 
@@ -344,7 +344,7 @@ def test_redirected_page_is_cited_and_tiered_as_its_final_url(monkeypatch):
 
 
 def test_redirect_to_an_excluded_site_is_not_used(monkeypatch):
-    from my_llm_app.tools import fetch
+    from research_agent.tools import fetch
     _redirecting(monkeypatch, "https://www.pinterest.jp/pin/1")
     page = fetch.fetch_page("https://blog.example.com/mercury")
     assert not page.ok and "転送先" in page.reason and page.final_url == "https://www.pinterest.jp/pin/1"
@@ -356,7 +356,7 @@ def test_configured_llm_and_searxng_are_refused_by_the_public_path(monkeypatch):
     import pytest
 
     import http_mock
-    from my_llm_app.tools import http
+    from research_agent.tools import http
     sent = http_mock.install(monkeypatch, lambda r: httpx.Response(200, text="ok"),
                              ips={"llm.lab.example": "133.2.0.10", "alias.example": "133.2.0.10"})
     monkeypatch.setattr(http, "INTERNAL_HOSTS", {"llm.lab.example"})

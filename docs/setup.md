@@ -153,7 +153,7 @@ curl -X POST http://localhost:8100/api/runs -H "Content-Type: application/json" 
 | `docker compose ps` | 状態を確認 |
 | `docker compose logs -f open-webui` | ログを表示（Ctrl+C で終了） |
 | `docker compose restart open-webui` | Open WebUI だけ再起動 |
-| `docker build -t my_llm_app-app:local .` → `docker compose up -d webui agent-research agent-chat model-gateway` | コードを変えた後に作り直して再起動（4 つのサービスは同じイメージを使う） |
+| `docker build -t research-agent:local .` → `docker compose up -d webui agent-research agent-chat model-gateway` | コードを変えた後に作り直して再起動（4 つのサービスは同じイメージを使う） |
 | `docker compose logs -f agent-research` | 調査エージェントのログを表示（ゲートウェイは `webui`） |
 
 **注意**: `docker compose down -v` は、アカウントと会話履歴もすべて削除する。最初からやり直したいとき以外は使わない。
@@ -197,10 +197,10 @@ uv run scripts/chat.py      # ターミナルで会話
 Docker を使わずにこの PC で画面とエージェントを動かすとき（開発用。SearXNG は Docker のものを使う）:
 
 ```sh
-uv run uvicorn --factory my_llm_app.modelgw.app:create_app --port 8103       # モデルの窓口
-uv run uvicorn --factory my_llm_app.agents.research:create_app --port 8101   # 調査エージェント
-uv run uvicorn --factory my_llm_app.agents.chat:create_app --port 8102       # チャット
-uv run uvicorn --factory my_llm_app.gateway.app:create_app --port 8110       # ゲートウェイ → http://localhost:8110/ui/
+uv run uvicorn --factory research_agent.modelgw.app:create_app --port 8103       # モデルの窓口
+uv run uvicorn --factory research_agent.agents.research:create_app --port 8101   # 調査エージェント
+uv run uvicorn --factory research_agent.agents.chat:create_app --port 8102       # チャット
+uv run uvicorn --factory research_agent.gateway.app:create_app --port 8110       # ゲートウェイ → http://localhost:8110/ui/
 ```
 
 接続先は `config/agents.toml` の `url`（環境変数 `AGENT_RESEARCH_URL`・`AGENT_CHAT_URL` があればそちら）。

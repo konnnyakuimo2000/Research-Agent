@@ -1,7 +1,7 @@
-from my_llm_app.agent import coverage as cov
-from my_llm_app.agent import query_plan as qp
-from my_llm_app.agent.names import name_variants
-from my_llm_app.tools.searxng import WebResult
+from research_agent.agent import coverage as cov
+from research_agent.agent import query_plan as qp
+from research_agent.agent.names import name_variants
+from research_agent.tools.searxng import WebResult
 
 LAB = "https://www.sw.it.aoyama.ac.jp/D%C3%BCrst/"
 TARGET = {"id": "", "label": "DÜRST, Martin J.", "description": "教授", "sitelinks": 0}

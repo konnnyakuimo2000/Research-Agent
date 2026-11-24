@@ -1,4 +1,4 @@
-# my_llm_app
+# research_agent
 
 研究室サーバーの LLM（llama.cpp / qwen3.8-27b）と Web 検索を組み合わせて、ブラウザから会話できる環境。
 

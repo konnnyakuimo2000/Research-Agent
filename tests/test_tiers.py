@@ -1,10 +1,10 @@
 from unittest.mock import patch
 
-from my_llm_app.agent.nodes import Nodes
-from my_llm_app.config import Settings
-from my_llm_app.tiers import by_tier, tier_of
-from my_llm_app.tools.searxng import WebResult, WebSearchResponse
-from my_llm_app.tools.wikimedia import Entity
+from research_agent.agent.nodes import Nodes
+from research_agent.config import Settings
+from research_agent.tiers import by_tier, tier_of
+from research_agent.tools.searxng import WebResult, WebSearchResponse
+from research_agent.tools.wikimedia import Entity
 
 
 def test_tier_of():
@@ -30,7 +30,7 @@ PLANET = Entity("Q308", "水星", "太陽系第一惑星", 274)
 
 
 def test_canonical_drops_tracking_parameters_and_session_ids():
-    from my_llm_app.tiers import UrlNumbers, by_tier, canonical
+    from research_agent.tiers import UrlNumbers, by_tier, canonical
     a = "https://one-scene.com/products/135?srsltid=AYCX9vLkou"
     b = "https://one-scene.com/products/135?srsltid=AYCX9vJap6&utm_source=x"
     assert canonical(a) == canonical(b) == canonical("https://one-scene.com/products/135")
@@ -66,10 +66,10 @@ def test_search_adds_tier1_pages_and_reads_from_the_top_tier():
         queries.append(args[1])
         return fake_search(*args, **kwargs)
 
-    with patch("my_llm_app.agent.nodes.wikimedia.search_entities", return_value=[PLANET]), \
-         patch("my_llm_app.agent.nodes.wikimedia.get_entities", return_value={"Q308": PLANET}), \
-         patch("my_llm_app.agent.nodes.wikimedia.summary_for_entity", return_value=None), \
-         patch("my_llm_app.agent.nodes.searxng.web_search", side_effect=recording_search):
+    with patch("research_agent.agent.nodes.wikimedia.search_entities", return_value=[PLANET]), \
+         patch("research_agent.agent.nodes.wikimedia.get_entities", return_value={"Q308": PLANET}), \
+         patch("research_agent.agent.nodes.wikimedia.summary_for_entity", return_value=None), \
+         patch("research_agent.agent.nodes.searxng.web_search", side_effect=recording_search):
         out = Nodes(SETTINGS, FakeLLM()).search(state)
     assert queries == ["水星", "水星 site:go.jp", "水星 site:ac.jp"]
     assert out["reading_list"] == ["https://www.nao.go.jp/mercury", "https://www.example.ac.jp/mercury",

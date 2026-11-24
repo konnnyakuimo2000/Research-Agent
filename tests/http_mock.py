@@ -6,7 +6,7 @@ from collections.abc import Callable
 
 import httpx
 
-from my_llm_app.tools import http
+from research_agent.tools import http
 
 PUBLIC_IP = "93.184.216.34"
 

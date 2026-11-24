@@ -1,6 +1,6 @@
-from my_llm_app.agent import coverage as cov
-from my_llm_app.agent.guard import check_decision
-from my_llm_app.agent.nodes import Nodes
+from research_agent.agent import coverage as cov
+from research_agent.agent.guard import check_decision
+from research_agent.agent.nodes import Nodes
 
 GOV = "https://www.bousai.go.jp/a"          # Tier 1
 WIKI = "https://ja.wikipedia.org/wiki/a"    # Tier 2

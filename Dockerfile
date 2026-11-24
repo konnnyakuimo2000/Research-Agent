@@ -15,4 +15,4 @@ COPY config ./config
 RUN uv sync --frozen --no-dev
 
 EXPOSE 8000
-CMD ["/app/.venv/bin/uvicorn", "--factory", "my_llm_app.gateway.app:create_app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/app/.venv/bin/uvicorn", "--factory", "research_agent.gateway.app:create_app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,8 +1,8 @@
 
-from my_llm_app.agent import coverage as cov
-from my_llm_app.agent.guard import check_decision
-from my_llm_app.agent.nodes import confirm_target, follow_links
-from my_llm_app.tools.fetch import Page, page_links
+from research_agent.agent import coverage as cov
+from research_agent.agent.guard import check_decision
+from research_agent.agent.nodes import confirm_target, follow_links
+from research_agent.tools.fetch import Page, page_links
 
 GOV = "https://www.bousai.go.jp/a"
 TARGET = {"id": "Q1", "label": "地震A", "description": "2004年の地震", "sitelinks": 80}
@@ -111,7 +111,7 @@ def test_follow_links_picks_high_tier_refs_on_other_sites():
 
 
 def test_unreadable_formats_are_not_queued():
-    from my_llm_app.tools.fetch import is_unreadable
+    from research_agent.tools.fetch import is_unreadable
     assert is_unreadable("https://www.mlit.go.jp/a/44.pdf")
     assert is_unreadable("https://x.go.jp/a/B.PDF")
     assert not is_unreadable("https://www.bousai.go.jp/a.htm")
@@ -137,7 +137,7 @@ def test_priority_pages_get_extra_budget_and_searches_stop_without_budget():
 
 
 def test_program_sections_removed_from_body():
-    from my_llm_app.agent.nodes import strip_program_sections
+    from research_agent.agent.nodes import strip_program_sections
     body = "\n".join([
         "**規模**", "M9.1 [1]。出典によって9.0と9.1で食い違っている [1] [2]。", "",
         "**出典どうしの食い違い**", "- 規模: 9.0 [1] / 9.1 [2]", "",

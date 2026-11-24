@@ -226,7 +226,7 @@
 
 | 部分 | 案 | 理由 |
 |---|---|---|
-| 画面 | ビルドの要らない素の JavaScript・HTML・CSS（`src/my_llm_app/ui/`）。FastAPI が `/ui/` で静的ファイルとして配る | 試作で、木の整列と滑らかな動きは素の JavaScript で十分に作れることを確かめた。Node.js のビルドを Python のリポジトリと Docker に足さずに済む（当初の案は React + React Flow） |
+| 画面 | ビルドの要らない素の JavaScript・HTML・CSS（`src/research_agent/ui/`）。FastAPI が `/ui/` で静的ファイルとして配る | 試作で、木の整列と滑らかな動きは素の JavaScript で十分に作れることを確かめた。Node.js のビルドを Python のリポジトリと Docker に足さずに済む（当初の案は React + React Flow） |
 | グラフ | ノードは HTML の要素、線は SVG。位置は自前で計算する | ノードの中にアイコン・サムネイル・進み具合を自由に置ける |
 | 並べ方 | 5 章の木の整列（tidy tree）を自前で書き、目標の位置へ毎フレーム近づける | 並べ直しで動くノードも、線と一緒に滑らかに動く |
 | チャットの文 | 報告の Markdown（見出し・箇条書き・太字・画像・URL・出典番号）を、文字を無害化してから自前で描く | 外部のライブラリを読み込まない |

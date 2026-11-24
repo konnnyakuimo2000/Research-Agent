@@ -1,8 +1,8 @@
 import uuid
 
-from my_llm_app.agent.graph import build_graph
-from my_llm_app.agent.nodes import infeasible_report
-from my_llm_app.config import Settings
+from research_agent.agent.graph import build_graph
+from research_agent.agent.nodes import infeasible_report
+from research_agent.config import Settings
 
 SETTINGS = Settings(llm_base_url="http://unused/v1", llm_model="m", llm_api_key="k", searxng_url="http://unused")
 
@@ -63,7 +63,7 @@ def test_report_without_parts_falls_back_to_request():
 
 
 def test_unsure_goes_on_to_research():
-    from my_llm_app.agent.nodes import route_feasibility
+    from research_agent.agent.nodes import route_feasibility
     for verdict in ("yes", "partial", "unsure"):
         assert route_feasibility({"feasibility": {"verdict": verdict}}) == "decide"
     assert route_feasibility({"feasibility": {"verdict": "no"}}) == "report_infeasible"

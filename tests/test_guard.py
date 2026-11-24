@@ -1,5 +1,5 @@
-from my_llm_app.agent.guard import build_question, check_decision
-from my_llm_app.agent.state import MAX_QUESTIONS, MAX_STEPS
+from research_agent.agent.guard import build_question, check_decision
+from research_agent.agent.state import MAX_QUESTIONS, MAX_STEPS
 
 CANDIDATES = [
     {"id": "Q308", "label": "水星", "description": "太陽系の惑星"},
@@ -69,7 +69,7 @@ def test_question_lists_candidates_with_numbers():
 
 
 def test_pick_candidate_by_number():
-    from my_llm_app.agent.nodes import pick_candidate
+    from research_agent.agent.nodes import pick_candidate
     assert pick_candidate("2", CANDIDATES)["label"] == "水銀"
     assert pick_candidate("２番", CANDIDATES)["label"] == "水銀"
     assert pick_candidate("9", CANDIDATES) is None

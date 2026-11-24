@@ -16,15 +16,15 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
-from my_llm_app.agent.nodes import Nodes
-from my_llm_app.agents import research
-from my_llm_app.config import Settings
-from my_llm_app.gateway.app import create_app as gateway_app
-from my_llm_app.gateway.models import ModelCatalog, ModelChoiceError, effective_models
-from my_llm_app.gateway.registry import AgentClient, AgentEntry, Registry
-from my_llm_app.llm import LLM
-from my_llm_app.modelgw.app import create_app as modelgw_app
-from my_llm_app.modelgw.registry import ConfigError, ModelSpec, load_catalog
+from research_agent.agent.nodes import Nodes
+from research_agent.agents import research
+from research_agent.config import Settings
+from research_agent.gateway.app import create_app as gateway_app
+from research_agent.gateway.models import ModelCatalog, ModelChoiceError, effective_models
+from research_agent.gateway.registry import AgentClient, AgentEntry, Registry
+from research_agent.llm import LLM
+from research_agent.modelgw.app import create_app as modelgw_app
+from research_agent.modelgw.registry import ConfigError, ModelSpec, load_catalog
 
 ROLES = {"decide": "big", "extract": "big", "vision": "big", "report": "big"}
 
@@ -95,7 +95,7 @@ def test_roles_must_point_to_listed_models(tmp_path, monkeypatch):
 
 
 def test_the_shipped_models_toml_is_valid(monkeypatch):
-    from my_llm_app.config import REPO_ROOT
+    from research_agent.config import REPO_ROOT
     monkeypatch.setenv("VL_BASE_URL", "http://x/v1")
     catalog = load_catalog(REPO_ROOT / "config" / "models.toml")
     roles = {r["role"] for r in research.MANIFEST["model_roles"]} | {"chat"}

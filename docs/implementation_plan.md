@@ -79,7 +79,7 @@
 | 部品 | 内容 | 設計書 |
 |---|---|---|
 | 依存パッケージ | `langgraph`, `langchain-openai`（または `openai`）, `httpx`, HTML 解析（`selectolax` など）, `pyyaml`, `pytest` | — |
-| ディレクトリ構成 | `src/my_llm_app/agent/`（グラフ・ノード）、`tools/`（検索・API・ページ取得）、`config/`（Tier 一覧・観点チェックリスト）、`tests/` | 11 章 |
+| ディレクトリ構成 | `src/research_agent/agent/`（グラフ・ノード）、`tools/`（検索・API・ページ取得）、`config/`（Tier 一覧・観点チェックリスト）、`tests/` | 11 章 |
 | 設定の読み込み | `.env` から LLM・SearXNG の接続先を読む | — |
 | LLM の呼び出し部品 | JSON で返させ、形が違ったら 1 回だけやり直す。同時実行数を 4 以下に制限 | 3.3 M-3、U-6 |
 | SearXNG の呼び出し部品 | 一般・学術・画像の検索。間隔をあける、応答しなかったエンジンを記録する | 6.6 G-4, G-5 |

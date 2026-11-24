@@ -1,7 +1,7 @@
 import json
 
-from my_llm_app.agent.nodes import collect_sources
-from my_llm_app.agent.prompts import respond_user
+from research_agent.agent.nodes import collect_sources
+from research_agent.agent.prompts import respond_user
 
 WIKI = "https://ja.wikipedia.org/wiki/水星"
 STATE = {

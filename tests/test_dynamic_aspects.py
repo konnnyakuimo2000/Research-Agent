@@ -1,9 +1,9 @@
 from unittest.mock import patch
 
-from my_llm_app.agent import coverage as cov
-from my_llm_app.agent.nodes import Nodes
-from my_llm_app.agent.progress import describe
-from my_llm_app.tools.fetch import Page
+from research_agent.agent import coverage as cov
+from research_agent.agent.nodes import Nodes
+from research_agent.agent.progress import describe
+from research_agent.tools.fetch import Page
 
 
 def test_llm_aspects_are_cleaned():
@@ -52,7 +52,7 @@ class AspectLLM:
 def test_read_pages_uses_llm_aspects_and_shows_them():
     state = {"request": "EE-3 を外観の写真付きで", "target": {"id": "", "label": "EE-3", "description": "カメラ"},
              "reading_list": ["https://a.example/1"]}
-    with patch("my_llm_app.agent.nodes.fetch.fetch_page",
+    with patch("research_agent.agent.nodes.fetch.fetch_page",
                side_effect=lambda u: Page(u, title="EE-3", text="EE-3 は 1973 年発売。", ok=True)):
         out = Nodes(settings=None, llm=AspectLLM()).read_pages(state)
     assert out["subject_type"] == cov.OTHER_TYPE                       # 選択肢にない種類は「その他」に

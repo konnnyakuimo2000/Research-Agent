@@ -1,4 +1,4 @@
-from my_llm_app.tools.searxng import parse_response
+from research_agent.tools.searxng import parse_response
 
 
 def test_parse_response():

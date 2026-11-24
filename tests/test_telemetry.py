@@ -4,10 +4,10 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from langgraph.graph import END, START, StateGraph
 
-from my_llm_app.agent import telemetry
-from my_llm_app.agent.graph import timed
-from my_llm_app.agent.state import AgentState
-from my_llm_app.agent.telemetry import Emitter, Recorder
+from research_agent.agent import telemetry
+from research_agent.agent.graph import timed
+from research_agent.agent.state import AgentState
+from research_agent.agent.telemetry import Emitter, Recorder
 
 
 def run(node) -> list[dict]:

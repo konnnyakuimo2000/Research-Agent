@@ -22,8 +22,8 @@ from collections.abc import Callable
 
 import httpx
 
-from my_llm_app.config import USER_AGENT, load_settings
-from my_llm_app.llm import LLM
+from research_agent.config import USER_AGENT, load_settings
+from research_agent.llm import LLM
 
 CONTAINERS = ("open-webui", "searxng")
 

@@ -1,7 +1,7 @@
 from unittest.mock import patch
 
-from my_llm_app.agent.guard import check_decision
-from my_llm_app.agent.nodes import Nodes, dominant, rank
+from research_agent.agent.guard import check_decision
+from research_agent.agent.nodes import Nodes, dominant, rank
 
 FUJI = {"id": "Q39231", "label": "富士山", "description": "静岡県・山梨県にある山", "sitelinks": 146}
 FUJI_GUNMA = {"id": "Q1", "label": "富士山", "description": "群馬県桐生市にある山", "sitelinks": 8}
@@ -21,7 +21,7 @@ class FakeLLM:
 
 def ask(state, answer, matched_ids):
     nodes = Nodes(settings=None, llm=FakeLLM(matched_ids))
-    with patch("my_llm_app.agent.nodes.interrupt", return_value=answer):
+    with patch("research_agent.agent.nodes.interrupt", return_value=answer):
         return nodes.ask_user({**state, "decision": {"action": "ask_user", "question": "Q?\n1. ..."}})
 
 
@@ -67,14 +67,14 @@ def test_answer_outside_choices_leaves_target_open():
 def test_same_question_is_not_repeated():
     state = {"request": "富士山について調べて", "searched": ["富士山"], "candidates": [FUJI_GUNMA, FUJI_SHIP],
              "target": None, "questions_asked": 1, "steps": 3}
-    from my_llm_app.agent.guard import build_question
+    from research_agent.agent.guard import build_question
     state["last_question"] = build_question(state)
     d = check_decision(state, {"action": "ask_user", "reason": ""})
     assert d["action"] == "respond"
 
 
 def test_evidence_ok():
-    from my_llm_app.agent.nodes import evidence_ok
+    from research_agent.agent.nodes import evidence_ok
     # 依頼文が対象を絞り込んでいる → 認める
     assert evidence_ok("太陽系の惑星", "太陽系の惑星の水星について調べて", "水星")
     assert evidence_ok("2004年の", "2004年のスマトラ島沖地震について", "スマトラ島沖地震")

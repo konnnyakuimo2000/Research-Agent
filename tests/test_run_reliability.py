@@ -13,13 +13,13 @@ from pathlib import Path
 
 import trafilatura
 
-from my_llm_app.agent.guard import pages_to_read, research_step
-from my_llm_app.agentkit import protocol
-from my_llm_app.gateway import core
-from my_llm_app.gateway.core import Gateway
-from my_llm_app.gateway.registry import Registry
-from my_llm_app.gateway.store import Feed, RunStore
-from my_llm_app.tools import fetch
+from research_agent.agent.guard import pages_to_read, research_step
+from research_agent.agentkit import protocol
+from research_agent.gateway import core
+from research_agent.gateway.core import Gateway
+from research_agent.gateway.registry import Registry
+from research_agent.gateway.store import Feed, RunStore
+from research_agent.tools import fetch
 
 # ---- 1. 読んだページの数え方 ----
 

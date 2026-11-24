@@ -2,9 +2,9 @@ from unittest.mock import patch
 
 from openai import APIConnectionError
 
-from my_llm_app.agent.graph import LLM_OUTAGE, timed
-from my_llm_app.agent.guard import elapsed, time_over
-from my_llm_app.llm import LLM
+from research_agent.agent.graph import LLM_OUTAGE, timed
+from research_agent.agent.guard import elapsed, time_over
+from research_agent.llm import LLM
 
 
 class Settings:
@@ -25,7 +25,7 @@ def test_connection_wait_is_counted():
         return R()
 
     with patch.object(llm.client.chat.completions, "create", side_effect=create), \
-         patch("my_llm_app.llm.time.sleep"):
+         patch("research_agent.llm.time.sleep"):
         assert llm.chat_json("s", "u", {}) == {}
     assert llm.waited >= 10          # やり直し前の 10 秒の待ちを数えた（sleep は止めてある）
 
@@ -40,7 +40,7 @@ def test_timed_records_wait_and_reports_outage():
         llm.waited += 500                # このノードの間に 500 秒待った（実際には待たない）
         return {"x": 1}
 
-    with patch("my_llm_app.agent.graph.time.perf_counter", side_effect=[0.0, 600.0]):
+    with patch("research_agent.agent.graph.time.perf_counter", side_effect=[0.0, 600.0]):
         out = timed("decide", node, llm)({"failures": []})
     assert out["trace"] == [{"node": "decide", "seconds": 600.0, "llm_wait": 500.0}]
     assert out["failures"] == [LLM_OUTAGE]

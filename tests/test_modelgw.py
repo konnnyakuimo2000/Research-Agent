@@ -15,11 +15,11 @@ import pytest
 from fastapi.testclient import TestClient
 from openai import InternalServerError
 
-from my_llm_app import llm as llm_module
-from my_llm_app.config import Settings
-from my_llm_app.llm import LLM
-from my_llm_app.modelgw.app import create_app
-from my_llm_app.modelgw.registry import ModelSpec
+from research_agent import llm as llm_module
+from research_agent.config import Settings
+from research_agent.llm import LLM
+from research_agent.modelgw.app import create_app
+from research_agent.modelgw.registry import ModelSpec
 
 REAL_SLEEP = time.sleep     # やり直しの待ちを止める fixture は time.sleep ごと差し替えるので、本物を取っておく
 
@@ -180,7 +180,7 @@ def test_key_and_listing():
 
 
 def test_models_toml_reads_connection_from_env(tmp_path, monkeypatch):
-    from my_llm_app.modelgw.registry import ConfigError, load
+    from research_agent.modelgw.registry import ConfigError, load
     p = tmp_path / "models.toml"
     p.write_text('default = "a"\n[[models]]\nid = "a"\nbase_url_env = "X_URL"\napi_key_env = "X_KEY"\n'
                  'model_env = "X_MODEL"\nmodel = "fallback"\n', encoding="utf-8")
@@ -195,7 +195,7 @@ def test_models_toml_reads_connection_from_env(tmp_path, monkeypatch):
 
 
 def test_load_settings_prefers_the_gateway(monkeypatch):
-    from my_llm_app.config import load_settings
+    from research_agent.config import load_settings
     monkeypatch.setenv("MODEL_GATEWAY_URL", "http://model-gateway:8000/v1")
     monkeypatch.setenv("MODEL_GATEWAY_KEY", "gk")
     s = load_settings()

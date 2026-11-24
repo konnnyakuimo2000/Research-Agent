@@ -19,12 +19,12 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 from typing_extensions import TypedDict
 
-from my_llm_app.agentkit import protocol
-from my_llm_app.agents import chat, research
-from my_llm_app.config import Settings
-from my_llm_app.gateway import openai_compat
-from my_llm_app.gateway.app import create_app
-from my_llm_app.gateway.registry import AgentClient, AgentEntry, Registry
+from research_agent.agentkit import protocol
+from research_agent.agents import chat, research
+from research_agent.config import Settings
+from research_agent.gateway import openai_compat
+from research_agent.gateway.app import create_app
+from research_agent.gateway.registry import AgentClient, AgentEntry, Registry
 
 SETTINGS = Settings("http://localhost:1/v1", "test-model", "k", "http://localhost:2")
 

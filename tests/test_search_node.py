@@ -1,9 +1,9 @@
 from unittest.mock import patch
 
-from my_llm_app.agent.nodes import Nodes
-from my_llm_app.config import Settings
-from my_llm_app.tools.searxng import WebResult, WebSearchResponse
-from my_llm_app.tools.wikimedia import Entity
+from research_agent.agent.nodes import Nodes
+from research_agent.config import Settings
+from research_agent.tools.searxng import WebResult, WebSearchResponse
+from research_agent.tools.wikimedia import Entity
 
 SETTINGS = Settings(llm_base_url="http://unused/v1", llm_model="m", llm_api_key="k", searxng_url="http://unused")
 PLANET = Entity("Q308", "水星", "太陽系第一惑星", 274)
@@ -31,10 +31,10 @@ class FakeLLM:
 def test_search_maps_short_refs_back_to_urls():
     state = {"request": "太陽系の惑星の水星について調べて",
              "decision": {"action": "search", "query": "水星", "names": ["水星"]}}
-    with patch("my_llm_app.agent.nodes.wikimedia.search_entities", return_value=[PLANET]), \
-         patch("my_llm_app.agent.nodes.wikimedia.get_entities", return_value={"Q308": PLANET}), \
-         patch("my_llm_app.agent.nodes.wikimedia.summary_for_entity", return_value=None), \
-         patch("my_llm_app.agent.nodes.searxng.web_search", return_value=WEB):
+    with patch("research_agent.agent.nodes.wikimedia.search_entities", return_value=[PLANET]), \
+         patch("research_agent.agent.nodes.wikimedia.get_entities", return_value={"Q308": PLANET}), \
+         patch("research_agent.agent.nodes.wikimedia.summary_for_entity", return_value=None), \
+         patch("research_agent.agent.nodes.searxng.web_search", return_value=WEB):
         out = Nodes(SETTINGS, FakeLLM()).search(state)
     assert [k["source"] for k in out["known"]] == [
         "https://example.com/mercury", "https://www.wikidata.org/wiki/Q308", ""]
@@ -47,10 +47,10 @@ def test_search_failure_is_recorded_for_the_report():
     import httpx
     state = {"request": "太陽系の惑星の水星について調べて",
              "decision": {"action": "search", "query": "水星", "names": ["水星"]}}
-    with patch("my_llm_app.agent.nodes.wikimedia.search_entities", return_value=[PLANET]), \
-         patch("my_llm_app.agent.nodes.wikimedia.get_entities", return_value={"Q308": PLANET}), \
-         patch("my_llm_app.agent.nodes.wikimedia.summary_for_entity", return_value=None), \
-         patch("my_llm_app.agent.nodes.searxng.web_search", side_effect=httpx.ConnectError("refused")):
+    with patch("research_agent.agent.nodes.wikimedia.search_entities", return_value=[PLANET]), \
+         patch("research_agent.agent.nodes.wikimedia.get_entities", return_value={"Q308": PLANET}), \
+         patch("research_agent.agent.nodes.wikimedia.summary_for_entity", return_value=None), \
+         patch("research_agent.agent.nodes.searxng.web_search", side_effect=httpx.ConnectError("refused")):
         out = Nodes(SETTINGS, FakeLLM()).search(state)
     assert out["failures"] == ["Web 検索（SearXNG）に接続できなかった（ConnectError）"]
     assert out["web_failures_in_row"] == 1
@@ -78,10 +78,10 @@ def test_exact_name_matches_are_added_to_candidates():
     state = {"request": "マーキュリーについて調べて",
              "decision": {"action": "search", "query": "マーキュリー", "names": ["マーキュリー", "Mercury"]}}
     info = {e.id: e for e in (ford, planet, prefix)}
-    with patch("my_llm_app.agent.nodes.wikimedia.search_entities", return_value=[ford, planet, prefix]), \
-         patch("my_llm_app.agent.nodes.wikimedia.get_entities",
+    with patch("research_agent.agent.nodes.wikimedia.search_entities", return_value=[ford, planet, prefix]), \
+         patch("research_agent.agent.nodes.wikimedia.get_entities",
                side_effect=lambda ids: {i: info[i] for i in ids}), \
-         patch("my_llm_app.agent.nodes.searxng.web_search", return_value=WEB):
+         patch("research_agent.agent.nodes.searxng.web_search", return_value=WEB):
         out = Nodes(SETTINGS, LLMPicksOnlyFord()).search(state)
     assert [c["id"] for c in out["candidates"]] == ["Q308", "Q613883"]     # 有名な順。前方一致だけのものは入れない
 
@@ -90,7 +90,7 @@ def test_zero_results_with_unresponsive_engines_count_as_failure():
     state = {"request": "太陽系の惑星の水星について調べて",
              "decision": {"action": "search", "query": "水星", "names": ["水星"]}}
     blocked = WebSearchResponse(results=[], unresponsive=["brave", "duckduckgo"])
-    with patch("my_llm_app.agent.nodes.wikimedia.search_entities", return_value=[PLANET]),          patch("my_llm_app.agent.nodes.wikimedia.get_entities", return_value={"Q308": PLANET}),          patch("my_llm_app.agent.nodes.wikimedia.summary_for_entity", return_value=None),          patch("my_llm_app.agent.nodes.searxng.web_search", return_value=blocked):
+    with patch("research_agent.agent.nodes.wikimedia.search_entities", return_value=[PLANET]),          patch("research_agent.agent.nodes.wikimedia.get_entities", return_value={"Q308": PLANET}),          patch("research_agent.agent.nodes.wikimedia.summary_for_entity", return_value=None),          patch("research_agent.agent.nodes.searxng.web_search", return_value=blocked):
         out = Nodes(SETTINGS, FakeLLM()).search(state)
     assert out["web_failures_in_row"] == 1
     assert "結果が 0 件" in out["failures"][0] and "brave, duckduckgo" in out["failures"][0]

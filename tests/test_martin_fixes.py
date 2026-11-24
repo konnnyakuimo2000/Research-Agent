@@ -6,9 +6,9 @@
 4. 文脈の弱い画像を、写っているものを確かめられないまま「おそらく正しい」にしない
 """
 
-from my_llm_app.agent import imaging, query_plan
-from my_llm_app.agent.guard import candidates_fit, check_decision, free_searches
-from my_llm_app.agent.names import fix_spelling
+from research_agent.agent import imaging, query_plan
+from research_agent.agent.guard import candidates_fit, check_decision, free_searches
+from research_agent.agent.names import fix_spelling
 
 REQUEST = "青山学院大学の情報テクノロジー学科のマーティン先生について調べて"
 OFF_TARGET = [  # 2026-11-21 の調査で実際に出た候補（名前だけで Wikidata を引いたもの）

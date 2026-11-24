@@ -1,9 +1,9 @@
 from unittest.mock import patch
 
-from my_llm_app.agent.guard import check_decision
-from my_llm_app.agent.nodes import Nodes
-from my_llm_app.agent.quotes import quote_in_text
-from my_llm_app.tools.fetch import Page, is_skipped_domain
+from research_agent.agent.guard import check_decision
+from research_agent.agent.nodes import Nodes
+from research_agent.agent.quotes import quote_in_text
+from research_agent.tools.fetch import Page, is_skipped_domain
 
 TEXT = "水星は太陽系の惑星の中で最も内側を公転している。昼の表面温度は約４３０℃に達する。"
 
@@ -41,7 +41,7 @@ def fake_fetch(url):
 def test_read_pages_keeps_only_verified_quotes_and_records_failures():
     state = {"request": "水星について", "target": {"id": "Q308", "label": "水星", "description": "惑星"},
              "reading_list": ["https://a.example/1", "https://broken.example/2"]}
-    with patch("my_llm_app.agent.nodes.fetch.fetch_page", side_effect=fake_fetch):
+    with patch("research_agent.agent.nodes.fetch.fetch_page", side_effect=fake_fetch):
         out = Nodes(settings=None, llm=FakeLLM()).read_pages(state)
     assert [f["text"] for f in out["verified"]] == ["最も内側を公転する", "昼は約430℃"]
     assert all(f["source"] == "https://a.example/1" for f in out["verified"])
