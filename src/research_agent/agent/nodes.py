@@ -23,7 +23,7 @@ from research_agent.agent import prompts
 from research_agent.agent import query_plan
 from research_agent.agent import reprints
 from research_agent.agent import telemetry
-from research_agent.agent.guard import check_decision, is_ambiguous, pages_to_read
+from research_agent.agent.guard import check_decision, has_choices, is_ambiguous, pages_to_read
 from research_agent.agent.names import mentions, same_name
 from research_agent.agent.quotes import normalize, quote_in_text
 from research_agent.agent.state import (DOMINANCE_RATIO, MAX_CANDIDATES, MAX_FEATURES, MAX_IMAGE_CHECKS,
@@ -104,8 +104,16 @@ class Nodes:
         ev("search.start", query=query, kind=kind, aspect=decision.get("aspect", ""), site=decision.get("site", ""))
         relevant: list = []
 
-        # Wikidata は名前の前方一致で引くため、長い検索文ではなく短い名前で引く（横の展開はプログラム）
-        names = [n.strip() for n in decision.get("names", []) if n.strip()] or [query.split()[0]]
+        # Wikidata は名前の前方一致で引くため、長い検索文ではなく短い名前で引く（横の展開はプログラム）。
+        # 人を指す依頼では、検索語の最初の語（「九大」などの手がかり）ではなく、人の名前で引く
+        person, clues = query_plan.request_person(state["request"])
+        names = [n.strip() for n in decision.get("names", []) if n.strip()] or (
+            [person] if person and person in query else [query.split()[0]])
+        if person:
+            # LLM が所属の名前（「九州大学」）も渡すことがある。人の名前・決めた対象の名前・利用者が答えた名前を
+            # 含むものだけで引く（所属で引くと、大学そのものが候補になり、対象に選ばれてしまう）
+            known = [person, (state.get("target") or {}).get("label", "")] + state.get("clarifications", [])
+            names = [n for n in names if any(k and (mentions(n, [k]) or mentions(k, [n])) for k in known)] or [person]
         entities: list[wikimedia.Entity] = []
         for name in names[:3]:
             try:
@@ -115,6 +123,12 @@ class Nodes:
                 continue
             have = {x.id for x in entities}
             entities += [e for e in found if e.id not in have]
+        if person and clues:
+            # 手がかり（所属など）の言葉に一致した項目は、人の候補にしない（「九大」→ 九州大学）
+            dropped_ids = [e.id for e in entities if is_clue_entity(e, person, clues)]
+            if dropped_ids:
+                errors.append(f"clue entities dropped: {dropped_ids}")
+            entities = [e for e in entities if e.id not in dropped_ids]
         try:
             web = searxng.web_search(self.settings.searxng_url, query)
         except Exception as e:  # noqa: BLE001
@@ -135,7 +149,8 @@ class Nodes:
 
         # LLM には id を選ばせるだけにし、実際に取得した項目にある id だけを認める。
         # 名前と説明は Wikidata の実データで埋める（LLM の書き写し間違い・作り話の防止）
-        valid_ids = list(dict.fromkeys([e.id for e in entities] + [c["id"] for c in state.get("candidates", [])]))
+        valid_ids = list(dict.fromkeys([e.id for e in entities] + [c["id"] for c in state.get("candidates", [])
+                                                                    if c.get("id")]))
         chosen = [i for i in update.get("candidate_ids", []) if i in valid_ids]
         if not state.get("target"):
             # 名前が完全に一致した項目は、LLM が選ばなくても同名の候補に入れる（横の網羅はプログラム）。
@@ -161,7 +176,9 @@ class Nodes:
         subject = update.get("specific_subject", "").strip()
         titles = " ".join(w.title for w in web.results) + " " + " ".join(e.label for e in entities)
         found_text = titles + " " + " ".join(w.snippet for w in web.results)
-        if subject and not mentions(titles, [subject]):
+        from_user = bool(subject) and any(mentions(c, [subject]) for c in state.get("clarifications", []))
+        if subject and not from_user and not mentions(titles, [subject]):
+            # 利用者が答えた名前（「松田泰治」）はそのまま使う。題名で確かめるのは、LLM が作った名前を防ぐため。
             # 名前は検索結果の題名にある表記を使う。LLM が作った読み方（例: 実在しないカタカナ表記）や、
             # 抜粋にだけある別の文字の表記で対象を決めると、その名前で検索し、その名前で読むページを絞ってしまう
             # （題名の「DÜRST, Martin J.」が抜粋の「テュールスト マーティン ヤコブ」と一致しない）。1 回だけ書き直させる
@@ -173,8 +190,11 @@ class Nodes:
             elif not mentions(found_text, [subject]):
                 errors.append(f"specific_subject rejected: {fixed!r}")
                 subject = ""                    # 抜粋にもない名前は使わない。抜粋にある名前なら、そのまま使う
-        if (not target and not state.get("target") and not state.get("clarifications") and subject
-                and evidence_ok(update.get("specific_evidence", ""), state["request"], subject)):
+        # 根拠は依頼文と、利用者の答え（「松田泰治」）から探す。前は答えた後にこの道を通らなかったので、
+        # Wikidata にない人（大学の先生の多く）は、名前を答えても対象が決まらなかった
+        context = " ".join([state["request"]] + state.get("clarifications", []))
+        if (not target and not state.get("target") and subject
+                and evidence_ok(update.get("specific_evidence", ""), context, subject)):
             # 依頼文の条件（所属・型番など）で、検索結果の対象が 1 つに決まった。同名の別の意味は聞き返さない
             same = [c for c in candidates if normalize(c["label"]) == normalize(subject)]
             target = same[0] if same else {"id": "", "label": subject,
@@ -672,7 +692,8 @@ class Nodes:
     def ask_user(self, state: AgentState) -> dict:
         question = state["decision"]["question"]
         ev = telemetry.emitter()
-        ev("question", question=question)   # 再開したときもう一度送られる（画面は同じ質問を 1 つにまとめる）
+        # 再開したときもう一度送られる（画面は同じ質問を 1 つにまとめる）。choices: 番号で答える選択肢があるか
+        ev("question", question=question, choices=has_choices(question))
         answer = str(interrupt({"question": question})).strip()
         ev("answer", question=question, answer=answer)
         result: dict = {"questions_asked": state.get("questions_asked", 0) + 1}
@@ -700,6 +721,10 @@ class Nodes:
                     assumption_text(primary, matched)]
         else:
             answer_text = answer   # 選択肢にない内容（例:「川のほうです」）→ 次の検索で対象を探す
+            target = state.get("target")
+            if target and not mentions(answer, [target["label"]]):
+                # 決めた対象（九州大学）と違うことを答えた（「松田泰治」）→ 対象と、それで集めたものを捨てて決め直す
+                result.update(forget_target())
         result["clarifications"] = state.get("clarifications", []) + [answer_text]
         result["trace"] = [{"node": "ask_user", "question": question, "answer": answer,
                             "matched": [c["id"] for c in matched], "target": result.get("target")}]
@@ -869,8 +894,20 @@ def confirm_target(state: AgentState, answer: str) -> dict:
         return {"ambiguity_asked": True, "assumptions": [],
                 "clarifications": state.get("clarifications", []) + [f"{t['label']}（{t['description']}）で合っている"]}
     # 違う対象だった: 集めた事実は別の対象のものなので捨て、対象を決め直す
-    return {"ambiguity_asked": True, "target": None, "assumptions": [], "target_summary": "", "summary_url": "",
-            "clarifications": state.get("clarifications", []) + [answer],
+    return {"ambiguity_asked": True, "clarifications": state.get("clarifications", []) + [answer], **forget_target()}
+
+
+def is_clue_entity(e: wikimedia.Entity, person: str, clues: list[str]) -> bool:
+    """人を指す依頼で、手がかり（所属など）の言葉に一致しただけの項目か（「九大」で一致した九州大学）。"""
+    hit = e.matched or e.label
+    if mentions(hit, [person]) or mentions(e.label, [person]):
+        return False
+    return any(mentions(hit, [c]) or mentions(c, [hit]) for c in clues)
+
+
+def forget_target() -> dict:
+    """対象を決め直すときに捨てるもの（集めた事実・ページ・画像は、前の対象のもの）。"""
+    return {"target": None, "assumptions": [], "target_summary": "", "summary_url": "",
             "verified": [], "reading_list": [], "priority_urls": [], "pages_read": [], "coverage": [],
             "aspects": [], "conflicts": [], "conflicts_checked_at": -1, "tier1_searched": False, "stale_reads": 0,
             "new_ambiguity": "", "name_variants": {}, "seen_sites": [], "query_log": [],

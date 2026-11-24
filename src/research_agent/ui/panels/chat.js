@@ -23,8 +23,10 @@ export function statusBubble() {
 // 状態の一行（吹き出しの「調べています」の文）
 export function now(text) { const txt = statusEl && statusEl.querySelector(".txt"); if (txt) txt.textContent = text; }
 
-function showQuestion(q) {
-  const lines = q.split("\n"), opts = lines.filter((l) => /^\d+\.\s/.test(l));
+// 質問。番号のボタンは、エージェントが「番号で答える選択肢がある」と知らせたとき（choices）だけ出す。
+// LLM が書いた質問の番号付きの項目（「1. 松田教授のお名前」）を押すと「1」とだけ答えてしまうため
+function showQuestion(q, choices = false) {
+  const lines = q.split("\n"), opts = choices ? lines.filter((l) => /^\d+\.\s/.test(l)) : [];
   const d = chatAgent(`<div class="question">${esc(q)}${opts.length ? `<div class="opts">${opts.map((o) => `<button type="button" data-a="${esc(o.match(/^(\d+)/)[1])}">${esc(o)}</button>`).join("")}</div>` : ""}</div>`);
   d.querySelectorAll(".opts button").forEach((b) => b.addEventListener("click", () => hooks.sendAnswer(b.dataset.a)));
   statusEl = null;
@@ -79,7 +81,7 @@ registerAction("report", { label: "報告をコピー", run: async (report) => {
 
 // ---- 0 段のイベント ----
 registerRenderer("run.start", (e) => { chatUser(e.request); statusBubble(); now("始めた"); }, "chat");
-registerRenderer("question", (e) => { if (!questions.has(e.question)) { questions.add(e.question); showQuestion(e.question); } }, "chat");
+registerRenderer("question", (e) => { if (!questions.has(e.question)) { questions.add(e.question); showQuestion(e.question, !!e.choices); } }, "chat");
 registerRenderer("answer", (e) => {
   const key = "a:" + e.answer + e.question; if (!questions.has(key)) { questions.add(key); chatUser(e.answer); }
   hooks.setComposer(false); statusBubble();

@@ -21,8 +21,18 @@ from research_agent.agent.state import (EXTRA_PAGES, MAX_ASPECT_SEARCHES, MAX_CA
 _IMAGE_QUERY = re.compile(r"画像|写真|photo|image|picture|jpe?g|png|commons|file:", re.IGNORECASE)
 
 
+OPEN_QUESTION_TAIL = "名前（フルネーム）や所属・分野など、手がかりを教えてください。"
+CHOICE_TAIL = "番号か、具体的な内容で答えてください。上にない場合はその内容を書いてください。"
+
+
 def build_question(state: AgentState) -> str:
-    """候補から、選択肢付きの質問文をプログラムで作る（設計書 5.2 Q-2）。"""
+    """候補から、選択肢付きの質問文をプログラムで作る（設計書 5.2 Q-2）。
+
+    候補がどれも依頼文の手がかりに合わない（「九大の松田教授」に、九州大学や同名の町しか出ない）ときは、
+    答えのない選択肢を並べず、手がかりを自由に答えてもらう。
+    """
+    if not candidates_fit(state):
+        return f"「{state.get('request', '')}」の対象を、検索結果から特定できませんでした。\n{OPEN_QUESTION_TAIL}"
     if state.get("questions_asked", 0) == 0:
         lines = [f"「{state.get('request', '')}」について、どれのことを指していますか？"]
     else:
@@ -30,8 +40,14 @@ def build_question(state: AgentState) -> str:
     for i, c in enumerate(state.get("candidates", [])[:MAX_CANDIDATES], 1):
         desc = f"（{c['description']}）" if c.get("description") else ""
         lines.append(f"{i}. {c['label']}{desc}")
-    lines.append("番号か、具体的な内容で答えてください。上にない場合はその内容を書いてください。")
+    lines.append(CHOICE_TAIL)
     return "\n".join(lines)
+
+
+def has_choices(question: str) -> bool:
+    """プログラムが作った、番号で答えられる質問か（画面は、このときだけ選択肢のボタンを出す）。
+    LLM が書いた質問の番号付きの項目（「1. 松田教授のお名前」）は選択肢ではない。"""
+    return question.endswith(CHOICE_TAIL) or question.endswith("2. いいえ（どれのことか書いてください）")
 
 
 def build_confirm_question(state: AgentState) -> str:

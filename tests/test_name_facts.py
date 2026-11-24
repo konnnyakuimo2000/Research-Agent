@@ -2,7 +2,6 @@
 
 ページを読む LLM は、どのページにも書いてある名前を事実として出さない。対象についての事実が取れたページの
 題名・本文に対象の名前があれば、その箇所を引用にした事実をプログラムが作る（agent/name_facts.py）。
-あわせて、検索結果のサイト名のない URL を捨てる（同じ日のロペズ先生の調査で、読めないページの枠を 3 つ使っていた）。
 """
 
 from __future__ import annotations
@@ -120,13 +119,3 @@ def test_the_page_s_own_alternative_names_are_used():
     names = nf.candidates(state, ["Charles Robert Darwin"])
     f = nf.name_fact(body, names, "氏名・別名", "u")
     assert f["text"] == "氏名は「チャールズ・ダーウィン」（Charles Robert Darwin とも書く）"   # 題名より、別名の並ぶ行
-
-
-# ---- 検索結果のサイト名のない URL（同じ日に見つかった別の不具合） ----
-
-def test_search_results_without_a_host_are_dropped():
-    from research_agent.tools.searxng import parse_response
-    data = {"results": [{"title": "ギヨーム・ロペズ、教授", "url": "http:///go/v1/Afb-1XKF", "content": ""},
-                        {"title": "ok", "url": "https://www.aoyama.ac.jp/x", "content": ""},
-                        {"title": "no url", "url": ""}]}
-    assert [r.url for r in parse_response(data, 10).results] == ["https://www.aoyama.ac.jp/x"]

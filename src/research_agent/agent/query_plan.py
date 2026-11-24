@@ -53,6 +53,22 @@ def request_parts(request: str) -> list[str]:
     return list(dict.fromkeys(parts))
 
 
+def request_person(request: str) -> tuple[str, list[str]]:
+    """人を指す依頼（敬称・職名の付いた名前がある）なら (人の名前, 手がかり)。そうでなければ ("", [])。
+
+    「九大の松田教授について」→ ("松田", ["九大"])。手がかり（所属など）は人ではないので、Wikidata で
+    手がかりの言葉に一致した項目（九州大学）を、人の候補や調べる対象にしない（2026-11-24 の松田教授の調査）。
+    """
+    core = _ABOUT_TAIL.sub("", _REQUEST_TAIL.sub("", request.strip()))
+    for p in re.split(r"[の、,，\s　]+", core):
+        p = p.strip()
+        m = _HONORIFIC.search(p)
+        if m and len(p) - len(m.group(0)) >= 2:
+            name = p[:m.start()]
+            return name, [q for q in request_parts(request) if q != name]
+    return "", []
+
+
 def request_query(request: str) -> str:
     """依頼文の手がかりをそのまま並べた検索語（LLM が言葉を選び直さない）。
 
