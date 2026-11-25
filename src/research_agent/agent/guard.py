@@ -250,6 +250,13 @@ def check_decision(state: AgentState, decision: Decision) -> Decision:
         # LLM が応答を選んでいても、ここで確定する（下の research_step が読み込みなどに変えないように）
         return {**d, "action": "respond", "guard": "行動の上限に達したため、わかった範囲で応答する"}
     if time_over(state):
+        if (not state.get("pages_read") and pages_to_read(state) and action != "read_pages"
+                and elapsed(state) < setting(state, "max_seconds")):          # 上限そのものを過ぎていれば読まない
+            # 報告のために残した時間には、読み込み 1 回が入っている。1 ページも読まずに時間を使い切ったら、
+            # 読む一覧の先頭を 1 回だけ読んでから応答する（2026-11-25 の「松田教授について」は、本人のページを 8 件
+            # 見つけたのに 1 件も読まず、「確認できた事実がありません」とだけ答えていた）
+            return {**d, "action": "read_pages",
+                    "guard": "時間の上限が近いが、まだ 1 ページも読んでいないため、読む一覧の先頭を読んでから応答する"}
         if wants_more_images(state):
             return {**d, "action": "find_images", "guard": "時間の上限が近いため、画像を探してから応答する"}
         if action != "respond":

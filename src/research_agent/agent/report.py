@@ -47,8 +47,10 @@ def assemble(state: AgentState, body: str, table: SourceTable) -> str:
                  + " / ".join(f"「{f['text']}」[{number[f['source']]}]" for f in c["facts"] if f["source"] in number)
                  for c in state["conflicts"]]
         parts.append("\n### 出典どうしの食い違い\n" + "\n".join(lines))
-    # 確かめきれなかった観点（出典がない・出典が弱い）は、1 つの節にまとめて、読む人の言葉で書く
-    if gaps := "\n".join(x for x in (cov.gaps_text(state.get("coverage", [])),
+    # 確かめきれなかった観点（出典がない・出典が弱い）は、1 つの節にまとめて、読む人の言葉で書く。
+    # 時間の上限で調査をやめたときは、その理由も同じ節に書く（何も読めなかったのに理由が分からない報告にしない）
+    stop = f"- {state['stop_note']}" if state.get("stop_note") else ""
+    if gaps := "\n".join(x for x in (stop, cov.gaps_text(state.get("coverage", [])),
                                      cov.weak_text(state.get("coverage", []))) if x):
         parts.append("\n### 確かめきれなかったこと\n" + gaps)
     if state.get("images_checked"):

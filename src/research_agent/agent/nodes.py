@@ -22,7 +22,7 @@ from research_agent.agent import prompts
 from research_agent.agent import query_plan
 from research_agent.agent import reprints
 from research_agent.agent import telemetry
-from research_agent.agent.guard import check_decision, has_choices, is_ambiguous, pages_to_read
+from research_agent.agent.guard import check_decision, has_choices, is_ambiguous, pages_to_read, time_over
 from research_agent.agent.page_choice import choose_pages, keep_for_target
 from research_agent.agent.report import (SourceTable, aspect_headings, assemble, cited_db_records, collect_sources,  # noqa: F401
                                          drop_sentences_with, images_section, infeasible_report, sources_text,
@@ -773,6 +773,10 @@ class Nodes:
     def respond(self, state: AgentState) -> dict:
         """報告の本文は LLM が書き、ほかの節（食い違い・確かめきれなかったこと・画像・出典）は report が組み立てる。"""
         table = SourceTable(collect_sources(state))
+        if time_over(state) and (unread := len(pages_to_read(state, 10_000))):
+            # 時間の上限で調査をやめた: 読めなかったページの数を、報告の「調べきれなかったこと」に書く
+            state = {**state, "stop_note": f"時間の上限（{setting(state, 'max_seconds')} 秒。報告をまとめる時間を含む）に"
+                                            f"達したため、見つけたページのうち {unread} 件を読めなかった"}
         materials = prompts.respond_user(state, table.sources)
         body = strip_program_sections(self._llm("report", state).chat_text(prompts.RESPOND_SYSTEM, materials))
         if bad := unsupported_names(body, materials):
