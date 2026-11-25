@@ -138,6 +138,7 @@ class Usage:
     completion_tokens: int = 0
     cost: float = 0.0        # 費用（ドル。値段を書いたモデルだけ）
     refused: int = 0         # 費用の上限で断った数
+    unmeasured: int = 0      # 値段のあるモデルで、使用量が返らず費用を測れなかった呼び出しの数（0 ドルとは別）
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def as_dict(self) -> dict:
@@ -146,4 +147,4 @@ class Usage:
                     "peak_sending": self.peak_sending,
                     "seconds": round(self.seconds, 1), "waited": round(self.waited, 1),
                     "prompt_tokens": self.prompt_tokens, "completion_tokens": self.completion_tokens,
-                    "cost_usd": round(self.cost, 6), "refused": self.refused}
+                    "cost_usd": round(self.cost, 6), "refused": self.refused, "unmeasured": self.unmeasured}

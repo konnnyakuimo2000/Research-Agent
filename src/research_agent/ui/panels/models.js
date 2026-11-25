@@ -87,10 +87,10 @@ function renderPop() {
     ${CATALOG.models.some((m) => m.external) ? `<p class="note">外部のモデルを選ぶと、依頼文と読んだページの本文がその会社に送られます。</p>` : ""}
     <h4>状態と使用量 <span class="since">窓口を立ち上げてから</span></h4>
     ${modelStatus ? `<table class="usage"><thead><tr><th>モデル</th><th>呼び出し</th><th>トークン（入力・出力）</th><th>費用</th></tr></thead><tbody>
-      ${CATALOG.models.map((m) => { const s = st[m.id] || {}; return `<tr><td>${dot(m.id)}${esc(m.title)}</td><td class="mono">${fmtNum(s.calls)}${s.errors ? `（失敗 ${fmtNum(s.errors)}）` : ""}${s.refused ? `（上限で断った ${fmtNum(s.refused)}）` : ""}</td>
+      ${CATALOG.models.map((m) => { const s = st[m.id] || {}; return `<tr><td>${dot(m.id)}${esc(m.title)}</td><td class="mono">${fmtNum(s.calls)}${s.errors ? `（失敗 ${fmtNum(s.errors)}）` : ""}${s.refused ? `（上限で断った ${fmtNum(s.refused)}）` : ""}${s.unmeasured ? `（費用を測れなかった ${fmtNum(s.unmeasured)}）` : ""}</td>
         <td class="mono">${fmtNum(s.prompt_tokens)}・${fmtNum(s.completion_tokens)}</td><td class="mono">${m.price && Object.keys(m.price).length ? fmtUsd(s.cost_usd || 0) : "—"}</td></tr>`; }).join("")}
       </tbody></table>
-      <p class="spend">今日の費用 <b class="mono">${fmtUsd(spend.today_usd || 0)}</b>${limits.daily_usd ? ` / 上限 ${fmtUsd(limits.daily_usd)}` : "（上限なし）"}${limits.run_usd ? ` · 1 つの調査の上限 ${fmtUsd(limits.run_usd)}` : ""}</p>`
+      <p class="spend">今日の費用 <b class="mono">${fmtUsd(spend.today_usd || 0)}</b>${spend.unmeasured_today ? `（ほかに費用を測れなかった呼び出し ${fmtNum(spend.unmeasured_today)} 件）` : ""}${limits.daily_usd ? ` / 上限 ${fmtUsd(limits.daily_usd)}` : "（上限なし）"}${limits.run_usd ? ` · 1 つの調査の上限 ${fmtUsd(limits.run_usd)}` : ""}</p>`
       : `<p class="note">モデルの窓口の状態を読めません。</p>`}`;
   $("modelPop").querySelectorAll(".opt").forEach((b) => b.addEventListener("click", () => {
     choice.all = b.dataset.all; saveChoice(); renderModels();

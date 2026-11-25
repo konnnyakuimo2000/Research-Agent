@@ -83,7 +83,7 @@ class ModelCatalog:
             h = health.get("models", {}).get(model_id, {})
             out[model_id] = {"ok": h.get("ok"), "error": h.get("error", ""), "seconds": h.get("seconds"),
                              **{k: u.get(k) for k in ("calls", "errors", "active", "prompt_tokens",
-                                                      "completion_tokens", "cost_usd", "refused")}}
+                                                      "completion_tokens", "cost_usd", "refused", "unmeasured")}}
         return {"models": out, "spend": usage.get("spend", {})}
 
 

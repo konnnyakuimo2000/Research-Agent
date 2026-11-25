@@ -52,6 +52,21 @@ SDK_PARAMS = {"temperature", "top_p", "max_tokens", "max_completion_tokens", "re
               "stream_options", "logprobs", "top_logprobs", "user"}
 HEALTH_SECONDS = 20
 PROBE_SECONDS = 4.0      # 接続の確認を打ち切る秒数（やり直さない）
+RUN_LOCK_SECONDS = 600.0  # 同じ調査の値段のある呼び出しの順番を待つ上限（前の呼び出しが終わらないときに待ち続けない）
+
+
+class Once:
+    """鍵を 1 回だけ放す（失敗・成功・ストリームの終わりのどこから呼ばれても、二重に放さない）。"""
+
+    def __init__(self, lock: threading.Lock | None) -> None:
+        self._lock, self._done, self._mu = lock, lock is None, threading.Lock()
+
+    def __call__(self) -> None:
+        with self._mu:
+            if self._done:
+                return
+            self._done = True
+        self._lock.release()
 
 
 class Gate:
@@ -165,9 +180,13 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
             "error": {"message": f"{type(e).__name__}: {e}", "type": "upstream_error", "code": status, **mark}, **mark})
 
     def track(model: Model, started: float, waited: float, usage: object, budget: str | None) -> float:
-        """使用量を足し、この呼び出しの費用（ドル）を返す。"""
+        """使用量を足し、この呼び出しの費用（ドル）を返す。値段のあるモデルで使用量が返らなければ「未計測」に数える。"""
         parts = usage_parts(usage)
         cost = model.spec.cost(parts)
+        if model.spec.price and usage is None:
+            with model.usage.lock:
+                model.usage.unmeasured += 1
+            spend.add_unmeasured(model.spec.id, budget)
         with model.usage.lock:
             model.usage.calls += 1
             model.usage.seconds += time.perf_counter() - started
@@ -208,13 +227,31 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
             raise HTTPException(status_code=400, detail=f"モデル {model.spec.id} は {', '.join(sorted(missing))} に対応していません")
         if model.spec.unavailable:
             return refuse(503, f"モデル {model.spec.id} は使えません（{model.spec.unavailable}）", model, "model_unavailable")
+        # 値段のあるモデル: 同じ調査の呼び出しは 1 件ずつ。予算の判定（送る直前）から費用の記録までを鍵の中で行う
+        held = spend.lock_for(x_model_budget) if model.spec.price and x_model_budget else None
+        if held and not held.acquire(timeout=RUN_LOCK_SECONDS):
+            return refuse(429, "同じ調査の前の呼び出しが終わらないため、送れません", model, "run_busy")
+        release = Once(held)
+        try:
+            return send(model, body, messages, x_model_budget, release)
+        except BaseException:
+            release()
+            raise
+
+    def send(model: Model, body: dict, messages: list[dict], x_model_budget: str | None, release: Once):
+        """送る直前に予算を判定して送る。release（調査ごとの鍵を放す）は、費用を記録した後に呼ぶ
+        （ストリームは流し終えた後。ストリームでない呼び出しは、成功・失敗のどちらでも最後に）。"""
         if model.spec.price:
             reason = spend.refusal(x_model_budget)
             if reason:
                 with model.usage.lock:
                     model.usage.refused += 1
+                release()
                 return refuse(402, reason, model, "budget_exceeded")
         kwargs = {k: v for k, v in body.items() if k in SDK_PARAMS and k not in model.spec.drop_params}
+        if body.get("stream") and model.spec.price and model.spec.provider != "anthropic":
+            # OpenAI 互換の上流は、頼んだときだけストリームの最後に使用量を返す（頼まないと費用が 0 ドルになっていた）
+            kwargs["stream_options"] = {**(kwargs.get("stream_options") or {}), "include_usage": True}
         extra = {k: v for k, v in body.items() if k not in SDK_PARAMS | {"model", "messages", "stream", "extra_body"}}
         extra.update(body.get("extra_body") or {})
         for k in model.spec.drop_params:
@@ -226,20 +263,23 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
             model.usage.active += 1
         if not body.get("stream"):
             try:
-                r, waited = model.llm.call(messages, **kwargs)
-            except (APIConnectionError, APIStatusError) as e:
-                return failure(e, getattr(e, "model_wait", 0.0), model)
-            except UnsupportedRequest as e:
-                return refuse(400, str(e), model, "unsupported_request")
+                try:
+                    r, waited = model.llm.call(messages, **kwargs)
+                except (APIConnectionError, APIStatusError) as e:
+                    return failure(e, getattr(e, "model_wait", 0.0), model)
+                except UnsupportedRequest as e:
+                    return refuse(400, str(e), model, "unsupported_request")
+                finally:
+                    with model.usage.lock:
+                        model.usage.active -= 1
+                cost = track(model, started, waited, r.usage, x_model_budget)
             finally:
-                with model.usage.lock:
-                    model.usage.active -= 1
-            cost = track(model, started, waited, r.usage, x_model_budget)
+                release()                                   # 費用を記録してから、同じ調査の次の呼び出しを通す
             return JSONResponse({**r.model_dump(exclude_none=True), "x_model_wait": round(waited, 1),
                                  "x_model_id": model.spec.id, "x_model_cost": round(cost, 6)})
-        return stream(model, messages, kwargs, started, x_model_budget)
+        return stream(model, messages, kwargs, started, x_model_budget, release)
 
-    def stream(model: Model, messages: list[dict], kwargs: dict, started: float, budget: str | None):
+    def stream(model: Model, messages: list[dict], kwargs: dict, started: float, budget: str | None, release):
         waited = [0.0]
         chunks = model.llm.stream_chunks(messages, on_wait=lambda s: waited.__setitem__(0, waited[0] + s), **kwargs)
         try:
@@ -247,10 +287,12 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
         except (APIConnectionError, APIStatusError) as e:
             with model.usage.lock:
                 model.usage.active -= 1
+            release()
             return failure(e, waited[0], model)
         except UnsupportedRequest as e:
             with model.usage.lock:
                 model.usage.active -= 1
+            release()
             return refuse(400, str(e), model, "unsupported_request")
 
         def gen() -> Iterator[str]:
@@ -271,7 +313,10 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
             finally:
                 with model.usage.lock:
                     model.usage.active -= 1
-                track(model, started, waited[0], usage, budget)
+                try:
+                    track(model, started, waited[0], usage, budget)
+                finally:
+                    release()
 
         return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
