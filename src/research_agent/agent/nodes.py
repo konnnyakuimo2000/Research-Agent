@@ -23,6 +23,7 @@ from research_agent.agent import query_plan
 from research_agent.agent import reprints
 from research_agent.agent import telemetry
 from research_agent.agent.guard import check_decision, has_choices, is_ambiguous, pages_to_read
+from research_agent.agent.page_choice import choose_pages
 from research_agent.agent.report import (SourceTable, aspect_headings, assemble, cited_db_records, collect_sources,  # noqa: F401
                                          drop_sentences_with, images_section, infeasible_report, sources_text,
                                          strip_program_sections, unsupported_names, _image_lines)
@@ -262,14 +263,12 @@ class Nodes:
         # 対象が決まっている（または曖昧でない）ときの検索結果を、深掘りするページの候補にする。
         # 曖昧なまま集めた結果は、別の対象のページが混ざるので使わない
         if not is_ambiguous({**state, **result}):
-            first = [result["summary_url"]] if result.get("summary_url") else []
-            first += [u for u in result.get("official_urls", []) if not fetch.is_unreadable(u)]
             # 題名・抜粋に対象の名前がある結果だけを読む（観点の言葉で無関係なページが混ざるため）。
-            # 対象がまだ決まっていなければ、検索に使った名前で見る（「EE-3」を含まない会社のページなどを読まない）
+            # 対象がまだ決まっていなければ、検索に使った名前で見る（「EE-3」を含まない会社のページなどを読まない）。
+            # どれを読み、どれを先に読むかは page_choice.choose_pages（副作用なし）で決める
             names_for_match = [current["label"]] + list(names) if current else list(names)
-            relevant = [w for w in web.results
-                        if not names_for_match or mentions(f"{w.title} {w.snippet}", names_for_match)]
-            urls = first + [w.url for w in relevant if not fetch.is_unreadable(w.url)]
+            choice = choose_pages(state, result, web.results, decision, names_for_match)
+            relevant, urls = choice.relevant, list(choice.urls)
             if not state.get("tier1_searched"):
                 # Tier 1（公的機関・大学）のページを狙って探す。横の展開なのでプログラムが行う（設計書 6.3）
                 name = current["label"] if current else query
@@ -288,23 +287,11 @@ class Nodes:
                 result["tier1_searched"] = True
             # 上の Tier から読む。Tier 5（転載・まとめ）は読まない
             result["reading_list"] = by_tier(state.get("reading_list", []) + urls)
-            read = {canonical(p["url"]) for p in state.get("pages_read", [])}
-            if decision.get("aspect") or decision.get("conflict_topic"):
-                # 観点や食い違いを狙って探したページは、他より先に読む（R-1, R-6）
-                result["priority_urls"] = by_tier(state.get("priority_urls", [])
-                                                  + [w.url for w in relevant
-                                                     if canonical(w.url) not in read and not fetch.is_unreadable(w.url)])
-            summary = result.get("summary_url", "")
-            if summary and not state.get("summary_url") and canonical(summary) not in read:
-                # 対象の Wikipedia の記事は、全体を見渡せる最初の資料なので先に読む。読む一覧は Tier の順に並ぶので、
-                # 前は Tier 1 のページ（別の探査機のページも含む）で枠が埋まり、最後まで読まないことがあった（はやぶさ）
-                result["priority_urls"] = [summary] + [u for u in result.get("priority_urls", state.get("priority_urls", []))
-                                                       if canonical(u) != canonical(summary)]
+            if choice.priority is not None:
+                result["priority_urls"] = choice.priority
             # この検索で初めて見つかった、対象のページの数（次の検索を選ぶときの「空振り」の判定に使う）
-            known_urls = read | {canonical(u) for u in state.get("reading_list", [])}
-            new_relevant = len({canonical(w.url) for w in relevant} - known_urls)
             result.update(query_plan.harvest(state, web.results, current["label"] if current else "",
-                                             {**decision, "query": query}, new_relevant))
+                                             {**decision, "query": query}, choice.new_relevant))
             if result.get("official_hosts"):
                 # 公式サイトは、事実が取れる前から site: 検索の候補にする
                 result["seen_sites"] = list(dict.fromkeys(result["seen_sites"] + result["official_hosts"]))
