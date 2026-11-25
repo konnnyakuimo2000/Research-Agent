@@ -9,6 +9,7 @@
     GET  /api/runs                         これまでの依頼（新しい順）
     GET  /api/runs/{id}/events             イベントの流れ（SSE。契約の封筒の形。?after= か Last-Event-ID より後から）
     POST /api/runs/{id}/answer|pause|resume|cancel
+    DELETE /api/runs/{id}                  終わった依頼を消す（一覧・イベント・結果）。終わっていなければ 409
     GET  /api/runs/{id}/result             結果（報告と成果物）
     GET  /api/status?agent=…               そのエージェントが使うモデルなどにつながるか
     GET  /api/models                       モデルの窓口のモデル（役割の既定・能力・外部か・値段・使えるか）。
@@ -35,7 +36,7 @@ from fastapi.staticfiles import StaticFiles
 from research_agent import assets
 from research_agent.agentkit import protocol
 from research_agent.gateway import openai_compat
-from research_agent.gateway.core import Gateway, Unavailable, flat_events
+from research_agent.gateway.core import Gateway, RunBusy, Unavailable, flat_events
 from research_agent.gateway.models import ModelCatalog, ModelChoiceError
 from research_agent.gateway.registry import AgentError, Registry
 from research_agent.gateway.settings import SettingsError
@@ -85,6 +86,8 @@ def create_app(registry: Registry | None = None, runs_dir: Path | None = None, a
             raise HTTPException(status_code=e.status if e.status in (400, 404, 409) else 502, detail=e.detail) from None
         except (ModelChoiceError, SettingsError) as e:
             raise HTTPException(status_code=400, detail=str(e)) from None
+        except RunBusy as e:
+            raise HTTPException(status_code=409, detail=str(e)) from None
 
     compat = openai_compat.router(gw, check_key)
     app.state.sessions = compat.sessions
@@ -112,6 +115,11 @@ def create_app(registry: Registry | None = None, runs_dir: Path | None = None, a
         if not isinstance(settings, dict):
             raise HTTPException(status_code=400, detail="settings は {名前: 値} の形にしてください")
         return call(lambda: gw.start(str(body.get("agent", "")), request, models=models, settings=settings))
+
+    @app.delete("/api/runs/{run_id}")
+    def api_delete(run_id: str, authorization: str | None = Header(default=None)) -> dict:
+        check_key(authorization)
+        return call(gw.delete, run_id)
 
     @app.post("/api/runs/{run_id}/answer")
     def api_answer(run_id: str, body: dict, authorization: str | None = Header(default=None)) -> dict:

@@ -20,7 +20,7 @@ import httpx
 from research_agent.agentkit import protocol
 from research_agent.gateway.models import ModelCatalog, effective_models
 from research_agent.gateway.registry import AgentClient, AgentError, Registry
-from research_agent.gateway.settings import check_settings
+from research_agent.gateway.settings import check_settings, effective_settings
 from research_agent.gateway.store import Feed, RunStore
 
 log = logging.getLogger(__name__)
@@ -43,6 +43,10 @@ RESULT_GIVE_UP_SECONDS = 1800.0   # 成果物をこの間とれなければ、�
 
 class Unavailable(Exception):
     """エージェントにつながらない。"""
+
+
+class RunBusy(Exception):
+    """まだ終わっていない依頼（削除できない）。"""
 
 
 class Gateway:
@@ -86,14 +90,16 @@ class Gateway:
         if manifest is None:
             raise Unavailable(client.error or "エージェントにつながりません")
         chosen = effective_models(manifest, models, self.models())   # 役割ごとに実際に使うモデル（記録に残す）
-        settings = check_settings(manifest.get("settings_schema") or {}, settings or {})
+        schema = manifest.get("settings_schema") or {}
+        settings = check_settings(schema, settings or {})
         try:
             r = client.start({"text": text, **(extra or {})}, settings, chosen)
         except httpx.HTTPError as e:
             raise Unavailable(f"{type(e).__name__}: {e}") from None
         self._prune()
         run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:4]
-        self.store.create(run_id, client.id, manifest.get("version", ""), r["run_id"], text, settings, hidden, chosen)
+        self.store.create(run_id, client.id, manifest.get("version", ""), r["run_id"], text, settings, hidden, chosen,
+                          effective_settings(schema, settings))
         self.feeds[run_id] = Feed()
         self._ensure_relay(run_id)
         return self.summary(run_id)
@@ -110,6 +116,21 @@ class Gateway:
         client.control(rec["agent_run"], action)
         self._ensure_relay(run_id)        # 答え待ちで休んでいた依頼を止めたとき、その知らせを受け取る
         return self.summary(run_id)
+
+    def delete(self, run_id: str) -> dict:
+        """終わった依頼を、このアプリの一覧・イベント・結果・配信用のイベントから消す。動いている・答え待ち・
+        一時停止中・報告を保存中の依頼は消さない（RunBusy）。Open WebUI の会話とエージェントの記録は消さない。"""
+        rec = self.store.get(run_id)
+        if rec is None:
+            raise KeyError(run_id)
+        if rec.get("status") in (*LIVE, FINISHING):
+            raise RunBusy("調査が終わってから削除できます")
+        cleaned = self.store.delete(run_id)
+        with self._lock:
+            self.feeds.pop(run_id, None)
+            self._finished_at.pop(run_id, None)
+            self._wanted.pop(run_id, None)
+        return {"id": run_id, "deleted": True, "cleaned": cleaned}
 
     def summary(self, run_id: str) -> dict:
         return _summary(self.store.get(run_id) or {})
@@ -376,6 +397,11 @@ def _summary(rec: dict) -> dict:
             out[key] = json.loads(rec.get(key) or "{}")
         except ValueError:
             out[key] = {}
+    # 始めたときに効いた設定（既定を含む）。前の版の記録にはない（None。画面は「開始時の既定値は記録なし」）
+    try:
+        out["effective_settings"] = json.loads(rec["effective"]) if rec.get("effective") else None
+    except ValueError:
+        out["effective_settings"] = None
     return out
 
 

@@ -24,6 +24,13 @@ def check_settings(schema: dict, values: dict) -> dict:
     return out
 
 
+def effective_settings(schema: dict, checked: dict) -> dict:
+    """依頼を始めたときに実際に効く設定: 名乗りの既定の値に、確かめた変更を重ねたもの（履歴に残す。
+    あとでエージェントの既定が変わっても、その依頼で効いた値を出せるように）。"""
+    props = (schema or {}).get("properties") or {}
+    return {**{k: s["default"] for k, s in props.items() if "default" in s}, **checked}
+
+
 def _check(title: str, spec: dict, value):
     kind = spec.get("type")
     if kind == "boolean":

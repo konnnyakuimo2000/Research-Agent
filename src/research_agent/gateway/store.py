@@ -4,6 +4,9 @@
 - イベントは runs/<ID>.events.jsonl に、契約の封筒の形で 1 行ずつ書く（再生と持ち出しに使う）
 - 結果（報告と成果物）は runs/<ID>.result.json
 - 分ける前に作られた記録（平らなイベントの jsonl）は、起動したときに一覧に入れる（調査エージェントの記録として読む）
+- effective は、依頼を始めたときに実際に効いた設定（既定の値を含む）。前の版の記録にはない（None）
+- 削除した依頼は deleted に id を残す（古い記録の取り込みで一覧に戻さないため）。ファイルを消し切れなかったときは
+  cleaned = 0 のまま残し、起動のときに続きを消す
 """
 
 from __future__ import annotations
@@ -22,7 +25,8 @@ LEGACY_AGENT, LEGACY_EXTENSION = "research", "research/v1"
 RECENT_SECONDS = 600.0
 LEGACY_SCAN_SECONDS = 30.0   # CLI の記録を探しにフォルダーを見る間隔
 COLUMNS = ("id", "agent", "agent_version", "agent_run", "request", "status", "question", "created", "updated",
-           "seconds", "events", "settings", "hidden", "models")
+           "seconds", "events", "settings", "hidden", "models", "effective")
+RUN_FILES = (".events.jsonl", ".result.json", ".result.json.tmp")   # 依頼ごとのファイル（削除で消す）
 
 
 def safe_id(run_id: str) -> bool:
@@ -41,21 +45,27 @@ class RunStore:
             id TEXT PRIMARY KEY, agent TEXT, agent_version TEXT, agent_run TEXT, request TEXT, status TEXT,
             question TEXT, created REAL, updated REAL, seconds REAL, events INTEGER, settings TEXT,
             hidden INTEGER DEFAULT 0, models TEXT DEFAULT '{}')""")
-        # 前の版の記録（models の列がない）に列を足す
-        if "models" not in {r[1] for r in self.db.execute("PRAGMA table_info(runs)").fetchall()}:
-            self.db.execute("ALTER TABLE runs ADD COLUMN models TEXT DEFAULT '{}'")
+        # 前の版の記録（models・effective の列がない）に列を足す
+        have = {r[1] for r in self.db.execute("PRAGMA table_info(runs)").fetchall()}
+        for column, ddl in (("models", "TEXT DEFAULT '{}'"), ("effective", "TEXT")):
+            if column not in have:
+                self.db.execute(f"ALTER TABLE runs ADD COLUMN {column} {ddl}")
+        self.db.execute("CREATE TABLE IF NOT EXISTS deleted (id TEXT PRIMARY KEY, at REAL, cleaned INTEGER DEFAULT 0)")
         self.db.commit()
+        self.cleanup_deleted()
         self.import_legacy()
 
     # ---- 一覧 ----
 
     def create(self, run_id: str, agent: str, agent_version: str, agent_run: str, request: str,
-               settings: dict | None = None, hidden: bool = False, models: dict | None = None) -> dict:
+               settings: dict | None = None, hidden: bool = False, models: dict | None = None,
+               effective: dict | None = None) -> dict:
         now = time.time()
         row = {"id": run_id, "agent": agent, "agent_version": agent_version, "agent_run": agent_run, "request": request,
                "status": "running", "question": "", "created": now, "updated": now, "seconds": 0, "events": 0,
                "settings": json.dumps(settings or {}, ensure_ascii=False), "hidden": int(hidden),
-               "models": json.dumps(models or {}, ensure_ascii=False)}
+               "models": json.dumps(models or {}, ensure_ascii=False),
+               "effective": None if effective is None else json.dumps(effective, ensure_ascii=False)}
         with self._lock:
             self.db.execute(f"INSERT INTO runs ({','.join(COLUMNS)}) VALUES ({','.join('?' * len(COLUMNS))})",
                             [row[c] for c in COLUMNS])
@@ -83,6 +93,43 @@ class RunStore:
         with self._lock:
             rows = self.db.execute(sql + " ORDER BY created DESC LIMIT ?", [*args, limit]).fetchall()   # ID は時刻帯で前後するので、作った時刻の順
         return [dict(r) for r in rows]
+
+    # ---- 削除 ----
+
+    def delete(self, run_id: str) -> bool:
+        """一覧・イベント・結果を消す。先に削除の印を残し、それから行とファイルを消す（途中で止まっても、
+        起動のときの cleanup_deleted が続きを消す。古い記録の取り込みは、印のある id を一覧に戻さない）。
+        ファイルを消し切れたら True。"""
+        with self._lock:
+            self.db.execute("INSERT OR REPLACE INTO deleted (id, at, cleaned) VALUES (?, ?, 0)", (run_id, time.time()))
+            self.db.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+            self.db.commit()
+        return self._remove_files(run_id)
+
+    def is_deleted(self, run_id: str) -> bool:
+        with self._lock:
+            return self.db.execute("SELECT 1 FROM deleted WHERE id = ?", (run_id,)).fetchone() is not None
+
+    def cleanup_deleted(self) -> int:
+        """消し切れなかった依頼のファイルを消し直す。消し切れた数を返す。"""
+        with self._lock:
+            ids = [r[0] for r in self.db.execute("SELECT id FROM deleted WHERE cleaned = 0").fetchall()]
+        return sum(self._remove_files(i) for i in ids)
+
+    def _remove_files(self, run_id: str) -> bool:
+        if not safe_id(run_id):
+            return False
+        ok = True
+        for suffix in RUN_FILES:
+            try:
+                (self.dir / f"{run_id}{suffix}").unlink(missing_ok=True)
+            except OSError:
+                ok = False                       # 開いているなどで消せない（後で消し直す）
+        if ok:
+            with self._lock:
+                self.db.execute("UPDATE deleted SET cleaned = 1 WHERE id = ?", (run_id,))
+                self.db.commit()
+        return ok
 
     # ---- イベントと結果 ----
 
@@ -129,7 +176,7 @@ class RunStore:
             return 0
         self._legacy_at = now
         with self._lock:
-            known = {r[0] for r in self.db.execute("SELECT id FROM runs").fetchall()}
+            known = {r[0] for r in self.db.execute("SELECT id FROM runs UNION SELECT id FROM deleted").fetchall()}
         n = 0
         for path in sorted(self.dir.glob("*.events.jsonl")):
             run_id = path.name.removesuffix(".events.jsonl")
@@ -148,7 +195,7 @@ class RunStore:
             with self._lock:
                 self.db.execute(f"INSERT INTO runs ({','.join(COLUMNS)}) VALUES ({','.join('?' * len(COLUMNS))})",
                                 [run_id, LEGACY_AGENT, "", "", first["data"].get("request", ""), status, "", mtime,
-                                 mtime, last.get("t", 0), last.get("seq", 0), "{}", 0, "{}"])
+                                 mtime, last.get("t", 0), last.get("seq", 0), "{}", 0, "{}", None])
                 self.db.commit()
             n += 1
         return n

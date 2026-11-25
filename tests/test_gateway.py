@@ -311,7 +311,7 @@ def test_records_made_before_the_split_are_listed_and_replayed(tmp_path):
     listed = st.c.get("/api/runs").json()["runs"]
     assert listed[0] == {"id": "20261101-000000-abcd", "agent": "research", "request": "水星について", "status": "done",
                          "question": "", "created": listed[0]["created"], "events": 3, "seconds": 2, "models": {},
-                         "settings": {}}
+                         "settings": {}, "effective_settings": None}
     envs = _envs(st.c.get("/api/runs/20261101-000000-abcd/events").text)
     assert [e["type"] for e in envs] == ["run.start", "research/v1:page.done", "run.end"]
     assert envs[-1]["data"] == {"report": "水星は惑星 [1]。"}
