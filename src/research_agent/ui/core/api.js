@@ -5,8 +5,8 @@ try { apiKey = new URLSearchParams(location.search).get("key") || localStorage.g
 // EventSource と画像はヘッダーを付けられないので、URL に鍵を付ける
 export const withKey = (url) => apiKey ? url + (url.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(apiKey) : url;
 
-export async function api(path, body) {
-  const r = await fetch(path, { method: body ? "POST" : "GET", headers: { "Content-Type": "application/json", ...(apiKey ? { Authorization: "Bearer " + apiKey } : {}) },
+export async function api(path, body, method) {
+  const r = await fetch(path, { method: method || (body ? "POST" : "GET"), headers: { "Content-Type": "application/json", ...(apiKey ? { Authorization: "Bearer " + apiKey } : {}) },
     body: body ? JSON.stringify(body) : undefined });
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
   return r.json();

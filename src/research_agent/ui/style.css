@@ -28,10 +28,12 @@ button { font: inherit; color: inherit; }
 button:focus-visible, .node:focus-visible, input:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 .mono { font-family: var(--font-data); font-variant-numeric: tabular-nums; }
 
-.app { display: grid; grid-template-columns: 220px minmax(300px, 400px) minmax(0, 1fr); height: 100%; }
+/* 幅は境界のドラッグで変えられる（--side-w・--chat-w。panels/layout.js）。変えていなければ既定の幅 */
+.app { display: grid; grid-template-columns: var(--side-w, 220px) var(--chat-w, minmax(300px, 400px)) minmax(0, 1fr); height: 100%; }
 
 /* 調査の一覧 */
-.side { background: var(--surface); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.side { background: var(--surface); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; min-width: 0; position: relative; }
+/* 一覧は自分でスクロールする。.side は切り取らない（境界のつかむ所が、チャット側へはみ出すため） */
 .side-top { padding: 14px 12px 8px; display: grid; gap: 10px; }
 /* ロゴ: マーク（調べる輪と、枝分かれする柄）と文字。色は文字の色に合わせる（明るい・暗い画面の両方） */
 .brand { display: inline-flex; align-items: center; gap: 9px; padding: 2px 2px 0; color: var(--ink); }
@@ -41,16 +43,51 @@ button:focus-visible, .node:focus-visible, input:focus-visible { outline: 2px so
 .brand .dash { color: var(--muted); font-weight: 400; margin: 0 0.04em; }
 .pill { border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 7px 10px; cursor: pointer; text-align: left; }
 .pill:hover { border-color: var(--faint); }
-.runs { overflow-y: auto; padding: 4px 8px 12px; display: grid; gap: 2px; align-content: start; }
-.run { border: none; background: none; text-align: left; border-radius: 8px; padding: 6px 8px; cursor: pointer; display: grid; gap: 1px; }
-.run:hover, .run.on { background: var(--bg); }
+.runs { overflow-y: auto; padding: 4px 8px 12px; display: grid; gap: 2px; align-content: start; flex: 1; min-height: 0; }
+/* 一覧の下の「設定」（一覧をスクロールしても動かない） */
+.side-bottom { border-top: 1px solid var(--line); padding: 8px; flex: none; }
+.setbtn { display: flex; align-items: center; gap: 8px; width: 100%; border: none; background: none; border-radius: 8px; padding: 7px 8px; cursor: pointer; text-align: left; }
+.setbtn:hover { background: var(--bg); }
+.setbtn svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+/* 一覧の行: 押すと開く。「…」で詳細・削除 */
+.runrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; border-radius: 8px; }
+.runrow:hover, .runrow:has(.run.on) { background: var(--bg); }
+.runrow .more { border: none; background: none; color: var(--muted); border-radius: 6px; width: 26px; height: 26px; cursor: pointer; opacity: 0; }
+.runrow:hover .more, .runrow .more:focus-visible, .runrow .more[aria-expanded="true"] { opacity: 1; }
+@media (hover: none) { .runrow .more { opacity: 1; } }
+.runrow .more:hover { background: var(--surface); color: var(--ink); }
+.runmenu { position: fixed; z-index: 70; width: 190px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 10px 28px rgb(0 0 0 / .16); padding: 4px; display: grid; }
+.runmenu button { border: none; background: none; text-align: left; padding: 6px 9px; border-radius: 7px; cursor: pointer; }
+.runmenu button:hover:not([aria-disabled="true"]) { background: var(--surface); }
+.runmenu button[aria-disabled="true"] { color: var(--faint); cursor: not-allowed; }
+.runmenu .mnote { margin: 2px 9px 6px; font-size: 11.5px; color: var(--muted); }
+/* 境界（ドラッグ・矢印キーで幅を変える） */
+.split { position: absolute; top: 0; bottom: 0; right: -4px; width: 8px; cursor: col-resize; z-index: 15; touch-action: none; }
+.split::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; transition: background .15s; }
+.split:hover::after, .split.drag::after, .split:focus-visible::after { background: var(--ink); }
+.split:focus-visible { outline: none; }
+.app.noside #splitSide { display: none; }
+.app.chatonly #splitChat { display: none; }
+.run { border: none; background: none; text-align: left; border-radius: 8px; padding: 6px 8px; cursor: pointer; display: grid; gap: 1px; min-width: 0; }
 .run .r1 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .run .r2 { font-size: 11px; color: var(--muted); }
 
 /* チャット。何もないときは見出しと入力欄を真ん中に置き、会話が始まったら入力欄を下に移す */
-.chatpane { display: flex; flex-direction: column; min-height: 0; min-width: 0; border-right: 1px solid var(--line); padding: 12px 16px 14px; }
+.chatpane { display: flex; flex-direction: column; min-height: 0; min-width: 0; border-right: 1px solid var(--line); padding: 8px 16px 14px; position: relative; }
+/* チャットの上: 履歴のボタンと、次の依頼に効く設定の要約（押すと設定）と、送信に響く異常 */
+.chathead { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding-bottom: 6px; flex: none; }
+.headsum { display: inline-flex; align-items: center; gap: 6px; min-width: 0; flex: 1; border: none; background: none; border-radius: 8px; padding: 4px 6px;
+  cursor: pointer; text-align: left; font-size: 12.5px; }
+.headsum:hover { background: var(--surface); }
+.headsum .lbl { color: var(--muted); flex: none; }
+.headsum .txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.headsum .badge { font-size: 10.5px; border: 1px solid var(--line); border-radius: 5px; padding: 0 5px; color: var(--muted); flex: none; }
+.headctl:empty { display: none; }
+.headwarn { flex-basis: 100%; margin: 0; font-size: 12px; color: var(--ink); border-left: 2px solid var(--ink); padding: 1px 8px; }
+.chatpane.empty { justify-content: flex-start; }
+.chatpane.empty .dock { margin: auto 0; }
 .chat { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; padding: 6px 2px 12px; }
-.chatpane.empty { justify-content: center; }
 .chatpane.empty .chat { display: none; }
 .hello { display: none; text-align: center; margin: 0; text-wrap: balance; }
 .chatpane.empty .hello { display: block; }
@@ -86,8 +123,11 @@ button:focus-visible, .node:focus-visible, input:focus-visible { outline: 2px so
 .ex { border: 1px solid var(--line); background: var(--bg); border-radius: 8px; padding: 3px 10px; font-size: 12px; color: var(--muted); cursor: pointer;
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ex:hover { color: var(--ink); border-color: var(--faint); }
-.composer { background: var(--bg); border: 1px solid var(--faint); border-radius: 14px; padding: 12px 10px 8px 14px; display: grid; gap: 8px;
+/* 入力欄と送信ボタンだけ */
+.composer { background: var(--bg); border: 1px solid var(--faint); border-radius: 14px; padding: 10px 8px 8px 14px; display: flex; align-items: flex-end; gap: 8px;
   transition: border-color .2s, box-shadow .2s; }
+.composer textarea { flex: 1; min-width: 0; align-self: center; }
+.send:disabled { opacity: .35; cursor: not-allowed; }
 .composer:focus-within { border-color: var(--ink); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 8%, transparent); }
 .composer.answer { border-color: var(--ink); border-width: 1.5px; }
 .composer textarea { border: none; background: none; color: var(--ink); font: inherit; font-size: 14.5px; line-height: 1.55; resize: none; outline: none;
@@ -112,7 +152,7 @@ button:focus-visible, .node:focus-visible, input:focus-visible { outline: 2px so
 .send.pause .i-send { display: none; } .send.pause .i-pause { display: inline; }
 .send.resume .i-send { display: none; } .send.resume .i-play { display: inline; }
 .send .i-play { fill: currentColor; stroke-width: 1.2; }
-.app.noside { grid-template-columns: 0 minmax(300px, 440px) minmax(0, 1fr); }
+.app.noside { grid-template-columns: 0 var(--chat-w, minmax(300px, 440px)) minmax(0, 1fr); }
 .app.noside .side { visibility: hidden; }
 /* エージェントの選択（ゲートウェイが 2 つ以上つないでいるときだけ出す） */
 .agent-sel { border: none; background: none; color: var(--ink); font: inherit; font-size: 12.5px; padding: 4px 6px; border-radius: 8px;
@@ -133,7 +173,6 @@ button:focus-visible, .node:focus-visible, input:focus-visible { outline: 2px so
 .crow { min-width: 0; }
 .agent-sel, .model-btn { min-width: 0; flex: 0 1 auto; }
 .agent-sel { flex-shrink: 3; }
-.composer { grid-template-columns: minmax(0, 1fr); }
 .send, .cbtn { flex: none; }
 .usage th { white-space: nowrap; }
 .model-pop h4 { margin: 4px 0 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
@@ -162,7 +201,10 @@ button:focus-visible, .node:focus-visible, input:focus-visible { outline: 2px so
 .spend { font-size: 12px; color: var(--muted); margin: 8px 0 2px; }
 .spend b { color: var(--ink); font-weight: 600; }
 /* 調査で使ったモデル（チャットの頭） */
-.runmeta { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11.5px; color: var(--muted); border-bottom: 1px solid var(--line); padding: 0 2px 6px; }
+.runmeta { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11.5px; color: var(--muted); border: none; border-bottom: 1px solid var(--line); padding: 0 2px 6px;
+  background: none; text-align: left; cursor: pointer; }
+.runmeta:hover { color: var(--ink); }
+.runmeta .more { text-decoration: underline; }
 .runmeta .cost:empty { display: none; }
 @media (max-width: 640px) { .rrow { grid-template-columns: 1fr; gap: 2px; } .model-btn { max-width: 130px; } }
 /* 依頼の設定（エージェントの settings_schema から作る欄と、プリセット。X3） */
@@ -197,10 +239,10 @@ button:focus-visible, .node:focus-visible, input:focus-visible { outline: 2px so
 .raw summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 .raw pre { font-family: var(--font-data); font-size: 11px; white-space: pre-wrap; word-break: break-all; background: var(--surface); border-radius: 6px; padding: 6px 8px; margin: 6px 0; }
 /* 0 段のエージェント（作業・段階を出さない）: 流れの図を出さず、チャットだけにする */
-.app.chatonly { grid-template-columns: 220px minmax(0, 1fr); }
+.app.chatonly { grid-template-columns: var(--side-w, 220px) minmax(0, 1fr); }
 .app.chatonly.noside { grid-template-columns: 0 minmax(0, 1fr); }
 .app.chatonly .tele { display: none; }
-.app.chatonly .chat, .app.chatonly .dock { width: 100%; max-width: 820px; margin-left: auto; margin-right: auto; }
+.app.chatonly .chat, .app.chatonly .dock, .app.chatonly .chathead { width: 100%; max-width: 820px; margin-left: auto; margin-right: auto; }
 
 /* ノードの窓（全面）。中の canvas を拡大・縮小・移動する */
 .tele { position: relative; min-height: 0; min-width: 0; overflow: hidden; }
@@ -316,17 +358,65 @@ button:focus-visible, .node:focus-visible, input:focus-visible { outline: 2px so
 /* ライブか履歴の再生か（図の上に常に出す） */
 .hud .mode { font-size: 11.5px; color: var(--muted); padding: 0 10px; align-self: center; white-space: nowrap; }
 .hud .mode:empty { display: none; }
+/* 一時停止・再開（作業記録の上。作業記録のないエージェントでは、チャットの上） */
+.runctl { border: 1px solid var(--ink) !important; background: var(--bg) !important; color: var(--ink) !important; border-radius: 999px; padding: 2px 12px; cursor: pointer;
+  font-size: 12px; }
+.runctl.on { background: var(--strong) !important; color: var(--on-strong) !important; }
+.headctl .runctl { font: inherit; font-size: 12px; }
+/* 設定のパネル: 広い画面では右側、狭い画面では全面。開閉しても、入力中の文・開いている履歴・購読はそのまま */
+.panel-scrim { position: fixed; inset: 0; z-index: 80; background: rgb(0 0 0 / .22); }
+.setpanel { position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 100vw); z-index: 90; background: var(--bg); border-left: 1px solid var(--line);
+  box-shadow: -12px 0 32px rgb(0 0 0 / .14); display: flex; flex-direction: column; }
+.setpanel > header { display: flex; align-items: center; gap: 8px; padding: 12px 14px 6px; }
+.setpanel h2 { margin: 0; font-size: 15px; flex: 1; }
+.setpanel h2:focus { outline: none; }
+.setpanel > header button { border: none; background: var(--surface); border-radius: 8px; width: 28px; height: 28px; cursor: pointer; }
+.settabs { display: flex; flex-wrap: wrap; gap: 2px; padding: 0 10px 6px; border-bottom: 1px solid var(--line); }
+.settabs button { border: none; background: none; border-radius: 8px; padding: 4px 10px; cursor: pointer; color: var(--muted); font-size: 12.5px; }
+.settabs button[aria-selected="true"] { background: var(--surface); color: var(--ink); font-weight: 600; }
+.pbody { flex: 1; overflow-y: auto; padding: 10px 16px 16px; display: grid; gap: 8px; align-content: start; }
+.pbody h4 { margin: 10px 0 2px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.pbody .note { font-size: 12px; color: var(--muted); margin: 2px 0; }
+.pbody .since, .pfoot .since { font-size: 11px; color: var(--faint); margin: 0; }
+.pbody .dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px dashed var(--faint); display: inline-block; margin-right: 6px; vertical-align: -1px; }
+.pbody .dot.ok { background: var(--ink); border: 1.5px solid var(--ink); }
+.pbody .dot.ng { border-color: var(--ink); }
+.ngline { margin: 2px 0; font-size: 12.5px; }
+.warn { color: var(--ink); font-weight: 500; }
+.note.warn, .notice.warn { border-left: 2px solid var(--ink); padding-left: 8px; }
+.rrow small { display: block; font-size: 10.5px; color: var(--muted); }
+.rrow select, #pAgent { width: 100%; }
+.pfoot { border-top: 1px solid var(--line); padding: 10px 16px 14px; display: grid; gap: 6px; }
+.fbtns { display: flex; flex-wrap: wrap; gap: 6px; }
+.fbtns button { font: inherit; font-size: 12.5px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 9px; padding: 5px 12px; cursor: pointer; }
+.fbtns button:hover:not(:disabled) { border-color: var(--ink); }
+.fbtns button.primary { background: var(--strong); color: var(--on-strong); border-color: var(--strong); }
+.fbtns button:disabled { opacity: .45; cursor: not-allowed; }
+.notice { margin: 0; font-size: 12px; }
+.pre.custom { cursor: default; }
+.panetabs { display: none; }
 @media (max-width: 1180px) {
-  .app, .app.noside { grid-template-columns: minmax(280px, 360px) minmax(0, 1fr); }
+  .app, .app.noside { grid-template-columns: var(--chat-w, minmax(280px, 360px)) minmax(0, 1fr); }
+  #splitSide { display: none; }
   .app.chatonly, .app.chatonly.noside { grid-template-columns: minmax(0, 1fr); }
   .side, .app.noside .side { display: none; }
   .app.sideopen .side { display: flex; visibility: visible; position: fixed; inset: 0 auto 0 0; width: min(300px, 86vw);
     z-index: 60; box-shadow: 0 0 40px rgb(0 0 0 / .25); }
   .app.sideopen .scrim { display: block; position: fixed; inset: 0; z-index: 55; background: rgb(0 0 0 / .3); }
 }
+/* さらに狭い画面: 「チャット」と「作業記録」を切り替えて全面に出す（隠すだけなので、入力中の文と購読はそのまま） */
 @media (max-width: 820px) {
-  .app, .app.noside { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 70vh; height: auto; }   /* 中身の幅で画面からはみ出さない */
-  .chatpane { border-right: none; border-bottom: 1px solid var(--line); max-height: 60vh; }
+  .app, .app.noside, .app.chatonly, .app.chatonly.noside { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .app:not(.chatonly) .panetabs { display: flex; gap: 4px; padding: 6px 12px; border-bottom: 1px solid var(--line); grid-row: 1; }
+  .panetabs button { flex: 1; border: 1px solid var(--line); background: var(--bg); border-radius: 9px; padding: 5px; cursor: pointer; }
+  .panetabs button[aria-selected="true"] { background: var(--strong); color: var(--on-strong); border-color: var(--strong); }
+  .chatpane, .tele { grid-row: 2; grid-column: 1; }
+  .chatpane { border-right: none; padding: 8px 12px 12px; }
+  .app.chatonly .chatpane { grid-row: 1 / -1; }
+  .app:not(.chatonly):not(.show-tele) .tele { display: none; }
+  .app.show-tele:not(.chatonly) .chatpane { display: none; }
+  #splitChat { display: none; }
+  .setpanel { width: 100vw; border-left: none; }
 }
 
 /* 流れの図（エージェントのフロー）。ノードの位置は決まっていて、今いるノードが光り、線の上を点が流れる */

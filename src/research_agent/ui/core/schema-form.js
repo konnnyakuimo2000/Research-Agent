@@ -44,7 +44,8 @@ export function fieldsHtml(schema, values) {
     const v = name in (values || {}) ? coerce(schema, name, values[name]) : d[name];
     const title = esc(s.title || name), id = `set-${esc(name)}`;
     const range = s.minimum != null || s.maximum != null ? `${s.minimum ?? ""}〜${s.maximum ?? ""}` : "";
-    const hint = [s.description, range && `範囲 ${range}`].filter(Boolean).map(esc).join(" · ");
+    const shown = (x) => (s.type === "boolean" ? (x ? "はい" : "いいえ") : Array.isArray(x) ? x.join("・") || "なし" : x);
+    const hint = [s.description, `既定 ${shown(d[name])}`, range && `範囲 ${range}`].filter(Boolean).map(esc).join(" · ");
     let input;
     switch (kindOf(s)) {
       case "bool": input = `<input type="checkbox" id="${id}" data-name="${esc(name)}"${v ? " checked" : ""}>`; break;
