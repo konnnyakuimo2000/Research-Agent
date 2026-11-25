@@ -93,3 +93,21 @@ def test_the_name_the_user_answered_becomes_the_subject():
     assert out["target"] and out["target"]["label"] == "伊藤雄一"
     # 対象が決まったので、同じ名字の別の先生（伊藤晴祥）のページは読む一覧に入らない
     assert WEB[0].url in out["reading_list"] and WEB[1].url not in out["reading_list"]
+
+
+def test_pages_queued_before_the_subject_was_decided_are_dropped_when_they_name_someone_else():
+    n = Nodes(Settings(llm_base_url="http://llm.test/v1", llm_model="m", llm_api_key="k", searxng_url="http://s.test"),
+              AnsweredLLM())
+    other = "https://raweb1.jm.aoyama.ac.jp/aguhp/KgApp/k05/resid/S000236/861"
+    unknown = "https://example.org/no-title"
+    state = {"request": "青学の伊藤先生について", "clarifications": ["伊藤雄一"], "candidates": [], "searched": [],
+             "tier1_searched": True, "reading_list": [other, unknown], "priority_urls": [other],
+             "pages": {other: "研究者情報 - 伊藤 一成 | 青山学院大学"},
+             "decision": {"action": "search", "query": "青山学院大学 伊藤雄一 教授"}}
+    with patch.object(nodes_mod.wikimedia, "search_entities", return_value=[]), \
+            patch.object(nodes_mod.wikimedia, "get_entities", return_value={}), \
+            patch.object(nodes_mod.searxng, "web_search", return_value=searxng.WebSearchResponse(results=WEB)):
+        out = n.search(state)
+    assert out["target"]["label"] == "伊藤雄一"
+    assert other not in out["reading_list"] and other not in out["priority_urls"]   # 別の伊藤先生のページは外す
+    assert unknown in out["reading_list"] and WEB[0].url in out["reading_list"]     # 題名が分からないもの・本人のものは残す

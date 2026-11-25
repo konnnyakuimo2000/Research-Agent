@@ -23,7 +23,7 @@ from research_agent.agent import query_plan
 from research_agent.agent import reprints
 from research_agent.agent import telemetry
 from research_agent.agent.guard import check_decision, has_choices, is_ambiguous, pages_to_read
-from research_agent.agent.page_choice import choose_pages
+from research_agent.agent.page_choice import choose_pages, keep_for_target
 from research_agent.agent.report import (SourceTable, aspect_headings, assemble, cited_db_records, collect_sources,  # noqa: F401
                                          drop_sentences_with, images_section, infeasible_report, sources_text,
                                          strip_program_sections, unsupported_names, _image_lines)
@@ -305,9 +305,15 @@ class Nodes:
                     result["unresponsive"] = sorted(set(result["unresponsive"] + found.unresponsive))
                 result["tier1_searched"] = True
             # 上の Tier から読む。Tier 5（転載・まとめ）は読まない
-            result["reading_list"] = by_tier(state.get("reading_list", []) + urls)
+            earlier = state.get("reading_list", [])
+            if current and not state.get("target"):
+                # この検索で対象が決まった: 決まる前に入れた、別の人・物のページ（題名に対象の名前がない）は読まない
+                earlier = keep_for_target(earlier, pages, names_for_match)
+                result["priority_urls"] = keep_for_target(state.get("priority_urls", []), pages, names_for_match)
+            result["reading_list"] = by_tier(earlier + urls)
             if choice.priority is not None:
-                result["priority_urls"] = choice.priority
+                result["priority_urls"] = (keep_for_target(choice.priority, pages, names_for_match)
+                                           if current and not state.get("target") else choice.priority)
             # この検索で初めて見つかった、対象のページの数（次の検索を選ぶときの「空振り」の判定に使う）
             result.update(query_plan.harvest(state, web.results, current["label"] if current else "",
                                              {**decision, "query": query}, choice.new_relevant))

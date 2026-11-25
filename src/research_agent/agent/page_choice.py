@@ -33,6 +33,13 @@ def relevant_results(results: Iterable, names: list[str]) -> list:
     return [w for w in results if not names or mentions(f"{w.title} {w.snippet}", names)]
 
 
+def keep_for_target(urls: list[str], titles: dict[str, str], names: list[str]) -> list[str]:
+    """対象が決まる前に読む一覧へ入れたページのうち、題名が対象の名前を含まないものを外す（題名が分からないものは残す）。
+    「青学の伊藤先生」で、答えを聞く前の検索で入れた別の伊藤先生（伊藤一成・伊藤晴祥）のページを、対象を
+    伊藤雄一に決めた後も読んで、その事実を報告に入れていた（2026-11-25）。"""
+    return [u for u in urls if not titles.get(u) or mentions(titles[u], names)]
+
+
 def choose_pages(state: dict, found: dict, results: list, decision: dict, names: list[str]) -> PageChoice:
     """state は検索の前の状態、found はこの検索で分かったこと（summary_url・official_urls）。"""
     read = {canonical(p["url"]) for p in state.get("pages_read", [])}
