@@ -167,6 +167,19 @@ class Nodes:
         except Exception as e:  # noqa: BLE001
             errors.append(f"wikidata(get): {e}")
             info = {e.id: e for e in entities}
+        if person and info:
+            # 人を指す依頼（「青学の伊藤先生」）では、人（P31 = Q5）でない項目を候補にも対象にもしない。
+            # 前は同じ名前の小惑星「伊藤」が、Wikipedia の記事の多さで対象に選ばれていた
+            try:
+                people = wikimedia.humans(list(info))
+            except Exception as e:  # noqa: BLE001 - 確かめられなければ、名前だけの項目は対象にしない
+                errors.append(f"wikidata(humans): {e}")
+                people = set()
+            if dropped := [i for i in info if i not in people]:
+                errors.append(f"non-human entities dropped: {dropped}")
+            info = {i: e for i, e in info.items() if i in people}
+            chosen = [i for i in chosen if i in info]
+            target_id = target_id if target_id in info else ""
         candidates = rank([as_candidate(info[i]) for i in chosen if i in info])[:MAX_CANDIDATES] \
             or state.get("candidates", [])
         target = state.get("target") or (as_candidate(info[target_id]) if target_id in info else None)
@@ -726,8 +739,9 @@ class Nodes:
         else:
             answer_text = answer   # 選択肢にない内容（例:「川のほうです」）→ 次の検索で対象を探す
             target = state.get("target")
-            if target and not mentions(answer, [target["label"]]):
-                # 決めた対象（九州大学）と違うことを答えた（「松田泰治」）→ 対象と、それで集めたものを捨てて決め直す
+            if target and not names_target(answer, target):
+                # 決めた対象（九州大学）と違うことを答えた（「松田泰治」）→ 対象と、それで集めたものを捨てて決め直す。
+                # 答えが対象の名前を含むだけ（対象「伊藤」に「伊藤雄一」）では、同じ対象とみなさない
                 result.update(forget_target())
         result["clarifications"] = state.get("clarifications", []) + [answer_text]
         result["trace"] = [{"node": "ask_user", "question": question, "answer": answer,
@@ -832,6 +846,17 @@ def confirm_target(state: AgentState, answer: str) -> dict:
                 "clarifications": state.get("clarifications", []) + [f"{t['label']}（{t['description']}）で合っている"]}
     # 違う対象だった: 集めた事実は別の対象のものなので捨て、対象を決め直す
     return {"ambiguity_asked": True, "clarifications": state.get("clarifications", []) + [answer], **forget_target()}
+
+
+def names_target(answer: str, target: Candidate) -> bool:
+    """答えが、決めた対象そのものを指しているか。答えが対象の名前・説明の中に収まるときだけ（「伊藤」「小惑星」）。
+    答えのほうが長い（対象「伊藤」に「伊藤雄一」）なら、別のもの（もっと絞った名前）を答えている。"""
+    a = _ANSWER_TAIL.sub("", normalize(answer).strip("。、 ")).strip("。、 ")
+    return bool(a) and mentions(f"{target.get('label', '')} {target.get('description', '')}", [a])
+
+
+# 答えの終わりの決まり文句（「東京タワーのことです」→「東京タワー」）
+_ANSWER_TAIL = re.compile(r"(のこと)?(です|でお願いします|をお願いします|で合っています|で合ってます|で大丈夫です)?[。！!]*$|の(方|ほう)(です)?$")
 
 
 def is_clue_entity(e: wikimedia.Entity, person: str, clues: list[str]) -> bool:

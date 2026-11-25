@@ -103,7 +103,11 @@ def test_an_answer_about_someone_else_drops_the_wrong_target():
     out = ask(state, "松田泰治")
     assert out["target"] is None and out["verified"] == [] and out["pages_read"] == [] and out["images"] == []
     assert out["clarifications"] == ["松田泰治"]
-    kept = ask(state, "九州大学の工学部の先生です")                         # 対象の名前を含む答えは、前の対象を残す
+    # 対象の名前を含むだけの答え（もっと絞った説明）は、前の対象を残さない（2026-11-25 の伊藤先生: 対象「伊藤」に
+    # 「伊藤雄一」と答えても小惑星のままだった）。前はこの答えで九州大学を残していた
+    narrowed = ask(state, "九州大学の工学部の先生です")
+    assert narrowed["target"] is None
+    kept = ask(state, "九州大学のことです")                                 # 対象そのものを指す答えは、前の対象を残す
     assert "target" not in kept
 
 

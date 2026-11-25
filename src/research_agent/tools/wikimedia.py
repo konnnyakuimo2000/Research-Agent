@@ -80,6 +80,26 @@ def get_entities(ids: list[str], timeout: float = 30.0) -> dict[str, Entity]:
     }
 
 
+HUMAN = "Q5"
+
+
+def humans(ids: list[str], timeout: float = 30.0) -> set[str]:
+    """項目のうち、人（P31 = Q5）であるものの id。人を指す依頼で、同じ名前の小惑星・姓・地名などを
+    候補にしないために使う（2026-11-25「青学の伊藤先生」で、小惑星「伊藤」を対象にしていた）。"""
+    if not ids:
+        return set()
+    r = http.get(WIKIDATA_API, params={"action": "wbgetentities", "ids": "|".join(ids[:50]), "props": "claims",
+                                       "format": "json"}, timeout=timeout)
+    r.raise_for_status()
+    out = set()
+    for eid, e in r.json().get("entities", {}).items():
+        for c in (e.get("claims") or {}).get("P31", []):
+            if ((c.get("mainsnak") or {}).get("datavalue") or {}).get("value", {}).get("id") == HUMAN:
+                out.add(eid)
+                break
+    return out
+
+
 def summary_for_entity(entity_id: str, timeout: float = 30.0) -> WikiSummary | None:
     """Wikidata の項目に対応する Wikipedia 記事の冒頭（日本語優先、なければ英語）を返す。"""
     r = http.get(

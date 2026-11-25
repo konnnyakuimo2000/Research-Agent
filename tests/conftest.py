@@ -14,7 +14,9 @@ def no_external_lookups():
          patch("research_agent.agent.nodes.wikimedia.official_sites", return_value=[]), \
          patch("research_agent.agent.nodes.images.related_images", return_value=[]), \
          patch("research_agent.agent.nodes.images.commons_license", return_value=""), \
-         patch("research_agent.agent.nodes.wikimedia.summary_for_entity", return_value=None):
+         patch("research_agent.agent.nodes.wikimedia.summary_for_entity", return_value=None), \
+         patch("research_agent.agent.nodes.wikimedia.humans", side_effect=lambda ids: set(ids)):
+        # 人かどうか（P31 = Q5）は、明示しない限りすべて人として扱う（人でない項目を外す動きは、そのテストで決める）
         yield
     http.clear_cache()
 
