@@ -28,7 +28,7 @@ from research_agent.agent.report import (SourceTable, aspect_headings, assemble,
                                          unconfirmed_sources,  # noqa: F401
                                          drop_sentences_with, images_section, infeasible_report, sources_text,
                                          strip_program_sections, unsupported_names, _image_lines)
-from research_agent.agent.names import mentions, same_name
+from research_agent.agent.names import abbreviations_in, mentions, same_name
 from research_agent.agent.quotes import normalize, quote_in_text
 from research_agent.agent.state import (DOMINANCE_RATIO, MAX_CANDIDATES, MAX_FEATURES, MAX_IMAGE_CHECKS,
                                     MAX_IMAGE_FETCHES, MAX_REF_DEPTH, MAX_REFERENCE_IMAGES,
@@ -209,7 +209,8 @@ class Nodes:
                 subject = ""                    # 抜粋にもない名前は使わない。抜粋にある名前なら、そのまま使う
         # 根拠は依頼文と、利用者の答え（「松田泰治」）から探す。前は答えた後にこの道を通らなかったので、
         # Wikidata にない人（大学の先生の多く）は、名前を答えても対象が決まらなかった
-        context = " ".join([state["request"]] + state.get("clarifications", []))
+        # 略称（「九大」）は正式な名前（「九州大学」）でも照らし合わせる
+        context = " ".join([state["request"]] + state.get("clarifications", []) + abbreviations_in(state["request"]))
         # 利用者が答えた名前（「伊藤雄一」）なら、それ自体が根拠（前は名前だけの根拠を認めず、答えても対象が決まらないまま
         # 同じ名字の別の先生のページも読み、3 人の事実を 1 つの報告に混ぜていた。2026-11-25 の伊藤先生）
         if (not target and not state.get("target") and subject

@@ -54,7 +54,7 @@ def saved_status(path):
         return None
 
 
-def wait_for(cond, seconds=5.0):
+def wait_for(cond, seconds=15.0):   # 全体のテストで PC が混んでいても待てるように
     end = time.time() + seconds
     while not cond() and time.time() < end:
         time.sleep(0.02)

@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
-from research_agent.agent.names import mentions
+from research_agent.agent.names import mentions, sibling_only
 from research_agent.tiers import by_tier, canonical
 from research_agent.tools import fetch
 
@@ -29,15 +29,18 @@ class PageChoice:
 
 
 def relevant_results(results: Iterable, names: list[str]) -> list:
-    """題名・抜粋に対象の名前がある検索結果（names が空なら、すべて）。"""
-    return [w for w in results if not names or mentions(f"{w.title} {w.snippet}", names)]
+    """題名・抜粋に対象の名前がある検索結果（names が空なら、すべて）。題名の名前が、どれも番号の続く別の物
+    （「はやぶさ」に対する「はやぶさ2」）だけなら外す（前は「はやぶさ」の調査で、はやぶさ2 のページも読んでいた）。"""
+    return [w for w in results if not names or (mentions(f"{w.title} {w.snippet}", names)
+                                                and not (names and sibling_only(w.title, names[0])))]
 
 
 def keep_for_target(urls: list[str], titles: dict[str, str], names: list[str]) -> list[str]:
     """対象が決まる前に読む一覧へ入れたページのうち、題名が対象の名前を含まないものを外す（題名が分からないものは残す）。
     「青学の伊藤先生」で、答えを聞く前の検索で入れた別の伊藤先生（伊藤一成・伊藤晴祥）のページを、対象を
     伊藤雄一に決めた後も読んで、その事実を報告に入れていた（2026-11-25）。"""
-    return [u for u in urls if not titles.get(u) or mentions(titles[u], names)]
+    return [u for u in urls if not titles.get(u) or (mentions(titles[u], names)
+                                                     and not (names and sibling_only(titles[u], names[0])))]
 
 
 def choose_pages(state: dict, found: dict, results: list, decision: dict, names: list[str]) -> PageChoice:

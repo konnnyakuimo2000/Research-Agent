@@ -100,6 +100,39 @@ _TITLE_SEP = re.compile(r"\s+[-–—:：|｜]\s+|[|｜【】「」]")
 _PAREN = re.compile(r"[（(][^）)]*[）)]")
 
 
+def sibling_only(text: str, name: str) -> bool:
+    """文の中の対象の名前が、どれもすぐ後に数字が続く形（「はやぶさ」に対する「はやぶさ2」「はやぶさ2号」）だけか。
+    続きの番号の付いた別の物（後継機・2 号機）の題名を、対象の題名とみなさないために使う。空白は残して見るので、
+    「東京タワー 333m」は数字が続く形に入らない。名前自体が数字で終わるとき（「はやぶさ2」）は見ない。"""
+    n = unicodedata.normalize("NFKC", name).lower().strip()
+    if not n or n[-1].isdigit():
+        return False
+    t = unicodedata.normalize("NFKC", text).lower()
+    hits = [m.end() for m in re.finditer(re.escape(n), t)]
+    return bool(hits) and all(i < len(t) and t[i].isdigit() for i in hits)
+
+
+# よく使う大学の略称（依頼の「九大」を、ページの「九州大学」と照らし合わせるため）
+ABBREVIATIONS = {
+    "東大": "東京大学", "京大": "京都大学", "阪大": "大阪大学", "九大": "九州大学", "北大": "北海道大学",
+    "東北大": "東北大学", "名大": "名古屋大学", "東工大": "東京工業大学", "一橋": "一橋大学", "筑波大": "筑波大学",
+    "神大": "神戸大学", "広大": "広島大学", "岡大": "岡山大学", "千葉大": "千葉大学", "早大": "早稲田大学",
+    "慶大": "慶應義塾大学", "青学": "青山学院大学", "明大": "明治大学", "立教": "立教大学", "法政": "法政大学",
+    "中大": "中央大学", "上智": "上智大学", "同志社": "同志社大学", "立命": "立命館大学", "関学": "関西学院大学",
+    "関大": "関西大学", "東京理科大": "東京理科大学", "理科大": "東京理科大学", "芝浦工大": "芝浦工業大学",
+}
+
+
+def expand_abbreviation(word: str) -> str:
+    """略称なら正式な名前（「九大」→「九州大学」）。略称でなければそのまま。"""
+    return ABBREVIATIONS.get(word.strip(), word)
+
+
+def abbreviations_in(text: str) -> list[str]:
+    """文に出てくる略称の、正式な名前（「九大の松田教授」→ ["九州大学"]）。"""
+    return [full for short, full in ABBREVIATIONS.items() if short in text and full not in text]
+
+
 def same_name(a: str, b: str) -> bool:
     return normalize(a).lower() == normalize(b).lower()
 

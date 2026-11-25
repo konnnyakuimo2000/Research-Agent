@@ -32,7 +32,7 @@ KYUDAI_C = {"id": "Q1188786", "label": "九州大学", "description": "福岡県
 # ---- 1・2. 人の名前で引き、手がかりの項目を人の候補にしない ----
 
 def test_person_requests_are_split_into_the_name_and_the_clues():
-    assert query_plan.request_person(REQUEST) == ("松田", ["九大"])
+    assert query_plan.request_person(REQUEST) == ("松田", ["九大", "九州大学"])   # 略称には正式な名前も足す
     assert query_plan.request_person("東京大学の山田教授を調べて") == ("山田", ["東京大学"])
     assert query_plan.request_person("青山学院大学の歴史について") == ("", [])     # 人でない依頼は分けない
     assert query_plan.request_person("富士山について調べて") == ("", [])

@@ -18,7 +18,7 @@ import re
 from urllib.parse import urlparse
 
 from research_agent.agent.coverage import MISSING, WEAK
-from research_agent.agent.names import mentions, name_variants
+from research_agent.agent.names import mentions, name_variants, expand_abbreviation
 from research_agent.tiers import tier_of
 
 MIN_SCORE = 0.3          # これ未満の候補しかなければ検索しない
@@ -65,7 +65,10 @@ def request_person(request: str) -> tuple[str, list[str]]:
         m = _HONORIFIC.search(p)
         if m and len(p) - len(m.group(0)) >= 2:
             name = p[:m.start()]
-            return name, [q for q in request_parts(request) if q != name]
+            clues = [q for q in request_parts(request) if q != name]
+            # 略称の手がかり（「九大」）には、正式な名前（「九州大学」）も足す（Wikidata の九州大学も手がかりとして外す）
+            clues += [expand_abbreviation(q) for q in clues if expand_abbreviation(q) != q]
+            return name, clues
     return "", []
 
 
@@ -76,8 +79,9 @@ def request_query(request: str) -> str:
     「教授」などの職名は残す。
     """
     core = _ABOUT_TAIL.sub("", _REQUEST_TAIL.sub("", request.strip()))
-    school = bool(_SCHOOL.search(core))
-    words = list(request_parts(request))
+    school = bool(_SCHOOL.search(core)) or any(expand_abbreviation(p) != p for p in request_parts(request))
+    # 略称は正式な名前で検索する（「九大」より「九州大学」のほうが、大学のページに当たる）
+    words = [expand_abbreviation(p) for p in request_parts(request)]
     for p in re.split(r"[の、,，\s　]+", core):
         m = _HONORIFIC.search(p.strip())
         if not m:
