@@ -47,6 +47,8 @@ def assemble(state: AgentState, body: str, table: SourceTable) -> str:
                  + " / ".join(f"「{f['text']}」[{number[f['source']]}]" for f in c["facts"] if f["source"] in number)
                  for c in state["conflicts"]]
         parts.append("\n### 出典どうしの食い違い\n" + "\n".join(lines))
+    if unsure := unconfirmed_section(state, table):
+        parts.append(unsure)
     # 確かめきれなかった観点（出典がない・出典が弱い）は、1 つの節にまとめて、読む人の言葉で書く。
     # 時間の上限で調査をやめたときは、その理由も同じ節に書く（何も読めなかったのに理由が分からない報告にしない）
     stop = f"- {state['stop_note']}" if state.get("stop_note") else ""
@@ -165,6 +167,27 @@ def images_section(state: AgentState) -> str:
         for img in references:
             lines += _image_lines(img, name)
     return "\n".join(lines).rstrip()
+
+
+def unconfirmed_sources(state: AgentState) -> set[str]:
+    """本人のものか確かめていない分野別データベースの資料（著者名が同じだけ）の canonical URL。"""
+    return {k for k, r in state.get("db_records", {}).items() if r.get("identity") == "unconfirmed"}
+
+
+def unconfirmed_section(state: AgentState, table: SourceTable) -> str:
+    """本人のものか確かめていない資料を、本文とは別に並べる（本文には書かない）。"""
+    unsure = unconfirmed_sources(state)
+    seen, lines = set(), []
+    for s in table.sources:
+        key = canonical(s["url"])
+        if key in unsure and key not in seen:
+            seen.add(key)
+            lines.append(f"- {s['title'].split(': ', 1)[-1]} [{table.number[s['url']]}]")
+    if not lines:
+        return ""
+    return ("\n### 同じ名前の人の資料（本人のものか確かめていない）\n"
+            "著者名が同じというだけで見つかった資料です。所属などで本人のものか確かめられていないため、本文には含めていません。\n"
+            + "\n".join(lines))
 
 
 def cited_db_records(state: AgentState, table: SourceTable) -> list[dict]:

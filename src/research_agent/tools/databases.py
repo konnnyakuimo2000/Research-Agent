@@ -47,6 +47,7 @@ class Record:
     kind: str = ""              # 構造化データの種類（書誌情報・所蔵品情報・研究者情報など。出典に添える）
     fields: list[tuple[str, str]] = field(default_factory=list)   # 根拠に使った項目名と値
     holder_url: str = ""        # 所蔵元・提供元の個別ページ（ジャパンサーチの所蔵元へのリンクなど）
+    identity: str = ""          # 人の資料で、本人のものか: confirmed（ORCID などで確かめた）・unconfirmed（名前が同じだけ）
 
 
 @lru_cache(maxsize=1)
@@ -204,9 +205,9 @@ def match_papers(records: list[Record], name: str, statuses: list[dict]) -> list
         if own and same_name and all(a["orcid"] and a["orcid"] != own for a in same_name):
             continue                                       # 同名の別人（ORCID が違う）
         if own and any(a["orcid"] == own for a in same_name):
-            who = f"同定: ORCID iD {own} が著者に登録されている"
+            who, identity = f"同定: ORCID iD {own} が著者に登録されている", "confirmed"
         else:
-            who = "同定: 未確定（ORCID・所属などの手掛かりがない）"
+            who, identity = "同定: 未確定（ORCID・所属などの手掛かりがない）", "unconfirmed"
         lines = r.text.split("\n") + [who]
         fields = list(r.fields)
         if cr:
@@ -216,7 +217,7 @@ def match_papers(records: list[Record], name: str, statuses: list[dict]) -> list
         if doi:
             seen.add(doi)
         out.append(Record(r.url, r.title, "\n".join(lines), r.database, r.images, source_id=r.source_id, kind=r.kind,
-                          fields=fields, holder_url=cr["url"] if cr else r.holder_url))
+                          fields=fields, holder_url=cr["url"] if cr else r.holder_url, identity=identity))
     if checked or failed:
         statuses.append(_status("Crossref", "failed" if failed and not checked else "ok", failed, checked))
     return out
@@ -343,8 +344,12 @@ def ndl(name: str, by_creator: bool = False) -> list[Record]:
                                       ("刊行年", issued.strip()), ("掲載", desc.removeprefix("掲載誌：") if desc.startswith("掲載誌") else ""),
                                       ("シリーズ", series), ("資料 ID", source_id)) if v]
         text = "国立国会図書館サーチの書誌情報（資料 1 冊）\n" + "\n".join(f"{k}: {v}" for k, v in fields)
+        if by_creator:
+            # 著者名で引いた資料は、名前が同じだけの別の人のものかもしれない（所属などで確かめられない）
+            text += "\n同定: 未確定（著者名が同じというだけで、本人の資料か確かめていない）"
         out.append(Record(link, f"国立国会図書館サーチ: {title}", text, "国立国会図書館サーチ",
-                          source_id=source_id, kind="書誌情報", fields=fields))
+                          source_id=source_id, kind="書誌情報", fields=fields,
+                          identity="unconfirmed" if by_creator else ""))
         if len(out) >= MAX_ITEMS:
             break
     return out

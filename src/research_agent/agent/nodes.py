@@ -24,7 +24,8 @@ from research_agent.agent import reprints
 from research_agent.agent import telemetry
 from research_agent.agent.guard import check_decision, has_choices, is_ambiguous, pages_to_read, time_over
 from research_agent.agent.page_choice import choose_pages, keep_for_target
-from research_agent.agent.report import (SourceTable, aspect_headings, assemble, cited_db_records, collect_sources,  # noqa: F401
+from research_agent.agent.report import (SourceTable, aspect_headings, assemble, cited_db_records, collect_sources,
+                                         unconfirmed_sources,  # noqa: F401
                                          drop_sentences_with, images_section, infeasible_report, sources_text,
                                          strip_program_sections, unsupported_names, _image_lines)
 from research_agent.agent.names import mentions, same_name
@@ -472,6 +473,7 @@ class Nodes:
             db_records[canonical(r.url)] = {"url": r.url, "title": r.title, "text": r.text, "database": r.database,
                                             "source_id": getattr(r, "source_id", ""), "kind": getattr(r, "kind", ""),
                                             "holder_url": getattr(r, "holder_url", ""),
+                                            "identity": getattr(r, "identity", ""),
                                             "fields": [list(f) for f in getattr(r, "fields", [])]}
             db_images += [{**im, "database": r.database} for im in r.images]
         log.info("databases: %s -> %d records %s (%.1fs)", state["subject_type"], len(records), failed,
@@ -777,7 +779,11 @@ class Nodes:
             # 時間の上限で調査をやめた: 読めなかったページの数を、報告の「調べきれなかったこと」に書く
             state = {**state, "stop_note": f"時間の上限（{setting(state, 'max_seconds')} 秒。報告をまとめる時間を含む）に"
                                             f"達したため、見つけたページのうち {unread} 件を読めなかった"}
-        materials = prompts.respond_user(state, table.sources)
+        # 本人のものか確かめていない資料（著者名が同じだけ）の事実は、本文の材料にしない。別の節にプログラムが並べる
+        # （2026-11-25「松田教授」: 同じ名前の別の人の画像処理の論文を、本人の業績として書いていた）
+        unsure = unconfirmed_sources(state)
+        materials = prompts.respond_user({**state, "verified": [k for k in state.get("verified", [])
+                                                                if canonical(k["source"]) not in unsure]}, table.sources)
         body = strip_program_sections(self._llm("report", state).chat_text(prompts.RESPOND_SYSTEM, materials))
         if bad := unsupported_names(body, materials):
             # 材料にない名前（読みから作った英語名など）を書いた → 1 回だけ書き直させ、それでも残る文は除く

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from research_agent.agent.state import AgentState
-from research_agent.tiers import UrlNumbers
+from research_agent.tiers import UrlNumbers, canonical
 
 FEASIBILITY_SYSTEM = """あなたは、調査の依頼が「公開されている情報（Web・百科事典・公的機関・論文など）」で調べられるかを、
 調査を始める前に判定する役です。
@@ -428,5 +428,7 @@ def respond_user(state: AgentState, sources: list[dict]) -> str:
             f"{c['topic']}: " + " / ".join(f"{f['text']} [{number[f['source']]}]" for f in c["facts"]
                                          if f["source"] in number)
             for c in state.get("conflicts", [])],
-        "出典のタイトル": [s["title"] for s in sources],
+        # 本人のものか確かめていない資料（著者名が同じだけ）の題名は渡さない（別の節にプログラムが並べる）
+        "出典のタイトル": [s["title"] for s in sources
+                       if (state.get("db_records", {}).get(canonical(s["url"])) or {}).get("identity") != "unconfirmed"],
     }, ensure_ascii=False, indent=1)
