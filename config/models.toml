@@ -43,42 +43,9 @@ max_concurrency = 2    # 研究室のサーバーは共有で同時に 4 件ま�
 context_tokens = 32768
 extra_body = { chat_template_kwargs = { enable_thinking = false } }   # 思考モード OFF（応答速度を優先）
 
-# ---- Web API のモデル（鍵を .env に書くと使えるようになる。なければ一覧に「使えない」と出る）----
-# 選ぶと、依頼文と読んだページの本文がその会社に送られる
-
-[[models]]
-id = "claude-opus"
-title = "Claude Opus 5.5"
-provider = "anthropic"
-api_key_env = "ANTHROPIC_API_KEY"
-model = "claude-opus-5-5"
-capabilities = ["json_schema", "vision"]
-max_concurrency = 4
-context_tokens = 1000000
-price = { input_per_mtok = 4.0, output_per_mtok = 20.0, cache_read_per_mtok = 0.20 }
-fallbacks = "default"   # 安全のための判定で断られたとき、同じ呼び出しの中で別のモデルが答える（その分の費用は概算）
-
-[[models]]
-id = "claude-haiku"
-title = "Claude Haiku 5.5"
-provider = "anthropic"
-api_key_env = "ANTHROPIC_API_KEY"
-model = "claude-haiku-5-5"
-capabilities = ["json_schema", "vision"]
-max_concurrency = 4
-context_tokens = 1000000
-price = { input_per_mtok = 0.10, output_per_mtok = 0.50, cache_read_per_mtok = 0.01 }   # 入力 10 万トークンまでの値段
-
-# OpenAI の Web API の例（OpenAI 互換なので provider = "openai"。モデル名と値段は使うものに合わせる）
-# [[models]]
-# id = "openai"
-# title = "OpenAI"
-# provider = "openai"
-# base_url = "https://api.openai.com/v1"
-# api_key_env = "OPENAI_API_KEY"
-# model_env = "OPENAI_MODEL"
-# external = true
-# capabilities = ["json_schema", "vision"]
-# max_concurrency = 4
-# drop_params = ["temperature"]
-# price = { input_per_mtok = 0.0, output_per_mtok = 0.0 }
+# ---- Web API のモデル ----
+# 外部の Web API のモデル（Claude・OpenAI・Google Gemini・OpenRouter）は、ここには書かない。画面の 設定 › API キー で鍵を
+# 入れると、窓口が鍵の形から提供元を判別し、その提供元のモデル一覧で確かめてから、選んだモデルを足す（modelgw/keys.py）。
+# 鍵は窓口だけが持つ（MODEL_KEYS_FILE。既定は runs/.secrets/model_keys.json）。
+# 決まった Web API のモデルをここに書きたいときは、上の lab-qwen と同じ形で、provider・base_url・api_key_env・price・
+# external = true を書く（鍵がなければ「使えない」として一覧に出る）。

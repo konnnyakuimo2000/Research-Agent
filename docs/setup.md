@@ -76,25 +76,23 @@ curl -X POST http://localhost:8100/api/runs -H "Content-Type: application/json" 
 選べるモデルは `GET /api/models` で見られる。役割に要る能力（画像の確認なら `vision`）がないモデルは、始める前に断る。
 どの依頼でどのモデルを使ったかは、一覧（`GET /api/runs` の `models`）に残る。エージェントを足すときはサービスを足して `agents.toml` に 1 項目、モデルを足すときは `models.toml` に 1 項目足す。
 
-### Web API のモデル（Claude・OpenAI）
+### Web API のモデル（Claude・OpenAI・Google Gemini・OpenRouter）
 
-`models.toml` には Claude（`claude-opus`・`claude-haiku`）が入っている。`.env` に `ANTHROPIC_API_KEY` を書いて、
-`docker compose up -d model-gateway` で窓口を立ち上げ直すと使えるようになる（鍵がなければ、一覧に「使えない」と出る）。
-OpenAI は `models.toml` の例のコメントを外し、`OPENAI_API_KEY`・`OPENAI_MODEL` と値段を書く。
+画面（http://localhost:8100/ui/）の左下の **設定 › API キー** に鍵を入れて「判別して確かめる」を押す。
 
-- **外部に送られる**: Web API のモデルを選ぶと、依頼文と読んだページの本文がその会社に送られる（一覧の `external: true`）
-- **費用**: 値段（`price`）を書いたモデルは、呼び出しごとに費用を数える。上限は `models.toml` の `[limits]`
-  （既定は 1 日 $5・1 つの調査 $1）。上限に達すると、値段のあるモデルへは送らずに断る（研究室のモデルは止めない）。
-  送る前に確かめるので、同時に送っている分だけ少し超えることがある
-- 今日の費用とモデルごとの使用量は窓口の `GET /v1/usage`、1 つの調査の費用はゲートウェイの `GET /api/runs/{id}/usage`
+1. 窓口が鍵の形から提供元を判別する（`sk-ant-` = Anthropic、`sk-or-` = OpenRouter、`AIza` = Google Gemini、`sk-` = OpenAI）
+2. その提供元のモデル一覧 API に鍵を送り、受け付けられるか確かめる（受け付けられなければ理由を出し、何も残さない）
+3. 会話に使えるモデルの一覧から、足すモデルを選ぶ。能力（画像・JSON スキーマ）と値段（100 万トークンあたりのドル）は、
+   提供元が教えるもの（OpenRouter）と既知の値（Claude）は入っている。分からないものは提供元の資料を見て入れる（無料なら 0）
+4. 「足す」と、**モデル** のタブで選べるようになる。鍵は「外す」で外せる（そのモデルを選んでいた役割は窓口の既定に戻る）
+
+- **鍵の置き場**: モデルの窓口だけが持つ（`runs/.secrets/model_keys.json`。git の外）。画面には末尾 4 文字だけを返す
+- **外部に送られる**: 足したモデルを選ぶと、依頼文と読んだページの本文がその会社に送られる（一覧の `external: true`）
+- **費用**: 呼び出しごとに費用を数える。上限は `models.toml` の `[limits]`（既定は 1 日 $5・1 つの調査 $1）。
+  上限に達すると、値段のあるモデルへは送らずに断る（研究室のモデルは止めない）。送る前に確かめるので、同時に送っている分だけ少し超えることがある
+- 今日の費用とモデルごとの使用量は 設定 › 接続と使用量（窓口の `GET /v1/usage`）、1 つの調査の費用はゲートウェイの `GET /api/runs/{id}/usage`
 - 記録は `runs/model_spend.json`（立ち上げ直しても今日の分を覚えている）
-
-研究室のモデルと Claude で同じ依頼を比べる例:
-
-```sh
-curl -X POST http://localhost:8100/api/runs -H "Content-Type: application/json" \
-  -d '{"request": "...", "agent": "research", "models": {"decide": "claude-haiku", "extract": "claude-haiku", "vision": "claude-haiku", "report": "claude-haiku"}}'
-```
+- 決まった Web API のモデルを `models.toml` に書く使い方も残している（書き方は `models.toml` の末尾のコメント）
 
 ## 4. 初期設定
 

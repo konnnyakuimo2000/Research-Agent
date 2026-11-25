@@ -6,6 +6,7 @@
 - 記録には、選び直していない役割も含めて「実際に使う対応」を残す（あとで比べるため）
 - 使えないモデル（Web API の鍵がないなど）は、選び直しにも役割の既定にも使えない
 - 調査ごとの費用は、窓口の /v1/usage/runs/{エージェントの依頼の id} から読む
+- Web API の鍵（画面の 設定 › API キー）は、窓口の /v1/keys にそのまま渡す。鍵はゲートウェイに残さない
 """
 
 from __future__ import annotations
@@ -22,6 +23,14 @@ CACHE_SECONDS = 30.0
 
 class ModelChoiceError(ValueError):
     """選べないモデル（ない・能力が足りない・ない役割）。"""
+
+
+class GatewayReply(Exception):
+    """窓口が断った・つながらない（status と detail を画面へ返す）。"""
+
+    def __init__(self, status: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status, self.detail = status, detail
 
 
 @dataclass
@@ -67,6 +76,24 @@ class ModelCatalog:
             return r.json()
         except (httpx.HTTPError, ValueError):
             return None
+
+    def keys(self, method: str, path: str = "", body: dict | None = None) -> dict:
+        """窓口の /v1/keys を呼ぶ。鍵を変えたら、モデルの一覧を読み直す。"""
+        try:
+            headers = {"Authorization": f"Bearer {self.key}"} if self.key else {}
+            r = (self.http or httpx.Client(trust_env=False, timeout=10)).request(
+                method, self.url.rstrip("/") + "/keys" + path, headers=headers, json=body, timeout=40)
+        except httpx.HTTPError as e:
+            raise GatewayReply(503, f"モデルの窓口につながりません（{type(e).__name__}）") from None
+        try:
+            data = r.json()
+        except ValueError:
+            data = {}
+        if r.status_code >= 400:
+            raise GatewayReply(r.status_code, str(data.get("detail") or f"モデルの窓口が断りました（{r.status_code}）"))
+        if method != "GET" and not path.endswith("/check"):
+            self.get(refresh=True)
+        return data
 
     def run_usage(self, agent_run: str) -> dict | None:
         """1 つの調査の費用（つながらなければ None）。"""

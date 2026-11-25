@@ -16,6 +16,8 @@
                                            POST /api/runs の models で選び直せる
     GET  /api/runs/{id}/usage              その調査の費用（モデルの窓口が数えたもの）
     GET  /api/models/status                モデルごとの接続の状態・使用量、今日の費用と上限
+    GET|POST /api/models/keys, POST /api/models/keys/check, DELETE /api/models/keys/{id}
+                                           Web API の鍵（モデルの窓口の /v1/keys へ渡す。鍵は残さない）
     GET  /api/favicon, /api/image          サイトのアイコンと画像（ゲートウェイが取得して配る）
 OpenAI 互換の入口: /v1/models, /v1/chat/completions（openai_compat）
 
@@ -37,7 +39,7 @@ from research_agent import assets
 from research_agent.agentkit import protocol
 from research_agent.gateway import openai_compat
 from research_agent.gateway.core import Gateway, RunBusy, Unavailable, flat_events
-from research_agent.gateway.models import ModelCatalog, ModelChoiceError
+from research_agent.gateway.models import GatewayReply, ModelCatalog, ModelChoiceError
 from research_agent.gateway.registry import AgentError, Registry
 from research_agent.gateway.settings import SettingsError
 from research_agent.gateway.store import RunStore
@@ -151,6 +153,34 @@ def create_app(registry: Registry | None = None, runs_dir: Path | None = None, a
         if value is None:
             return {"available": False, "models": {}, "spend": {}}
         return {"available": True, **value}
+
+    def keys_call(method: str, path: str = "", body: dict | None = None) -> dict:
+        if gw.catalog is None:
+            raise HTTPException(status_code=503, detail="モデルの窓口を使っていないため、鍵を入れられません")
+        try:
+            return gw.catalog.keys(method, path, body)
+        except GatewayReply as e:
+            raise HTTPException(status_code=e.status, detail=e.detail) from None
+
+    @app.get("/api/models/keys")
+    def api_keys(authorization: str | None = Header(default=None)) -> dict:
+        check_key(authorization)
+        return keys_call("GET")
+
+    @app.post("/api/models/keys/check")
+    def api_keys_check(body: dict, authorization: str | None = Header(default=None)) -> dict:
+        check_key(authorization)
+        return keys_call("POST", "/check", {"key": str(body.get("key", ""))})
+
+    @app.post("/api/models/keys")
+    def api_keys_add(body: dict, authorization: str | None = Header(default=None)) -> dict:
+        check_key(authorization)
+        return keys_call("POST", "", {"key": str(body.get("key", "")), "models": body.get("models") or []})
+
+    @app.delete("/api/models/keys/{entry_id}")
+    def api_keys_remove(entry_id: str, authorization: str | None = Header(default=None)) -> dict:
+        check_key(authorization)
+        return keys_call("DELETE", "/" + entry_id)
 
     @app.get("/api/runs/{run_id}/usage")
     def api_run_usage(run_id: str, authorization: str | None = Header(default=None)) -> dict:

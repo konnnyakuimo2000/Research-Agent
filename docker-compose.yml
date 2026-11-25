@@ -103,10 +103,8 @@ services:
       VL_MODEL: ${VL_MODEL:-qwen3.8-27b}
       VL_API_KEY: ${VL_API_KEY:-dummy}
       MODEL_GATEWAY_KEY: ${MODEL_GATEWAY_KEY:-}
-      # Web API の鍵（窓口だけが持つ。なければ、そのモデルは「使えない」として一覧に出る）
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      # Web API の鍵は、画面の 設定 › API キー で入れる（窓口だけが持つ。runs/.secrets/model_keys.json）
+      MODEL_KEYS_FILE: /app/runs/.secrets/model_keys.json
       MODEL_SPEND_FILE: /app/runs/model_spend.json   # 費用の記録（立ち上げ直しても今日の分を覚えておく）
     volumes:
       - ./runs:/app/runs

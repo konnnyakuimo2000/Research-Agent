@@ -11,6 +11,7 @@ import { ctx } from "../core/ctx.js";
 import { changed, coerce, defaults, fieldsHtml, hasFields, readFields } from "../core/schema-form.js";
 import { answeredMeta, choiceLabel, emptyChoice, fmtUsd, gatewayStatusHtml, invalidChoices, loadModelStatus, modelOf,
   modelTabHtml, mTitle, resolveModels, roleList, usesExternal, wireModelTab } from "./models.js";
+import { keysTabHtml, loadKeys, wireKeysTab } from "./keys.js";
 
 // 画面の他の部分とつなぐところ（app.js が入れる）
 export const hooks = { agentChanged() {}, summaryChanged() {}, startNew() {}, resetWidths() {}, widthsText: () => "" };
@@ -19,7 +20,7 @@ const schemaOf = (agent) => ctx.AGENTS[agent]?.settings_schema || {};
 const presetsOf = (agent) => ctx.AGENTS[agent]?.presets || {};
 const clone = (x) => JSON.parse(JSON.stringify(x));
 const sameValues = (a, b) => JSON.stringify(Object.entries(a).sort()) === JSON.stringify(Object.entries(b).sort());
-const TABS = [["research", "調査"], ["models", "モデル"], ["status", "接続と使用量"], ["display", "表示"]];
+const TABS = [["research", "調査"], ["models", "モデル"], ["keys", "API キー"], ["status", "接続と使用量"], ["display", "表示"]];
 
 function loadSaved(agent) {
   const s = store.get("settings:" + agent, null) || {}, m = store.get("models:" + agent, null) || {};
@@ -102,6 +103,7 @@ export function openPanel(which = "research", from = null, run = null) {
   panel.hidden = false; $("panelScrim").hidden = false;
   render(); $("setTitle").focus();
   if (tab === "status") refreshStatus();
+  if (tab === "keys") loadKeys(render);
 }
 export function closePanel() {
   if (panel.hidden) return;
@@ -120,13 +122,14 @@ function render() {
   $("setTitle").textContent = tab === "run" ? "履歴の詳細" : "設定";
   $("setTabs").innerHTML = tabs.map(([id, label]) => `<button type="button" role="tab" data-tab="${id}" aria-selected="${tab === id}">${esc(label)}</button>`).join("");
   $("setTabs").querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => {
-    tab = b.dataset.tab; notice = ""; render(); if (tab === "status") refreshStatus();
+    tab = b.dataset.tab; notice = ""; render(); if (tab === "status") refreshStatus(); if (tab === "keys") loadKeys(render);
   }));
   const focused = document.activeElement?.id;
   const body = $("setBody");
-  body.innerHTML = { research: researchHtml, models: () => modelTabHtml(draft.models, draft.agent), status: statusHtml, display: displayHtml, run: () => runHtml(runView) }[tab]();
+  body.innerHTML = { research: researchHtml, models: () => modelTabHtml(draft.models, draft.agent), keys: keysTabHtml, status: statusHtml, display: displayHtml, run: () => runHtml(runView) }[tab]();
   if (tab === "research") wireResearch(body);
   if (tab === "models") wireModelTab(body, draft.models, render);
+  if (tab === "keys") wireKeysTab(body, render);
   if (tab === "status") { body.querySelector("#recheck")?.addEventListener("click", refreshStatus); fillRunCost(); }
   if (tab === "display") body.querySelector("#resetWidths")?.addEventListener("click", () => { hooks.resetWidths(); notice = "幅を既定に戻した"; render(); });
   if (tab === "run") fillAnswered(runView);

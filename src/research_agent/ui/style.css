@@ -505,3 +505,19 @@ button:focus-visible, .node:focus-visible, input:focus-visible { outline: 2px so
 .fnode { will-change: transform, opacity; transform-origin: 0 24px; }
 .fly2 { position: absolute; left: 0; top: 0; z-index: 30; width: 9px; height: 9px; border-radius: 3px; background: var(--ink); pointer-events: none;
   transition: transform .8s cubic-bezier(.45,.05,.2,1), opacity .8s ease-in; }
+/* 設定 › API キー */
+.keyrow { display: flex; gap: 6px; }
+.keyrow input, #keyFilter { flex: 1; min-width: 0; font: inherit; font-size: 13px; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+  border-radius: 8px; padding: 5px 8px; font-family: var(--font-data); }
+#keyFilter { width: 100%; font-family: var(--font-text); }
+.keyrow button, .linkbtn { font: inherit; font-size: 12.5px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 8px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
+.keyrow button:hover, .linkbtn:hover { border-color: var(--ink); }
+.keymodels { display: grid; gap: 4px; max-height: 46vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; padding: 6px; }
+.kmodel { border-radius: 8px; padding: 4px 6px; }
+.kmodel.on { background: var(--surface); }
+.kpick { display: flex; gap: 8px; align-items: center; cursor: pointer; font-size: 13px; }
+.kpick small { color: var(--muted); }
+.kdetail { display: grid; gap: 4px; padding: 4px 0 4px 24px; font-size: 12px; }
+.kdetail small { color: var(--muted); }
+.kcaps { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.kprice input { width: 80px; font: inherit; font-size: 12px; font-family: var(--font-data); color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 2px 5px; }

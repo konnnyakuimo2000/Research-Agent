@@ -8,6 +8,10 @@
     GET  /v1/usage/runs/{id}     1 つの調査の費用と、役割ごとに実際に応答したモデル（answered。エージェントが
                                  X-Model-Budget に入れた調査の id・X-Model-Role に入れた役割ごと）
     GET  /health                 モデルごとにつながるか（20 秒覚えておく）
+    GET  /v1/keys                画面から入れた Web API の鍵（提供元・末尾 4 文字・足したモデル。鍵そのものは返さない）
+    POST /v1/keys/check          {key} → 鍵の形から提供元を判別し、その提供元のモデル一覧で確かめる（残さない）
+    POST /v1/keys                {key, models: [{model, title, capabilities, price}]} → 鍵を残し、選んだモデルを足す
+    DELETE /v1/keys/{id}         鍵と、その鍵のモデルを外す
 
 - provider が "anthropic" のモデル（Claude）は、変換の部品（anthropic_provider）を通して送る。応答は OpenAI の形
 - 値段（price）を書いたモデルは、呼び出しごとに費用を数える（応答に x_model_cost を付ける）。
@@ -21,7 +25,8 @@
 - モデルが持たない能力を使う依頼（画像を読めないモデルに画像、JSON スキーマに沿えないモデルに json_schema）は、
   送る前に 400 で断る
 - MODEL_GATEWAY_KEY を設定すると、/v1/* に鍵を求める
-- 設定ファイルは MODELS_CONFIG（なければ config/models.toml）
+- 設定ファイルは MODELS_CONFIG（なければ config/models.toml）。画面から入れた鍵は MODEL_KEYS_FILE
+  （なければ runs/.secrets/model_keys.json。modelgw/keys.py）
 """
 
 from __future__ import annotations
@@ -42,6 +47,7 @@ from openai import APIConnectionError, APIStatusError
 from research_agent.config import Settings
 from research_agent.llm import LLM
 from research_agent.modelgw.anthropic_provider import AnthropicChat, UnsupportedRequest
+from research_agent.modelgw.keys import PROVIDERS, KeyProblem, KeyStore, clean_choice, list_models as provider_models
 from research_agent.modelgw.registry import ModelSpec, Usage, load_catalog
 from research_agent.modelgw.spend import Spend
 
@@ -129,23 +135,29 @@ def needs_of(body: dict) -> set[str]:
 def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = None, default: str | None = None,
                key: str | None = None, http_client: httpx.Client | None = None,
                roles: dict[str, str] | None = None, limits: dict | None = None, spend_file: Path | None = None,
-               anthropic_http: object = None) -> FastAPI:
-    """anthropic_http は Claude の部品が使う HTTP の部品（httpx2.Client。テストで偽の応答を返すため）。"""
+               anthropic_http: object = None, keys_file: Path | None = None) -> FastAPI:
+    """anthropic_http は Claude の部品が使う HTTP の部品（httpx2.Client。テストで偽の応答を返すため）。
+    keys_file は画面から入れた鍵の置き場（None なら残さない）。"""
     if specs is None:
         from research_agent.config import REPO_ROOT
         catalog = load_catalog(models_path or Path(os.getenv("MODELS_CONFIG", "") or REPO_ROOT / "config" / "models.toml"))
         specs, default, roles, limits = catalog.specs, catalog.default, catalog.roles, catalog.limits
         spend_file = spend_file or Path(os.getenv("MODEL_SPEND_FILE", "") or REPO_ROOT / "runs" / "model_spend.json")
+        keys_file = keys_file or Path(os.getenv("MODEL_KEYS_FILE", "") or REPO_ROOT / "runs" / ".secrets" / "model_keys.json")
     default = default or specs[0].id
     roles = dict(roles or {})
     key = os.getenv("MODEL_GATEWAY_KEY", "") if key is None else key
     models = {s.id: Model(s, http_client, anthropic_http) for s in specs}
     # 接続の確認に使う HTTP の部品。窓口がモデルを呼ぶのと同じもので、やり直しをせずに 1 回だけ確かめる
     probe = http_client or httpx.Client(trust_env=False)
+    keys = KeyStore(keys_file)
+    for s in keys.specs():                           # 画面から入れた鍵のモデル（設定ファイルの id と重なれば設定ファイルが優先）
+        models.setdefault(s.id, Model(s, http_client, anthropic_http))
     spend = Spend(limits, spend_file)
     app = FastAPI(title="model-gateway")
     app.state.models = models
     app.state.spend = spend
+    health_cache: dict = {}
 
     def check(authorization: str | None) -> None:
         if key and authorization != f"Bearer {key}":
@@ -159,7 +171,7 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
             return models[roles.get(name[5:]) or default]
         if name in models:
             return models[name]
-        for m in models.values():                                   # 上流のモデル名でも受ける（qwen3.8-27b など）
+        for m in list(models.values()):                             # 上流のモデル名でも受ける（qwen3.8-27b など）
             if m.spec.model == name:
                 return m
         raise HTTPException(status_code=404, detail=f"モデル {name} はありません")
@@ -208,6 +220,58 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
         check(authorization)
         return {"object": "list", "default": default, "roles": roles,
                 "data": [m.spec.public(m.spec.id == default) for m in models.values()]}
+
+    # ---- 画面から入れる Web API の鍵 ----
+    def key_error(e: KeyProblem) -> HTTPException:
+        return HTTPException(status_code=400, detail=str(e))
+
+    @app.get("/v1/keys")
+    def keys_list(authorization: str | None = Header(default=None)) -> dict:
+        check(authorization)
+        return {"keys": keys.public(), "providers": ["anthropic", "openai", "gemini", "openrouter"]}
+
+    @app.post("/v1/keys/check")
+    def keys_check(body: dict, authorization: str | None = Header(default=None)) -> dict:
+        """判別して確かめるだけ（残さない）。鍵は記録にも応答にも出さない。"""
+        check(authorization)
+        try:
+            provider, found = provider_models(str(body.get("key", "")), probe)
+        except KeyProblem as e:
+            raise key_error(e) from None
+        return {"provider": provider, "provider_title": PROVIDERS[provider]["title"], "models": found}
+
+    @app.post("/v1/keys")
+    def keys_add(body: dict, authorization: str | None = Header(default=None)) -> dict:
+        check(authorization)
+        key = str(body.get("key", "")).strip()
+        try:
+            provider, found = provider_models(key, probe)              # 残す前にもう一度確かめる
+            offered = {m["model"] for m in found}
+            chosen = [clean_choice(m) for m in body.get("models") or []]
+            if not chosen:
+                raise KeyProblem("足すモデルを 1 つ以上選んでください")
+            missing = [m["model"] for m in chosen if m["model"] not in offered]
+            if missing:
+                raise KeyProblem(f"この鍵では使えないモデルです: {', '.join(missing)}")
+        except KeyProblem as e:
+            raise key_error(e) from None
+        entry = keys.add(key, provider, chosen, set(models))
+        for s in keys.specs(entry):
+            models[s.id] = Model(s, http_client, anthropic_http)
+        health_cache.clear()
+        log.info("added %s key %s with %d models", provider, entry["id"], len(chosen))
+        return next(e for e in keys.public() if e["id"] == entry["id"])
+
+    @app.delete("/v1/keys/{entry_id}")
+    def keys_remove(entry_id: str, authorization: str | None = Header(default=None)) -> dict:
+        check(authorization)
+        entry = keys.remove(entry_id)
+        if entry is None:
+            raise HTTPException(status_code=404, detail="その鍵はありません")
+        for m in entry["models"]:
+            models.pop(m["id"], None)
+        health_cache.clear()
+        return {"id": entry_id, "removed": [m["id"] for m in entry["models"]]}
 
     @app.get("/v1/usage")
     def usage(authorization: str | None = Header(default=None)) -> dict:
@@ -334,8 +398,6 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
 
         return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
-    health_cache: dict = {}
-
     @app.get("/health")
     def health() -> dict:
         """モデルごとに、今つながるかを素早く確かめる（画面のモデルの窓・エージェントの接続の表示）。
@@ -361,7 +423,7 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
             except Exception as e:  # noqa: BLE001 - つながらない理由を画面に出す
                 return {**out, "ok": False, "error": type(e).__name__}
 
-        value = {"ok": True, "default": default, "models": {k: check_model(m) for k, m in models.items()}}
+        value = {"ok": True, "default": default, "models": {k: check_model(m) for k, m in list(models.items())}}
         health_cache.update(at=time.time(), value=value)
         return value
 

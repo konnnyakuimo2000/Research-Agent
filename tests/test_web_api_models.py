@@ -194,12 +194,12 @@ def test_models_without_a_key_are_listed_but_refused(tmp_path, monkeypatch):
     assert not {s.id: s for s in load_catalog(p).specs}["claude"].unavailable
 
 
-def test_the_shipped_models_toml_lists_web_api_models(monkeypatch):
+def test_the_shipped_models_toml_does_not_assume_a_provider(monkeypatch):
+    # Web API のモデルは画面の 設定 › API キー で足す（tests/test_api_keys.py）。設定ファイルは特定の会社を前提にしない
     from research_agent.config import REPO_ROOT
     monkeypatch.setenv("VL_BASE_URL", "http://x/v1")
     catalog = load_catalog(REPO_ROOT / "config" / "models.toml")
-    claude = [s for s in catalog.specs if s.provider == "anthropic"]
-    assert claude and all(s.external and s.price for s in claude)
+    assert [s.id for s in catalog.specs] == ["lab-qwen"] and not any(s.unavailable for s in catalog.specs)
     assert catalog.limits.get("daily_usd") and catalog.limits.get("run_usd")
 
 

@@ -102,6 +102,7 @@ export function modelTabHtml(choice, agentId) {
       ${rows.map((r) => `<tr><td>${esc(r.title)}</td><td>${esc(mTitle(r.id))}${modelOf(r.id)?.external ? `<span class="ext">外部</span>` : ""}</td>
         <td>${r.why ? `${esc(mTitle(r.asked))} は使えない（${esc(r.why)}）。代わりにこのモデル` : r.asked ? "選んだモデル" : "窓口の既定"}</td></tr>`).join("")}
     </tbody></table>
+    <p class="since">外部の Web API のモデル（Claude・OpenAI・Gemini・OpenRouter）は、「API キー」で鍵を入れると足せます。</p>
     ${external.length ? `<p class="note warn">外部のモデル（${esc([...new Set(external.map((r) => mTitle(r.id)))].join("・"))}）に、依頼文と読んだページの本文が送られます。料金: ${esc([...new Set(external.map((r) => `${mTitle(r.id)} ${priceText(modelOf(r.id))}`))].join(" / "))}</p>` : ""}`;
 }
 export function wireModelTab(root, choice, onChange) {
