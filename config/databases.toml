@@ -60,6 +60,17 @@ auth = "不要（利活用 API）"
 limits = "回数の上限は未確認（利用規約: https://jpsearch.go.jp/en/about/terms）。1 回の調査で 1 回だけ呼ぶ。画像の利用条件は項目ごとの権利表示に従う"
 
 [[databases]]
+name = "e-Stat（国勢調査の人口）"
+function = "estat_population"
+types = ["場所・建造物", "組織", "その他"]
+when = ["人口", "世帯"]
+auth = "appId（アプリケーション ID）が必要。e-Stat の API 機能の利用登録で取得する"
+limits = "回数の上限は利用規約に従う（https://www.e-stat.go.jp/api/agreement/）。1 回の調査で 2 回（表の情報と値）"
+requires_env = "ESTAT_APPID"
+# 使う統計表 ID（国勢調査の市区町村の人口の表）。e-Stat の統計表を見て設定する（空なら使わない）
+stats_data_id = ""
+
+[[databases]]
 name = "researchmap"
 function = "researchmap"
 types = ["人物"]

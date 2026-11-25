@@ -88,7 +88,8 @@ def test_only_databases_the_request_asks_for_are_queried():
         photo = real_lookup("場所・建造物", "東京タワー", "東京タワーの昔の写真")
         general = real_lookup("場所・建造物", "東京タワー", "東京タワーについて調べて")
         no_request = real_lookup("場所・建造物", "東京タワー")
-    assert height[2] == [] and {s["name"]: s["state"] for s in height.statuses} == {
+    assert height[2] == [] and {s["name"]: s["state"] for s in height.statuses
+                                if s["name"] in ("国立国会図書館サーチ", "ジャパンサーチ")} == {
         "国立国会図書館サーチ": "skipped", "ジャパンサーチ": "skipped"}
     assert photo[2] == ["ジャパンサーチ"]
     assert general[2] == ["国立国会図書館サーチ", "ジャパンサーチ"]

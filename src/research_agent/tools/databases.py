@@ -106,30 +106,120 @@ def orcid(name: str) -> list[Record]:
             lines.append("所属機関: " + "、".join(r["institution-name"]))
         lines.append(f"ORCID iD: {oid}")
         out.append(Record(f"https://orcid.org/{oid}", f"ORCID: {lines[1].removeprefix('氏名: ')}", "\n".join(lines),
-                          "ORCID"))
+                          "ORCID", source_id=oid, kind="研究者情報",
+                          fields=[("氏名", lines[1].removeprefix("氏名: ")), ("所属機関", "、".join(r.get("institution-name") or [])),
+                                  ("ORCID iD", oid)]))
     return out[:MAX_ITEMS]
 
 
+def normalize_doi(doi: str) -> str:
+    doi = (doi or "").strip().lower()
+    return re.sub(r"^(https?://(dx\.)?doi\.org/|doi:)", "", doi)
+
+
+def _doi_of(it: dict) -> str:
+    """CiNii の項目の DOI（prism:doi か、dc:identifier のうち DOI の型のもの）。"""
+    if it.get("prism:doi"):
+        return normalize_doi(it["prism:doi"])
+    ids = it.get("dc:identifier") or []
+    for x in ids if isinstance(ids, list) else [ids]:
+        if isinstance(x, dict) and "doi" in str(x.get("@type", "")).lower():
+            return normalize_doi(x.get("@value", ""))
+    return ""
+
+
 def cinii(name: str) -> list[Record]:
-    """CiNii Research で、対象が著者の文献（業績）。"""
+    """CiNii Research で、対象が著者の文献（業績）。1 件 = 文献 1 本（個別のページ・DOI があれば DOI）。"""
     data = _json("https://cir.nii.ac.jp/opensearch/all",
                  {"q": name, "format": "json", "count": 20, "appid": os.getenv("CINII_APPID", "")})
-    lines = []
+    out = []
     for it in data.get("items") or []:
         creators = it.get("dc:creator") or []
         creators = [creators] if isinstance(creators, str) else creators
         if not any(mentions(c, [name]) for c in creators):
             continue
-        kind = it.get("dc:type", "")
-        date = it.get("prism:publicationDate", "")
-        where = it.get("prism:publicationName", "")
-        detail = "、".join(x for x in (kind, where, date) if x)
-        lines.append(f"- {it.get('title', '')}（{detail}）著者: {'、'.join(creators[:5])}")
-    if not lines:
-        return []
-    text = f"CiNii Research で「{name}」が著者に含まれる文献\n" + "\n".join(lines[:10])
-    return [Record(f"https://cir.nii.ac.jp/all?q={quote(name)}", f"CiNii Research: {name} の文献", text,
-                   "CiNii Research")]
+        url = it.get("@id") or (it.get("link") or {}).get("@id") or ""
+        if not url:
+            continue                                       # どの文献かを特定できない
+        doi = _doi_of(it)
+        fields = [(k, v) for k, v in (("論文名", it.get("title", "")), ("著者", "、".join(creators[:8])),
+                                      ("掲載誌", it.get("prism:publicationName", "")),
+                                      ("公開日", it.get("prism:publicationDate", "")), ("種類", it.get("dc:type", "")),
+                                      ("DOI", doi)) if v]
+        out.append(Record(url, f"CiNii Research: {it.get('title', '')}",
+                          "CiNii Research の書誌情報（文献 1 本）\n" + "\n".join(f"{k}: {v}" for k, v in fields),
+                          "CiNii Research", source_id=doi or url.rsplit("/", 1)[-1], kind="論文の書誌情報", fields=fields))
+        if len(out) >= 5:
+            break
+    return out
+
+
+def crossref(doi: str) -> dict | None:
+    """Crossref に登録された書誌（論文名・著者と ORCID・公開日・掲載誌）。登録がなければ None。"""
+    try:
+        msg = _json(f"https://api.crossref.org/works/{quote(doi, safe='/')}").get("message") or {}
+    except Exception as e:  # noqa: BLE001
+        if "404" in str(e):
+            return None
+        raise
+    def names(a: dict) -> list[str]:
+        """名と姓の両方の順（日本語は姓が先）。"""
+        g, f = a.get("given") or "", a.get("family") or ""
+        return [x for x in (f"{g} {f}".strip(), f"{f}{g}", f"{f} {g}".strip(), a.get("name", "")) if x]
+    authors = [{"name": (names(a) or [""])[0], "names": names(a),
+                "orcid": (a.get("ORCID") or "").rsplit("/", 1)[-1],
+                "affiliation": "、".join(x.get("name", "") for x in a.get("affiliation") or [])}
+               for a in msg.get("author") or []]
+    parts = ((msg.get("published") or msg.get("issued") or {}).get("date-parts") or [[]])[0]
+    return {"doi": normalize_doi(msg.get("DOI", doi)), "title": "".join(msg.get("title") or []),
+            "container": "".join(msg.get("container-title") or []), "authors": authors,
+            "published": "-".join(str(p) for p in parts if p), "url": f"https://doi.org/{normalize_doi(msg.get('DOI', doi))}"}
+
+
+def match_papers(records: list[Record], name: str, statuses: list[dict]) -> list[Record]:
+    """CiNii の論文を Crossref で照合し、本人の論文だけを残す（同じ DOI は 1 本）。
+
+    - 対象の ORCID iD が 1 つに決まっているとき（ORCID の記録が 1 件）: Crossref の著者のうち名前が合う人の ORCID が
+      それと違えば、同名の別人の論文として外す
+    - 手掛かり（ORCID・所属）がなければ外さず、「同定: 未確定」と書く
+    - CiNii と Crossref が同じ DOI を返したら、論文 1 本として扱い、照合に使った双方の出典（CiNii のページ・DOI のページ）を残す
+    """
+    orcids = [r.source_id for r in records if r.database == "ORCID" and r.source_id]
+    own = orcids[0] if len(orcids) == 1 else ""
+    out, seen, checked, failed = [], set(), 0, ""
+    for r in records:
+        if r.kind != "論文の書誌情報":
+            out.append(r)
+            continue
+        doi = dict(r.fields).get("DOI", "")
+        if doi and doi in seen:
+            continue                                       # 同じ論文（同じ DOI）は 1 本
+        cr = None
+        if doi:
+            try:
+                cr, checked = crossref(doi), checked + 1
+            except Exception as e:  # noqa: BLE001
+                failed = type(e).__name__
+        same_name = [a for a in (cr or {}).get("authors", []) if any(mentions(n, [name]) for n in a.get("names") or [a["name"]])]
+        if own and same_name and all(a["orcid"] and a["orcid"] != own for a in same_name):
+            continue                                       # 同名の別人（ORCID が違う）
+        if own and any(a["orcid"] == own for a in same_name):
+            who = f"同定: ORCID iD {own} が著者に登録されている"
+        else:
+            who = "同定: 未確定（ORCID・所属などの手掛かりがない）"
+        lines = r.text.split("\n") + [who]
+        fields = list(r.fields)
+        if cr:
+            lines += [f"Crossref の書誌（同じ DOI）: {cr['title']}（{cr['container']}、{cr['published']}）",
+                      f"照合に使った出典: {r.url} と {cr['url']}"]
+            fields += [("Crossref の論文名", cr["title"]), ("Crossref の公開日", cr["published"]), ("DOI のページ", cr["url"])]
+        if doi:
+            seen.add(doi)
+        out.append(Record(r.url, r.title, "\n".join(lines), r.database, r.images, source_id=r.source_id, kind=r.kind,
+                          fields=fields, holder_url=cr["url"] if cr else r.holder_url))
+    if checked or failed:
+        statuses.append(_status("Crossref", "failed" if failed and not checked else "ok", failed, checked))
+    return out
 
 
 # --- 生物 -----------------------------------------------------------------
@@ -259,8 +349,65 @@ def ndl_creator(name: str) -> list[Record]:
     return ndl(name, by_creator=True)
 
 
+# --- 統計（e-Stat） -----------------------------------------------------------
+
+ESTAT = "https://api.e-stat.go.jp/rest/3.0/app/json"
+# 秘匿・欠測などの記号は 0 にしない（そのまま「記号と意味」で書く）
+_SPECIAL = re.compile(r"^[-x…*.]+$|^\*+$|^X$")
+
+
+def _as_list(x) -> list:
+    return x if isinstance(x, list) else [x] if x else []
+
+
+def estat_population(name: str, request: str = "", stats_data_id: str = "") -> list[Record]:
+    """e-Stat の統計表から、対象の地域・時点の人口（国勢調査の市区町村の人口など。統計表 ID は config の stats_data_id）。
+
+    依頼に年（「2020年」）があればその時点、なければ表のいちばん新しい時点。統計表 ID・表題・地域・時点・集計区分・
+    単位・値を一緒に持つ。秘匿値・欠測値（「-」「x」など）は 0 にせず、記号と注記のまま返す。"""
+    app = os.getenv("ESTAT_APPID", "")
+    meta = _json(f"{ESTAT}/getMetaInfo", {"appId": app, "statsDataId": stats_data_id})
+    inf = (meta.get("GET_META_INFO") or {}).get("METADATA_INF") or {}
+    table = inf.get("TABLE_INF") or {}
+    classes = {c.get("@id"): _as_list(c.get("CLASS")) for c in _as_list((inf.get("CLASS_INF") or {}).get("CLASS_OBJ"))}
+    areas = [a for a in classes.get("area", []) if a.get("@name") == name or a.get("@name", "").endswith(name)]
+    if not areas:
+        return []
+    area = areas[0]
+    times = classes.get("time", [])
+    year = re.search(r"(19|20)\d{2}", request or "")
+    time = next((t for t in times if year and year.group(0) in t.get("@name", "") + t.get("@code", "")), None) \
+        or (max(times, key=lambda t: t.get("@code", "")) if times else None)
+    params = {"appId": app, "statsDataId": stats_data_id, "cdArea": area["@code"]}
+    if time:
+        params["cdTime"] = time["@code"]
+    data = (_json(f"{ESTAT}/getStatsData", params).get("GET_STATS_DATA") or {}).get("STATISTICAL_DATA") or {}
+    inf2 = data.get("DATA_INF") or {}
+    notes = {n.get("@char"): n.get("$", "") for n in _as_list(inf2.get("NOTE"))}
+    cats = {k: {c.get("@code"): c.get("@name") for c in v} for k, v in classes.items() if k.startswith("cat") or k == "tab"}
+    out = []
+    title = (table.get("TITLE") or {}).get("$", "") if isinstance(table.get("TITLE"), dict) else str(table.get("TITLE", ""))
+    stat = (table.get("STATISTICS_NAME") or "") if isinstance(table.get("STATISTICS_NAME"), str) else ""
+    for v in _as_list(inf2.get("VALUE")):
+        if v.get("@area") != area["@code"] or (time and v.get("@time") != time["@code"]):
+            continue
+        raw = str(v.get("$", ""))
+        value = f"{raw}（{notes[raw]}）" if raw in notes else (f"{raw}（数値なし）" if _SPECIAL.match(raw) else raw)
+        breakdown = "、".join(cats[k].get(v.get(f"@{k}"), "") for k in sorted(cats) if v.get(f"@{k}"))
+        fields = [(k, x) for k, x in (("統計表 ID", stats_data_id), ("統計", stat), ("表題", title), ("地域", area["@name"]),
+                                      ("時点", (time or {}).get("@name", "")), ("集計区分", breakdown),
+                                      ("単位", v.get("@unit", "")), ("値", value)) if x]
+        out.append(Record(f"https://www.e-stat.go.jp/dbview?sid={stats_data_id}", f"e-Stat: {title or stat} {area['@name']}",
+                          "e-Stat の統計表の値\n" + "\n".join(f"{k}: {x}" for k, x in fields), "e-Stat",
+                          source_id=f"{stats_data_id}:{area['@code']}:{(time or {}).get('@code', '')}", kind="統計表の値",
+                          fields=fields))
+    return out[:MAX_ITEMS]
+
+
 FUNCTIONS = {"orcid": orcid, "cinii": cinii, "inaturalist": inaturalist, "japan_search": japan_search,
-             "ndl": ndl, "ndl_creator": ndl_creator}
+             "ndl": ndl, "ndl_creator": ndl_creator, "estat_population": estat_population}
+# 依頼文や設定（config の項目）も受け取る関数
+_WITH_CONTEXT = {"estat_population"}
 
 
 class LookupResult(tuple):
@@ -299,9 +446,12 @@ def lookup(subject_type: str, name: str, request: str = "") -> LookupResult:
         fn = FUNCTIONS.get(db["function"])
         if not fn:
             continue
+        if db["function"] in _WITH_CONTEXT and not db.get("stats_data_id"):
+            statuses.append(_status(db["name"], "unconfigured", "使う統計表 ID（stats_data_id）が設定されていない"))
+            continue
         used.append(db["name"])
         try:
-            found = fn(name)
+            found = fn(name, request, db.get("stats_data_id", "")) if db["function"] in _WITH_CONTEXT else fn(name)
         except Exception as e:  # noqa: BLE001 - 1 つ使えなくても他を引く。使えなかったことは申告する
             failures.append(f"{db['name']}（{type(e).__name__}）")
             statuses.append(_status(db["name"], "failed", type(e).__name__))
@@ -320,6 +470,11 @@ def lookup(subject_type: str, name: str, request: str = "") -> LookupResult:
                 except Exception as e:  # noqa: BLE001
                     failures.append(f"GBIF（{type(e).__name__}）")
                     statuses.append(_status("GBIF", "failed", type(e).__name__))
+    if any(r.kind == "論文の書誌情報" for r in records):
+        records = match_papers(records, name, statuses)    # 論文は Crossref で照合し、同名の別人・同じ DOI を除く
+        if any(s["name"] == "Crossref" for s in statuses):
+            used.append("Crossref")
+            failures += [f"Crossref（{s['reason']}）" for s in statuses if s["name"] == "Crossref" and s["state"] == "failed"]
     result = LookupResult((records, failures, used))
     result.statuses = statuses
     return result
