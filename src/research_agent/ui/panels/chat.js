@@ -39,7 +39,9 @@ export function renderReport(md) {
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     // Markdown のリンク [文字](URL)（画像の出典など）
     .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (m, label, u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${label}</a>`)
-    .replace(/(^|[^"=])(https?:\/\/[^\s<）)]+)/g, (m, pre, u) => `${pre}<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`)
+    // URL の終わり: 空白・括弧（全角も）。過去の報告の「https://…（Tier 1）」から「（Tier」を URL に含めない。
+    // 「">」の直後（Markdown のリンクとして描いた後）は、もう一度リンクにしない
+    .replace(/(^|[^"=>])(https?:\/\/[^\s<（）()]+)/g, (m, pre, u) => `${pre}<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`)
     .replace(/\[(\d{1,3})\]/g, '<button type="button" class="cite" data-src="$1">$1</button>');
   const out = []; let list = false;
   for (const line of md.split("\n")) {

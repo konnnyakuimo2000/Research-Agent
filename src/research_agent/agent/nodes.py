@@ -387,7 +387,7 @@ class Nodes:
             if meta.get("signature"):
                 # 転載の見分け（6.3）: 先に読んだページとほぼ同じ文章なら、そのページの写しとして記録する
                 if original := reprints.find_original(meta["signature"], signatures):
-                    copies[key] = original
+                    copies[key] = reprints.original_of(original, copies)   # 写しの写しは、原典まで戻して記録する
                 signatures[key] = meta["signature"]
             if meta.get("tier") is not None and meta["tier"] != meta.get("base_tier"):
                 page_tiers[key] = meta["tier"]
@@ -782,7 +782,9 @@ class Nodes:
         if sources:
             parts.append("\n### 出典\n" + sources_text(state, sources))
         answer = "\n".join(parts)
-        telemetry.emitter()("report", answer=answer, sources=[{**s, "host": telemetry.host(s["url"])} for s in sources])
+        # 出典は本文の番号の順（[1] が 1 つ目）。id は成果物の source_id と同じ（s1 = [1]）。画面はこれで番号から資料を開く
+        telemetry.emitter()("report", answer=answer, sources=[{**s, "id": f"s{i}", "host": telemetry.host(s["url"])}
+                                                               for i, s in enumerate(sources, 1)])
         return {"answer": answer, "trace": [{"node": "respond", "answer": answer}]}
 
 
@@ -1039,8 +1041,8 @@ def sources_text(state: AgentState, sources: list[Source]) -> str:
     lines = []
     for i, s in enumerate(sources, 1):
         line = f"[{i}] {s['title']} — {s['url']}"
-        original = copies.get(canonical(s["url"]))
-        if original and original in number and number[original] != i:
+        original = reprints.original_of(s["url"], copies)
+        if canonical(original) != canonical(s["url"]) and original in number and number[original] != i:
             line += f"（[{number[original]}] とほぼ同じ文章）"
         lines.append(line)
     return "\n".join(lines)

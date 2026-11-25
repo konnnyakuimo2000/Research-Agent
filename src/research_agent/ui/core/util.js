@@ -8,7 +8,20 @@ export const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, 
 export const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
 export const tier = (t) => t ? `<span class="tier${t === 1 ? " t1" : ""}">T${t}</span>` : "";
 export const link = (u) => `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer" class="mono">${esc(u)}</a>`;
-export function sameUrl(a, b) { const n = (u) => u.replace(/[?#].*$/, "").replace(/\/$/, ""); return n(a) === n(b); }
+// 同じ資料を指す URL の表記ゆれをそろえた形（サーバーの tiers.canonical と同じ決まり）。
+// #以降・;jsessionid=…・追跡用のパラメータ（utm_* など）だけを外し、ほかのクエリは残す。
+// 前はクエリを丸ごと捨てていたので、?id=1 と ?id=2 を同じ資料とみなし、2 番の出典で 1 番の資料を開いていた
+const TRACKING = /^(srsltid|utm_\w+|gclid|fbclid|yclid|msclkid|mc_cid|mc_eid)$/i;
+export function canonicalUrl(u) {
+  try {
+    const x = new URL(u);
+    let path = x.pathname.replace(/;jsessionid=[^/?]*/i, "");
+    try { path = decodeURI(path); } catch (e) { /* 壊れた符号はそのまま */ }   // %C3%BC と ü をそろえる（%2F は残る）
+    const q = new URLSearchParams([...x.searchParams].filter(([k]) => !TRACKING.test(k))).toString();
+    return `${x.protocol}//${x.host}${path}${q ? "?" + q : ""}`;
+  } catch (e) { return String(u || ""); }
+}
+export const sameUrl = (a, b) => canonicalUrl(a) === canonicalUrl(b);
 // サイトのアイコン（取れなければ頭文字）
 export function icon(h) {
   const letter = esc((h || "?").replace(/^www\./, "")[0]?.toUpperCase() || "?");

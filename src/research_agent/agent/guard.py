@@ -305,9 +305,14 @@ def check_decision(state: AgentState, decision: Decision) -> Decision:
             if fixed:
                 d["guard"] = "名前の綴りを直した（" + "、".join(fixed) + "）"
         if query in state.get("searched", []):
-            fallback = "ask_user" if is_ambiguous(state) and asked < MAX_QUESTIONS else "respond"
-            extra = {"question": build_question(state)} if fallback == "ask_user" else {}
-            return {**d, **extra, "action": fallback, "guard": f"同じ検索（{query}）の繰り返しを防ぐ"}
+            why = f"同じ検索（{query}）の繰り返しを防ぐ"
+            if is_ambiguous(state) and asked < MAX_QUESTIONS:
+                return {**d, "question": build_question(state), "action": "ask_user", "guard": why}
+            # 報告を選んだときと同じ、報告の前の判定に戻す（未読のページ・画像の確認が残っていれば、そちらを先に）。
+            # 前はここで即座に報告していたので、LLM が respond を選ぶか同じ語の search を選ぶかで結果が変わった（再レビュー 3）
+            if not is_ambiguous(state) and not time_over(state) and (step := research_step(state, d)):
+                return {**step, "guard": f"{why}。{step.get('guard', '')}"}
+            return {**d, "action": "respond", "guard": why}
         d["query"] = query
 
     return d

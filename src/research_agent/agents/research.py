@@ -116,21 +116,26 @@ def _describe(node: str, update: object) -> str:
 def result_of(state: dict) -> dict:
     """結果の形（4.4）: 報告と、research/v1 の成果物。"""
     from research_agent.agent.nodes import collect_sources
-    from research_agent.tiers import page_tier
+    from research_agent.tiers import UrlNumbers, page_tier
 
     try:
         sources = collect_sources(state)
     except Exception:  # noqa: BLE001
         sources = []
-    ids = {s["url"]: f"s{i}" for i, s in enumerate(sources, 1)}
+    # 出典 ID は、報告の本文の出典番号と同じ対応表から作る（s3 = 本文の [3]）。表記が違うだけの同じ資料は同じ ID
+    number = UrlNumbers([s["url"] for s in sources])
+
+    def sid(url: str) -> str:
+        return f"s{number[url]}" if url and url in number else ""
+
     facts = [{"id": f"f{i}", "text": f.get("text", ""), "quote": f.get("quote", ""), "aspect": f.get("aspect", ""),
-              "source_id": ids.get(f.get("source", ""), ""), "url": f.get("source", ""), "task_id": ""}
+              "source_id": sid(f.get("source", "")), "url": f.get("source", ""), "task_id": ""}
              for i, f in enumerate(state.get("verified", []), 1)]
     finals = {r.get("url"): r.get("final_url") for r in state.get("pages_read", []) if r.get("final_url")}
-    srcs = [{"id": ids[s["url"]], "url": s["url"], "final_url": finals.get(s["url"], s["url"]), "title": s.get("title", ""),
+    srcs = [{"id": sid(s["url"]), "url": s["url"], "final_url": finals.get(s["url"], s["url"]), "title": s.get("title", ""),
              "tier": s.get("tier") or page_tier(s["url"], state)} for s in sources]
-    imgs = [{"url": i.get("src", ""), "page_url": i.get("page_url", ""), "source_id": ids.get(i.get("page_url", ""), ""), "level": i.get("level", ""),
-             "license": i.get("license", "")} for i in state.get("images", [])]
+    imgs = [{"url": i.get("src", ""), "page_url": i.get("page_url", ""), "source_id": sid(i.get("page_url", "")),
+             "level": i.get("level", ""), "license": i.get("license", "")} for i in state.get("images", [])]
 
     def art(kind: str, title: str, data: object) -> dict:
         return {"id": kind.split(":")[1], "kind": kind, "title": title, "media_type": "application/json", "data": data}

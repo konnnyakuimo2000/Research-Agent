@@ -12,6 +12,7 @@ from typing import TypedDict
 from urllib.parse import urlparse
 
 from research_agent.config import REPO_ROOT
+from research_agent.agent.reprints import original_of
 from research_agent.tiers import canonical, page_tier, tier_of
 
 ASPECTS_FILE = REPO_ROOT / "config" / "aspects.toml"
@@ -135,7 +136,7 @@ def build_coverage(aspects: list[Aspect], verified: list[dict], state: dict | No
     reprints = (state or {}).get("reprints", {})
 
     def original(u: str) -> str:
-        return reprints.get(canonical(u), u)
+        return original_of(u, reprints)          # 転載の連鎖は原典まで戻す（前から持っている状態でも）
 
     rows: list[CoverageRow] = []
     for a in aspects:

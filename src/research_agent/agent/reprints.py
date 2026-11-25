@@ -11,6 +11,8 @@ import re
 import unicodedata
 import zlib
 
+from research_agent.tiers import canonical
+
 SHINGLE = 8              # 文字 8-gram（日本語は語の区切りがないので文字で切る）
 PERMUTATIONS = 64
 THRESHOLD = 0.6          # 見積もったジャカード係数がこれ以上なら転載とみなす
@@ -48,3 +50,21 @@ def find_original(sig: list[int], known: dict[str, list[int]]) -> str | None:
         if s >= score:
             best, score = url, s
     return best
+
+
+def original_of(url: str, reprints: dict[str, str]) -> str:
+    """転載の連鎖をたどった原典（reprints: 写しの canonical → 似ていた先に読んだページ）。
+
+    C が B の写し、B が A の写しと記録されていると、前は C を B として数え、中身は A 1 つなのに
+    「独立した 2 サイト」として網羅表を「確認済み」に上げていた（再レビュー 2）。転載の記録・網羅表・出典一覧で
+    同じこの関数を使う。輪になった記録でも止まる。
+    """
+    seen: set[str] = set()
+    current = url
+    while (key := canonical(current)) not in seen:
+        seen.add(key)
+        nxt = reprints.get(key)
+        if not nxt or canonical(nxt) == key:
+            return current
+        current = nxt
+    return current
