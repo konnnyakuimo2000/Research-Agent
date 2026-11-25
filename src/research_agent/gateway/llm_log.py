@@ -14,7 +14,7 @@ LINE = "=" * 78
 
 
 def _when(ts: float) -> str:
-    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)) if ts else ""
+    return time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(ts)) if ts else ""   # 時間帯も書く（Docker の中は UTC）
 
 
 def render(rec: dict, calls: list[dict], role_titles: dict | None = None) -> str:
