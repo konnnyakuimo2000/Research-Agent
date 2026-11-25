@@ -100,6 +100,11 @@ class Spend:
                 return f"この調査の費用の上限（${run:.2f}）に達しました（${used:.4f}）"
         return ""
 
+    def _trim(self) -> None:
+        if len(self.runs) > KEEP_RUNS:
+            for key in sorted(self.runs, key=lambda k: self.runs[k].get("updated", 0))[:len(self.runs) - KEEP_RUNS]:
+                del self.runs[key]
+
     def add(self, model: str, budget: str | None, usd: float) -> None:
         if usd <= 0:
             return
@@ -111,16 +116,35 @@ class Spend:
                 r["usd"] += usd
                 r["models"][model] = r["models"].get(model, 0.0) + usd
                 r["updated"] = time.time()
-                if len(self.runs) > KEEP_RUNS:
-                    for key in sorted(self.runs, key=lambda k: self.runs[k].get("updated", 0))[:len(self.runs) - KEEP_RUNS]:
-                        del self.runs[key]
+                self._trim()
+            self._save()
+
+    def answered(self, budget: str | None, role: str, model: str, upstream: str, ok: bool = True) -> None:
+        """この調査の呼び出しに、実際に応答したモデル（窓口のモデルの id と、上流が名乗ったモデル名）を役割ごとに数える。
+        値段のないモデルも数える（画面の「応答したモデル」。割り当てではなく、実際に答えたもの）。
+        ok=False は、送ったが失敗した呼び出し（断った呼び出しは数えない）。"""
+        if not budget:
+            return
+        with self.lock:
+            r = self.runs.setdefault(budget, {"usd": 0.0, "models": {}})
+            a = r.setdefault("answered", {}).setdefault(f"{role}\t{model}", {"role": role, "model": model,
+                                                                            "upstream": [], "calls": 0, "failed": 0})
+            if ok:
+                a["calls"] += 1
+                if upstream and upstream not in a["upstream"]:
+                    a["upstream"].append(upstream)
+            else:
+                a["failed"] += 1
+            r["updated"] = time.time()
+            self._trim()
             self._save()
 
     def run(self, budget: str) -> dict:
         with self.lock:
             r = self.runs.get(budget) or {"usd": 0.0, "models": {}}
             return {"usd": round(r["usd"], 6), "models": {k: round(v, 6) for k, v in r["models"].items()},
-                    "unmeasured": r.get("unmeasured", 0), "limit_usd": self.limits.get("run_usd")}
+                    "unmeasured": r.get("unmeasured", 0), "limit_usd": self.limits.get("run_usd"),
+                    "answered": [dict(a, upstream=list(a["upstream"])) for a in r.get("answered", {}).values()]}
 
     def as_dict(self) -> dict:
         with self.lock:

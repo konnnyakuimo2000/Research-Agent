@@ -34,6 +34,7 @@ _DIRECT_EXTRA_BODY = {"chat_template_kwargs": {"enable_thinking": False}}
 
 # 費用を調査ごとに数えるための見出し。エージェントは調査の id を入れて窓口に送る（窓口は調査ごとの費用の上限に使う）
 BUDGET_HEADER = "X-Model-Budget"
+ROLE_HEADER = "X-Model-Role"      # 窓口が、調査ごと・役割ごとに応答したモデルを記録するため
 
 # やり直す失敗（一時的なもの）: 接続できない・待ち時間切れ（APIConnectionError とその子の APITimeoutError）と、
 # 状態コード 408（待ち時間切れ）・409（競合）・429（混雑）・5xx（サーバーの障害）。SDK が既定でやり直すものと同じ範囲
@@ -278,7 +279,7 @@ class RoleLLM:
 
     def __init__(self, base: LLM, model: str, role: str, budget: str | None = None) -> None:
         self.base, self.model, self.role, self.budget = base, model, role, budget
-        self.headers = {BUDGET_HEADER: budget} if budget else None
+        self.headers = {BUDGET_HEADER: budget, ROLE_HEADER: role} if budget else None
 
     @property
     def waited(self) -> float:

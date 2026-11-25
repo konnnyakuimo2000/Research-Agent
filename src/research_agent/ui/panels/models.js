@@ -131,6 +131,26 @@ export function modelMeta(models) {
   const text = modelSummary(models);
   return text ? { text: `役割に割り当てたモデル: ${text}`, priced: Object.values(models).some((m) => Object.keys(modelOf(m)?.price || {}).length) } : null;
 }
+// 実際に応答したモデル（窓口が調査ごと・役割ごとに数えたもの: [{role, model, upstream, calls, failed}]）。
+// 役割の割り当てではなく、答えたモデルを出す。同じモデルの役割はまとめる。上流が名乗った名前は title に出す
+export function answeredMeta(answered, agentId = ctx.runAgent) {
+  const rows = (answered || []).filter((a) => a.calls || a.failed);
+  if (!rows.length) return null;
+  const titles = Object.fromEntries((ctx.AGENTS[agentId]?.model_roles || []).map((r) => [r.role, r.title]));
+  const groups = new Map();
+  for (const a of rows) {
+    const g = groups.get(a.model) || { roles: [], calls: 0, failed: 0, upstream: new Set() };
+    if (!g.roles.includes(titles[a.role] || a.role || "役割なし")) g.roles.push(titles[a.role] || a.role || "役割なし");
+    g.calls += a.calls || 0; g.failed += a.failed || 0; (a.upstream || []).forEach((u) => g.upstream.add(u));
+    groups.set(a.model, g);
+  }
+  const many = groups.size > 1;
+  const part = (id, g) => `${many ? g.roles.join("・") + " " : ""}${mTitle(id)}${modelOf(id)?.external ? "（外部）" : ""} ${g.calls} 回${g.failed ? `（失敗 ${g.failed}）` : ""}`;
+  return {
+    text: `応答したモデル: ${[...groups].map(([id, g]) => part(id, g)).join(" / ")}`,
+    title: [...groups].map(([id, g]) => `${g.roles.join("・")}: ${mTitle(id)}（上流の名前 ${[...g.upstream].join("・") || "不明"}）`).join("\n"),
+  };
+}
 // 一覧に出す短いモデルの名前（窓口の役割の既定と違うときだけ）
 export function runModelTag(models) {
   if (!CATALOG || !models) return "";

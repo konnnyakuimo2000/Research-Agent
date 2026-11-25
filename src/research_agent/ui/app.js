@@ -16,7 +16,7 @@ import { tree } from "./views/tree.js";
 import { GraphFlow } from "./views/flow.js";
 import { chatAgent, hooks as chatHooks, resetChat, setEmpty, now } from "./panels/chat.js";
 import { closeDetails } from "./panels/details.js";
-import { chosenModels, fmtUsd, hooks as modelHooks, loadChoice, loadModels, modelMeta, renderModels, runModelTag } from "./panels/models.js";
+import { answeredMeta, chosenModels, fmtUsd, hooks as modelHooks, loadChoice, loadModels, modelMeta, renderModels, runModelTag } from "./panels/models.js";
 import { chosenSettings, loadSettings, settingsMeta } from "./panels/settings.js";
 
 // ---- エージェント（ゲートウェイがつないでいるもの） ----
@@ -166,14 +166,22 @@ function showRunMeta(id, models, settings) {
   if (!m && !s) return;
   $("runMeta")?.remove();                     // モデルの一覧が後から届いたら、作り直す
   const d = document.createElement("div"); d.className = "runmeta"; d.id = "runMeta";
-  d.innerHTML = `${m ? `<span>${esc(m.text)}</span>` : ""}${s ? `<span>${esc(s)}</span>` : ""}<span class="cost mono" id="runCost"></span>`;
+  d.innerHTML = `${m ? `<span id="runModels">${esc(m.text)}</span>` : ""}${s ? `<span>${esc(s)}</span>` : ""}<span class="cost mono" id="runCost"></span>`;
   $("chat").prepend(d);
-  if (m?.priced) { d.dataset.priced = "1"; showRunCost(id); }
+  if (m?.priced) d.dataset.priced = "1";
+  if (m) showRunCost(id);
 }
+// 窓口が数えた、この調査の費用と応答したモデル。応答したモデルが分かれば、割り当ての表示をそれに置き換える
+// （割り当ては title に残す）。分からない（窓口を通していない古い記録など）ときは、割り当てのまま
 async function showRunCost(id) {
   try {
     const u = await api(`/api/runs/${encodeURIComponent(id)}/usage`);
-    const el = $("runCost"); if (el && id === ctx.runId) el.textContent = `費用 ${fmtUsd(u.usd || 0)}${u.limit_usd ? ` / 上限 ${fmtUsd(u.limit_usd)}` : ""}`;
+    if (id !== ctx.runId) return;
+    const a = answeredMeta(u.answered), span = $("runModels");
+    if (a && span) { if (!span.dataset.assigned) span.dataset.assigned = span.textContent;
+      span.textContent = a.text; span.title = `${a.title}\n${span.dataset.assigned}`; }
+    const el = $("runCost");
+    if (el && $("runMeta")?.dataset.priced) el.textContent = `費用 ${fmtUsd(u.usd || 0)}${u.limit_usd ? ` / 上限 ${fmtUsd(u.limit_usd)}` : ""}`;
   } catch (err) { /* 費用を読めなくても、調査の表示は続ける */ }
 }
 modelHooks.afterLoad = async () => {
@@ -205,7 +213,7 @@ async function open(id, live, agent, models, settings) {
   // 通信が切れて実行の状況を確かめられないときは、最後に受け取った時刻を出す（EventSource はつなぎ直す）
   source.onerror = () => { if (!ctx.replay && source) showMode(`接続が切れた（最後に受け取った ${new Date(lastSeen).toLocaleTimeString("ja-JP")}）`); };
   source.onopen = () => showMode();
-  source.addEventListener("end", () => { if (source) { source.close(); source = null; } updateSend(); if ($("runMeta")?.dataset.priced) showRunCost(id); });
+  source.addEventListener("end", () => { if (source) { source.close(); source = null; } updateSend(); if ($("runMeta")) showRunCost(id); });   // 終わったら、応答したモデルと費用を読み直す
   source.addEventListener("missing", () => { if (source) { source.close(); source = null; } chatAgent("<p>この調査の記録が見つかりません。</p>"); });
 }
 function frame(ts) {

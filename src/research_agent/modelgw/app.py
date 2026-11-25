@@ -5,7 +5,8 @@
     GET  /v1/models              使えるモデル（OpenAI の形 + title・capabilities など）
     POST /v1/chat/completions    OpenAI 互換。model は id・モデル名・"default"・空（既定）・"role:<役割>"（[roles] の対応、なければ既定）
     GET  /v1/usage               モデルごとの使用量と費用、今日の費用と上限
-    GET  /v1/usage/runs/{id}     1 つの調査の費用（エージェントが X-Model-Budget に入れた調査の id）
+    GET  /v1/usage/runs/{id}     1 つの調査の費用と、役割ごとに実際に応答したモデル（answered。エージェントが
+                                 X-Model-Budget に入れた調査の id・X-Model-Role に入れた役割ごと）
     GET  /health                 モデルごとにつながるか（20 秒覚えておく）
 
 - provider が "anthropic" のモデル（Claude）は、変換の部品（anthropic_provider）を通して送る。応答は OpenAI の形
@@ -169,18 +170,22 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
         return JSONResponse(status_code=status, content={
             "error": {"message": message, "type": kind, "code": status, **mark}, **mark})
 
-    def failure(e: Exception, waited: float, model: Model) -> JSONResponse:
+    def failure(e: Exception, waited: float, model: Model, call: tuple = (None, "")) -> JSONResponse:
         status = e.status_code if isinstance(e, APIStatusError) else 503
         with model.usage.lock:
             model.usage.errors += 1
+        spend.answered(call[0], call[1], model.spec.id, "", ok=False)
         log.warning("model %s failed: %s", model.spec.id, e)
         # OpenAI の SDK は error の中だけを呼び出し側に渡すので、印と待った秒数は error の中にも入れる
         mark = {"gateway": True, "x_model_wait": round(waited, 1), "x_model_id": model.spec.id}
         return JSONResponse(status_code=status, content={
             "error": {"message": f"{type(e).__name__}: {e}", "type": "upstream_error", "code": status, **mark}, **mark})
 
-    def track(model: Model, started: float, waited: float, usage: object, budget: str | None) -> float:
-        """使用量を足し、この呼び出しの費用（ドル）を返す。値段のあるモデルで使用量が返らなければ「未計測」に数える。"""
+    def track(model: Model, started: float, waited: float, usage: object, budget: str | None,
+              role: str = "", upstream: str = "") -> float:
+        """使用量を足し、この呼び出しの費用（ドル）を返す。値段のあるモデルで使用量が返らなければ「未計測」に数える。
+        応答したモデル（upstream は上流が応答に書いたモデル名。なければ設定の名前）も、調査・役割ごとに残す。"""
+        spend.answered(budget, role, model.spec.id, upstream or model.spec.model)
         parts = usage_parts(usage)
         cost = model.spec.cost(parts)
         if model.spec.price and usage is None:
@@ -216,9 +221,12 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
 
     @app.post("/v1/chat/completions")
     def chat(body: dict, authorization: str | None = Header(default=None),
-             x_model_budget: str | None = Header(default=None)):
+             x_model_budget: str | None = Header(default=None), x_model_role: str | None = Header(default=None)):
         check(authorization)
-        model = resolve(str(body.get("model", "")))
+        name = str(body.get("model", ""))
+        model = resolve(name)
+        # 役割: エージェントが見出しに書いたもの。なければ "role:<役割>" で頼まれたときのその役割
+        role = (x_model_role or (name[5:] if name.startswith("role:") else "")).strip()
         messages = body.get("messages") or []
         if not messages:
             raise HTTPException(status_code=400, detail="messages が空です")
@@ -233,14 +241,15 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
             return refuse(429, "同じ調査の前の呼び出しが終わらないため、送れません", model, "run_busy")
         release = Once(held)
         try:
-            return send(model, body, messages, x_model_budget, release)
+            return send(model, body, messages, (x_model_budget, role), release)
         except BaseException:
             release()
             raise
 
-    def send(model: Model, body: dict, messages: list[dict], x_model_budget: str | None, release: Once):
-        """送る直前に予算を判定して送る。release（調査ごとの鍵を放す）は、費用を記録した後に呼ぶ
+    def send(model: Model, body: dict, messages: list[dict], call: tuple, release: Once):
+        """送る直前に予算を判定して送る。call は（調査の id、役割）。release（調査ごとの鍵を放す）は、費用を記録した後に呼ぶ
         （ストリームは流し終えた後。ストリームでない呼び出しは、成功・失敗のどちらでも最後に）。"""
+        x_model_budget, role = call
         if model.spec.price:
             reason = spend.refusal(x_model_budget)
             if reason:
@@ -266,20 +275,21 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
                 try:
                     r, waited = model.llm.call(messages, **kwargs)
                 except (APIConnectionError, APIStatusError) as e:
-                    return failure(e, getattr(e, "model_wait", 0.0), model)
+                    return failure(e, getattr(e, "model_wait", 0.0), model, call)
                 except UnsupportedRequest as e:
                     return refuse(400, str(e), model, "unsupported_request")
                 finally:
                     with model.usage.lock:
                         model.usage.active -= 1
-                cost = track(model, started, waited, r.usage, x_model_budget)
+                cost = track(model, started, waited, r.usage, x_model_budget, role, getattr(r, "model", "") or "")
             finally:
                 release()                                   # 費用を記録してから、同じ調査の次の呼び出しを通す
             return JSONResponse({**r.model_dump(exclude_none=True), "x_model_wait": round(waited, 1),
                                  "x_model_id": model.spec.id, "x_model_cost": round(cost, 6)})
-        return stream(model, messages, kwargs, started, x_model_budget, release)
+        return stream(model, messages, kwargs, started, call, release)
 
-    def stream(model: Model, messages: list[dict], kwargs: dict, started: float, budget: str | None, release):
+    def stream(model: Model, messages: list[dict], kwargs: dict, started: float, call: tuple, release):
+        budget, role = call
         waited = [0.0]
         chunks = model.llm.stream_chunks(messages, on_wait=lambda s: waited.__setitem__(0, waited[0] + s), **kwargs)
         try:
@@ -288,7 +298,7 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
             with model.usage.lock:
                 model.usage.active -= 1
             release()
-            return failure(e, waited[0], model)
+            return failure(e, waited[0], model, call)
         except UnsupportedRequest as e:
             with model.usage.lock:
                 model.usage.active -= 1
@@ -296,25 +306,29 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
             return refuse(400, str(e), model, "unsupported_request")
 
         def gen() -> Iterator[str]:
-            usage = None
+            usage, upstream, broke = None, getattr(first, "model", "") or "", False
             try:
                 if first is not None:
                     usage = first.usage
                     yield f"data: {json.dumps({**first.model_dump(exclude_none=True), 'x_model_wait': round(waited[0], 1), 'x_model_id': model.spec.id}, ensure_ascii=False)}\n\n"
                 for chunk in chunks:
                     usage = chunk.usage or usage
+                    upstream = upstream or getattr(chunk, "model", "") or ""
                     yield f"data: {json.dumps(chunk.model_dump(exclude_none=True), ensure_ascii=False)}\n\n"
                 yield "data: [DONE]\n\n"
             except (APIConnectionError, APIStatusError) as e:        # 途中で切れた（やり直さない）
                 log.warning("model %s stream broke: %s", model.spec.id, e)
                 with model.usage.lock:
                     model.usage.errors += 1
+                broke = True
                 yield f"data: {json.dumps({'error': {'message': f'{type(e).__name__}: {e}'}, 'gateway': True})}\n\n"
             finally:
                 with model.usage.lock:
                     model.usage.active -= 1
                 try:
-                    track(model, started, waited[0], usage, budget)
+                    track(model, started, waited[0], usage, budget, role, upstream)
+                    if broke:
+                        spend.answered(budget, role, model.spec.id, "", ok=False)
                 finally:
                     release()
 
