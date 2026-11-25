@@ -85,7 +85,7 @@ export function connectionProblem() {
 function agentStatusHtml() {
   const st = agentStatus, name = ctx.AGENTS[ctx.agentId]?.name || ctx.agentId;
   if (!st) return `<p class="note">まだ確かめていません。</p>`;
-  const at = `<p class="since">確かめた時刻 ${new Date(agentStatusAt).toLocaleTimeString("ja-JP")} · エージェントの /health（各項目はエージェントが確かめた内容）</p>`;
+  const at = `<p class="since">${new Date(agentStatusAt).toLocaleTimeString("ja-JP")} に確認</p>`;
   if (!st.ok) return `${at}<p class="ngline"><i class="dot ng"></i>${esc(name)}につながらない（${esc(st.error || "応答なし")}）</p>`;
   const checks = Object.values(st.checks || {});
   return `${at}<table class="usage"><thead><tr><th>確かめたこと</th><th>結果</th></tr></thead><tbody>
@@ -144,7 +144,7 @@ function renderFoot() {
       <div class="fbtns"><button type="button" class="primary" id="applyOnce">この依頼に適用</button>
       <button type="button" id="saveDefault">このブラウザの既定値に保存</button>
       <button type="button" id="resetStd">標準に戻す</button></div>
-      <p class="since">適用は次に送る 1 件だけ。保存はこのブラウザで、${esc(ctx.AGENTS[draft.agent]?.name || "")}の次の依頼から毎回</p>`;
+      <p class="since">適用: 次の 1 件だけ · 保存: 毎回</p>`;
     $("applyOnce").addEventListener("click", applyOnce);
     $("saveDefault").addEventListener("click", saveDefault);
     $("resetStd").addEventListener("click", resetDraft);
@@ -154,7 +154,7 @@ function renderFoot() {
     const bad = known ? invalidChoices({ all: "", roles: runView.models || {} }, runView.agent) : [];
     foot.innerHTML = `${bad.length ? `<p class="notice warn">今は使えない役割があります:<br>${bad.map(esc).join("<br>")}</p>` : ""}
       <div class="fbtns"><button type="button" class="primary" id="useRun"${known ? "" : " disabled"}>この設定を使う</button></div>
-      <p class="since">${known ? "新しい依頼に、この調査の設定とモデルを読み込みます（送る前にチャットの上で確かめられます）" : "このエージェントには今つないでいないため、使えません"}</p>`;
+      <p class="since">${known ? "新しい依頼に読み込みます" : "このエージェントは今つながっていません"}</p>`;
     $("useRun").addEventListener("click", () => useRun(runView));
   } else { foot.hidden = true; foot.innerHTML = ""; }
 }
@@ -170,14 +170,14 @@ export function saveDefault() {
 }
 export function resetDraft() {
   draft.settings = { preset: "", values: {} }; draft.models = emptyChoice();
-  notice = "標準に戻した（「この依頼に適用」か「保存」で反映）"; render();
+  notice = "標準に戻しました（適用か保存で反映）"; render();
 }
 
 function researchHtml() {
   const agents = Object.values(ctx.AGENTS), sc = schemaOf(draft.agent), d = defaults(sc), ps = Object.entries(presetsOf(draft.agent));
   const name = presetName(draft.agent, draft.settings.values);
   return `${agents.length > 1 ? `<label class="rrow"><span>対象エージェント</span><select id="pAgent">${agents.map((a) => `<option value="${esc(a.id)}"${a.id === draft.agent ? " selected" : ""}${a.ok ? "" : " disabled"}>${esc(a.name)}${a.ok ? "" : "（つながらない）"}</option>`).join("")}</select></label>` : ""}
-    ${!hasFields(sc) ? `<p class="note">${esc(ctx.AGENTS[draft.agent]?.name || "")}には、画面から変えられる調査の設定がありません。</p>` : `
+    ${!hasFields(sc) ? `<p class="note">変えられる設定はありません。</p>` : `
     ${ps.length ? `<div class="presets" role="group" aria-label="プリセット">
       <button type="button" class="pre${name === "標準" ? " on" : ""}" data-p="" aria-pressed="${name === "標準"}">標準</button>
       ${ps.map(([id, p]) => `<button type="button" class="pre${name === (p.title || id) ? " on" : ""}" data-p="${esc(id)}" aria-pressed="${name === (p.title || id)}" title="${esc(Object.entries(p.values || p).map(([k, v]) => `${sc.properties[k]?.title || k}: ${v}`).join("\n"))}">${esc(p.title || id)}</button>`).join("")}
@@ -206,12 +206,12 @@ async function fillRunCost() {
   const el = $("runCostLine"); if (!el || !ctx.runId) return;
   try {
     const u = await api(`/api/runs/${encodeURIComponent(ctx.runId)}/usage`);
-    el.textContent = `${fmtUsd(u.usd || 0)}（USD・この調査で計上した額）${u.unmeasured ? ` · 費用を測れなかった呼び出し ${u.unmeasured} 件` : ""}${u.limit_usd ? ` · 上限 ${fmtUsd(u.limit_usd)}` : ""}`;
+    el.textContent = `${fmtUsd(u.usd || 0)}${u.unmeasured ? ` · 未計測 ${u.unmeasured} 件` : ""}${u.limit_usd ? ` · 上限 ${fmtUsd(u.limit_usd)}` : ""}`;
   } catch (err) { el.textContent = `読めません（${err.message}）`; }
 }
 function displayHtml() {
   return `${notice ? `<p class="notice" role="status">${esc(notice)}</p>` : ""}
-    <p class="note">履歴・チャット・作業記録の境界は、ドラッグか、境界を選んで左右の矢印キーで変えられます（Home で既定）。</p>
+    <p class="note">境界のドラッグか矢印キーで幅を変えられます。</p>
     <p class="since">${esc(hooks.widthsText())}</p>
     <div class="fbtns"><button type="button" id="resetWidths">幅を既定に戻す</button></div>`;
 }
@@ -233,15 +233,15 @@ function runHtml(r) {
   return `<dl class="kv"><dt>依頼</dt><dd>${esc(r.request || "")}</dd><dt>エージェント</dt><dd>${esc(ctx.AGENTS[r.agent]?.name || r.agent)}</dd>
       <dt>状態</dt><dd>${esc(statusLabel(r.status))}</dd><dt>始めた時刻</dt><dd>${esc(when)}</dd><dt>ID</dt><dd class="mono">${esc(r.id)}</dd></dl>
     <h4>開始時に適用した調査の設定</h4>
-    ${!eff ? `<p class="note">開始時の既定値は記録なし（この版より前の記録）。変更した項目だけを示します。</p>` : ""}
+    ${!eff ? `<p class="note">開始時の既定値は記録なし（変えた項目のみ）</p>` : ""}
     ${names.length ? `<table class="usage"><thead><tr><th>項目</th><th>値</th><th></th></tr></thead><tbody>
       ${names.map((k) => { const has = eff ? k in eff : k in changedSet, v = eff ? eff[k] : changedSet[k];
         return `<tr><td>${esc(props[k]?.title || k)}</td><td>${has ? esc(valueText(props[k], v)) : "記録なし"}</td><td>${k in changedSet ? "変更" : eff ? "既定" : ""}</td></tr>`; }).join("")}
     </tbody></table>` : `<p class="note">設定の記録はありません。</p>`}
-    ${eff && presetName(r.agent, eff) ? `<p class="since">今のプリセットに当てると: ${esc(presetName(r.agent, eff))}</p>` : ""}
+    ${eff && presetName(r.agent, eff) ? `<p class="since">プリセット: ${esc(presetName(r.agent, eff))}</p>` : ""}
     <h4>役割ごとのモデル（開始時の割り当て）</h4>
     ${Object.keys(r.models || {}).length ? `<table class="usage"><tbody>${Object.entries(r.models).map(([role, id]) => `<tr><td>${esc(roles[role] || role)}</td><td>${esc(mTitle(id))}${modelOf(id) ? "" : "（今は一覧にない）"}</td></tr>`).join("")}</tbody></table>`
-      : `<p class="note">記録なし（モデルの窓口を通していない記録）</p>`}
+      : `<p class="note">記録なし</p>`}
     <h4>実際に応答したモデル</h4><p class="spend" id="runAnswered">読み込み中…</p>`;
 }
 async function fillAnswered(r) {
@@ -250,9 +250,9 @@ async function fillAnswered(r) {
     const u = await api(`/api/runs/${encodeURIComponent(r.id)}/usage`);
     if (runView?.id !== r.id || !$("runAnswered")) return;
     const a = answeredMeta(u.answered, r.agent);
-    el.textContent = a ? a.text.replace(/^応答したモデル: /, "") : "記録なし（この機能より前の調査か、窓口を通していない）";
+    el.textContent = a ? a.text.replace(/^応答したモデル: /, "") : "記録なし";
     if (a) el.title = a.title;
-    if (u.usd || u.unmeasured) el.textContent += ` · 費用 ${fmtUsd(u.usd || 0)}${u.unmeasured ? `（測れなかった呼び出し ${u.unmeasured} 件）` : ""}`;
+    if (u.usd || u.unmeasured) el.textContent += ` · 費用 ${fmtUsd(u.usd || 0)}${u.unmeasured ? `（未計測 ${u.unmeasured} 件）` : ""}`;
   } catch (err) { el.textContent = `読めません（${err.message}）`; }
 }
 // 過去の設定を、新しい依頼の「この依頼だけ」に読み込む（使えなくなったモデルは、チャットの上に理由と代わりを出す）

@@ -24,8 +24,7 @@ const aspectId = (name) => "a:" + name;
 function buildCoverage(e) {
   T.add("cov", "req", 1, card("網羅表", `観点 ${e.aspects.length} つ`, `${e.subject_type} · ${e.origin}が作成`) + toggleBtn,
     { title: "網羅表", kv: [["対象の種類", esc(e.subject_type)], ["観点を作ったもの", esc(e.origin)]],
-      note: "観点ごとに、原文に引用が見つかった記述の数と、出典条件（Tier 1 の出典、または別サイト 2 件以上で 1 件以上が "
-        + "Tier 1〜2）を満たすかをプログラムが集計する。条件を満たしても、記述どうしが食い違うことがある（食い違い候補を併記）。" },
+      note: "出典条件: Tier 1 の出典か、別サイト 2 件以上（1 件以上が Tier 1〜2）。満たしても食い違うことがある。" },
     "done", true);
   e.aspects.forEach((a) => T.add(aspectId(a), "cov", 2,
     `<div class="k"><span>観点</span><span class="mono cnt">0</span></div><div class="t">${esc(a)}</div><div class="s">${coverageWord("未発見")}</div><div class="facts"></div>`,
@@ -93,8 +92,7 @@ function pageNode(e, state) {
   T.add(id, parent, N()[parent].depth + 1, card(e.db ? "記録 · " + e.db : "ページ", e.host, state === "planned" ? "読む順番を待っている" : "取得している", tier(e.tier), icon(e.host)) +
     `<div class="steps"><span></span><span></span><span></span></div>`,
     { title: e.host, kv: [["資料", link(e.url)], ["Tier", `${e.tier}`]],
-      note: "モデルが抜き出した記述のうち、付けた引用が本文（正規化した後）に見つかったものだけを残す。"
-        + "引用の一致を確かめただけで、数値や否定の意味までは確かめていない。" }, state);
+      note: "引用が本文に見つかった記述だけを残す（数値や否定の意味までは確かめていない）。" }, state);
 }
 
 // ---- イベント → 木 ----
@@ -149,7 +147,7 @@ export const treeRenderers = {
     info()[r].kv = [["モデルの提案", esc(d.proposal)], ["提案の理由（モデルの出力）", esc(d.why)],
       ["採用した行動", esc(d.adopted)], ["変更", esc(d.label)], ["変更理由", esc(d.reason)], ["検索の点数", plan],
       ["他の候補", (e.plan?.alternatives || []).map((a) => `${esc(a.query)}（${a.score}）`).join("<br>")]];
-    info()[r].note = changed ? "モデルの提案を、網羅表と止める条件を見たプログラムが変えた。" : "";
+    info()[r].note = changed ? "プログラムがモデルの提案を変えた。" : "";
     T.layout();
   },
   "search.start": (e) => {

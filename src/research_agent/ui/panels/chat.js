@@ -104,7 +104,7 @@ registerRenderer("run.end", (e) => {
   finish(renderReport(lastReport), lastReport); hooks.setComposer(false); hooks.loadRuns();
 }, "chat");
 registerRenderer("run.error", (e) => { chatAgent(`<p>エラーで続けられませんでした: ${esc(e.error)}</p>`); statusEl = null; hooks.setLive(""); hooks.updateSend(); }, "chat");
-registerRenderer("run.paused", () => { if (!ctx.replay) hooks.setLive("paused"); now("一時停止を受け付けた（今の作業の区切りで止まる）"); hooks.updateSend(); }, "chat");
+registerRenderer("run.paused", () => { if (!ctx.replay) hooks.setLive("paused"); now("一時停止を受け付けた（区切りで止まる）"); hooks.updateSend(); }, "chat");
 registerRenderer("run.resumed", () => { if (!ctx.replay) hooks.setLive("running"); now("再開した"); hooks.updateSend(); }, "chat");
 registerRenderer("run.cancelled", () => {
   finish((streamText ? renderReport(streamText) : "") + `<p class="q">止めました。</p>`, streamText); hooks.setComposer(false); hooks.loadRuns();

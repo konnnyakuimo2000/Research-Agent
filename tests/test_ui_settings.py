@@ -99,7 +99,7 @@ def test_models_that_disappeared_or_are_external_are_explained():
     assert out["gone"] == ["読み取り: old-model は使えない（一覧にない）→ LAB を使う",
                            "画像: old-model は使えない（一覧にない）→ LAB を使う"]
     assert out["ext"] is True and out["label"] == "役割ごとのモデル"
-    assert "最終的な割り当て" in out["html"] and "依頼文と読んだページの本文が送られます" in out["html"]
+    assert "最終的な割り当て" in out["html"] and "依頼文と読んだページを送ります" in out["html"]
     assert "入力 $3・出力 $15" in out["html"]
 
 
@@ -147,7 +147,7 @@ def test_connection_cases_are_told_apart():
     assert "0.2 秒で応答" in out["searchHtml"]                          # モデルの確認は成功のまま
     assert out["agentDown"] == "エージェントにつながらない"
     assert "モデルの窓口につながらない" in out["gatewayDown"]
-    assert "費用を測れなかった呼び出し 1 件（この分は費用に含まない）" in out["partial"]
+    assert "未計測 1 件（費用に含まない）" in out["partial"]
     assert "上限到達後に有料呼び出しを停止" in out["partial"] and "1 日 $5.00" in out["partial"]
 
 

@@ -40,7 +40,7 @@ function set(key, value) {
 export function resetWidths() { widths = { side: null, chat: null }; store.set(KEY, widths); apply(); onChange(); }
 export function widthsText() {
   const f = fitWidths(widths, window.innerWidth);
-  return `今の幅: 履歴 ${f.side ?? "既定（220）"}px · チャット ${f.chat ?? "既定（300〜400）"}px（このブラウザに保存）`;
+  return `履歴 ${f.side ?? "既定"}${f.side ? "px" : ""} · チャット ${f.chat ?? "既定"}${f.chat ? "px" : ""}`;
 }
 
 function wire(id, key, edge) {

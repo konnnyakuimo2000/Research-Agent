@@ -63,9 +63,9 @@ function renderHead() {
   const parts = [s.agent, s.preset, s.models].filter(Boolean);
   btn.innerHTML = `<span class="lbl">次の依頼</span><span class="txt">${esc(parts.join(" · "))}</span>`
     + (s.oneTime ? `<span class="badge">${esc(s.oneTime)}</span>` : "") + (s.external ? `<span class="ext">外部</span>` : "");
-  btn.title = `次の依頼: ${parts.join(" · ")}${s.oneTime ? `（${s.oneTime}）` : ""}\n押すと設定を開く`;   // 幅が狭くて切れても読めるように
+  btn.title = `次の依頼: ${parts.join(" · ")}${s.oneTime ? `（${s.oneTime}）` : ""}`;   // 幅が狭くて切れても読めるように
   btn.setAttribute("aria-label", `次の依頼:${parts.join("、")}${s.oneTime ? `（${s.oneTime}）` : ""}${s.external ? "、外部のモデルを使う" : ""}。押すと設定を開く`);
-  const warn = [connectionProblem(), ...s.warnings, s.external ? "外部のモデルに、依頼文と読んだページの本文が送られます" : ""].filter(Boolean);
+  const warn = [connectionProblem(), ...s.warnings, s.external ? "外部のモデルに依頼文と読んだページを送ります" : ""].filter(Boolean);
   $("headWarn").hidden = !warn.length;
   $("headWarn").innerHTML = warn.map(esc).join("<br>");
 }
@@ -99,7 +99,7 @@ let source = null, waitingRun = null, liveState = "";   // liveState: 動いて�
 function setComposer(answerMode) {
   waitingRun = answerMode ? ctx.runId : null;
   $("composer").classList.toggle("answer", answerMode);
-  $("input").placeholder = answerMode ? "質問への答えを入力（番号でも可）" : "調べたいことを入力";
+  $("input").placeholder = answerMode ? "答えを入力（番号でも可）" : "調べたいことを入力";
   updateSend();
 }
 // 調査が動いている間（再生中も）は、作業記録の上のボタンで一時停止・再開（止めるだけのエージェントは「止める」）
@@ -114,7 +114,7 @@ function updateSend() {
   // ライブの調査が動いている間は、新しい依頼を送らない（答え待ちのときは答えを送る）
   const b = $("sendBtn"), liveBusy = stop && !ctx.replay;
   b.disabled = liveBusy;
-  b.title = liveBusy ? "調査中です（一時停止・止めるは作業記録の上のボタン）" : waitingRun ? "答えを送る" : "送る";
+  b.title = liveBusy ? "調査中" : waitingRun ? "答えを送る" : "送る";
   b.setAttribute("aria-label", b.title);
 }
 async function togglePause() {
@@ -187,7 +187,7 @@ function showRunMeta(id, models, settings) {
   const m = modelMeta(models), s = settingsMeta(ctx.runAgent, settings);
   $("runMeta")?.remove();                     // モデルの一覧が後から届いたら、作り直す
   const d = document.createElement("button"); d.type = "button"; d.className = "runmeta"; d.id = "runMeta";
-  d.title = "この調査の開始時の設定とモデル（履歴の詳細）を開く";
+  d.title = "この調査の設定を見る";
   d.innerHTML = `${m ? `<span id="runModels">${esc(m.text)}</span>` : ""}${s ? `<span>${esc(s)}</span>` : ""}<span class="cost mono" id="runCost"></span><span class="more">詳細</span>`;
   d.addEventListener("click", () => { const r = RUNS[id]; if (r) openPanel("run", d, r); });
   $("chat").prepend(d);
@@ -288,7 +288,7 @@ function openRunMenu(btn) {
   const busyRun = UNFINISHED.includes(r.status), m = $("runMenu");
   m.innerHTML = `<button type="button" role="menuitem" data-act="detail">詳細を見る</button>
     <button type="button" role="menuitem" data-act="delete"${busyRun ? ` aria-disabled="true"` : ""}>削除</button>
-    ${busyRun ? `<p class="mnote">調査が終わってから削除できます（${esc(statusLabel(r.status))}）</p>` : ""}`;
+    ${busyRun ? `<p class="mnote">終わってから削除できます（${esc(statusLabel(r.status))}）</p>` : ""}`;
   const rect = btn.getBoundingClientRect();
   m.style.top = Math.min(rect.bottom + 4, window.innerHeight - 140) + "px"; m.style.left = Math.max(8, rect.right - 190) + "px";
   m.hidden = false;
@@ -299,9 +299,8 @@ function openRunMenu(btn) {
 function closeRunMenu() { if (menuFor) menuFor.setAttribute("aria-expanded", "false"); menuFor = null; $("runMenu").hidden = true; }
 document.addEventListener("click", (ev) => { if (menuFor && !$("runMenu").contains(ev.target) && ev.target !== menuFor) closeRunMenu(); });
 async function deleteRun(r, btn) {
-  const ok = window.confirm(`「${r.request || r.id}」を削除しますか？\n\n`
-    + "消すのは、このアプリの履歴・報告・作業記録です。Open WebUI の会話と、調査エージェントの内部の診断ファイルは別に管理しているため、消えません。\n"
-    + "削除すると元に戻せません。");
+  const ok = window.confirm(`「${r.request || r.id}」を削除しますか？\n`
+    + "履歴・報告・作業記録を消します（Open WebUI の会話は残ります）。元に戻せません。");
   if (!ok) { btn.focus(); return; }
   try {
     await api(`/api/runs/${encodeURIComponent(r.id)}`, undefined, "DELETE");

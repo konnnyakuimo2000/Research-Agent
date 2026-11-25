@@ -138,7 +138,7 @@ export class ResearchFlow extends FlowBase {
       d.list = Object.entries(this.thumb).map(([u, th]) => `${esc(th.dataset.done || "未確認")} — ${link(u)}`);
       if (this.unchecked) d.kv.push(["未確認", `${this.unchecked} 枚。${esc(this.uncheckedWhy)}`]);
     }
-    if (id === "pages") d.note = "アイコンを押すと、その資料で原文に引用が見つかった記述と、その引用が出ます。";
+    if (id === "pages") d.note = "アイコンを押すと、記述と引用が出ます。";
     if (id === "imgs") d.kv.push(["集計", esc(S.summary.imageText())]);
     if (id === "cov") d.kv.push(["集計", esc(S.summary.coverageText())]);
     return d;

@@ -71,7 +71,7 @@ export async function loadModelStatus() {
 }
 function priceText(m) {
   const p = m.price || {};
-  return p.input_per_mtok != null ? `入力 $${p.input_per_mtok}・出力 $${p.output_per_mtok}（100 万トークンあたり）` : "費用なし";
+  return p.input_per_mtok != null ? `入力 $${p.input_per_mtok}・出力 $${p.output_per_mtok}／100 万トークン` : "無料";
 }
 const dot = (id) => {
   const s = modelStatus?.models?.[id];
@@ -81,8 +81,8 @@ const dot = (id) => {
 // ---- 設定のパネルの「モデル」 ----
 export function modelTabHtml(choice, agentId) {
   const roles = roleList(agentId);
-  if (!CATALOG) return `<p class="note">モデルの窓口につながらないため、モデルを選べません。エージェントの設定のモデルで調べます。</p>`;
-  if (!roles.length) return `<p class="note">このエージェントは、モデルを選べる役割を名乗っていません。</p>`;
+  if (!CATALOG) return `<p class="note">モデルの窓口につながらないため選べません。</p>`;
+  if (!roles.length) return `<p class="note">このエージェントはモデルを選べません。</p>`;
   const opt = (id, title, sub, why) => `<button type="button" class="opt${(choice.all || "") === id ? " on" : ""}" data-all="${esc(id)}" aria-pressed="${(choice.all || "") === id}"${why ? ` disabled` : ""}>
       <span class="ot">${id ? dot(id) : ""}${esc(title)}${id && modelOf(id).external ? `<span class="ext">外部</span>` : ""}</span><span class="os">${esc(why ? `選べない: ${why}` : sub)}</span></button>`;
   const ids = [...new Set(roles.map((r) => roleDefault(r.role)))];
@@ -91,7 +91,7 @@ export function modelTabHtml(choice, agentId) {
   return `
     <h4>全役割共通</h4>
     <div class="opts">${opt("", "既定", ids.length === 1 ? `役割の既定（${mTitle(ids[0])}）` : "役割ごとの既定（窓口の設定どおり）", "")}
-      ${CATALOG.models.map((m) => opt(m.id, m.title, `${m.external ? "外部の Web API" : "研究室・手元"} · ${priceText(m)}`, whyNot(m, roles))).join("")}</div>
+      ${CATALOG.models.map((m) => opt(m.id, m.title, `${m.external ? "外部" : "研究室"} · ${priceText(m)}`, whyNot(m, roles))).join("")}</div>
     <h4>役割ごとの上書き</h4>
     ${roles.map((r) => `<label class="rrow"><span>${esc(r.title)}${r.needs?.length ? `<small>要る能力: ${esc(r.needs.join("・"))}</small>` : ""}</span><select data-role="${esc(r.role)}">
         <option value="">上と同じ</option>
@@ -100,10 +100,10 @@ export function modelTabHtml(choice, agentId) {
     <h4>最終的な割り当て</h4>
     <table class="usage assign"><thead><tr><th>役割</th><th>使うモデル</th><th>メモ</th></tr></thead><tbody>
       ${rows.map((r) => `<tr><td>${esc(r.title)}</td><td>${esc(mTitle(r.id))}${modelOf(r.id)?.external ? `<span class="ext">外部</span>` : ""}</td>
-        <td>${r.why ? `${esc(mTitle(r.asked))} は使えない（${esc(r.why)}）。代わりにこのモデル` : r.asked ? "選んだモデル" : "窓口の既定"}</td></tr>`).join("")}
+        <td>${r.why ? `${esc(mTitle(r.asked))} は使えない（${esc(r.why)}）` : r.asked ? "選択" : "既定"}</td></tr>`).join("")}
     </tbody></table>
-    <p class="since">外部の Web API のモデル（Claude・OpenAI・Gemini・OpenRouter）は、「API キー」で鍵を入れると足せます。</p>
-    ${external.length ? `<p class="note warn">外部のモデル（${esc([...new Set(external.map((r) => mTitle(r.id)))].join("・"))}）に、依頼文と読んだページの本文が送られます。料金: ${esc([...new Set(external.map((r) => `${mTitle(r.id)} ${priceText(modelOf(r.id))}`))].join(" / "))}</p>` : ""}`;
+    <p class="since">外部のモデルは「API キー」から足せます。</p>
+    ${external.length ? `<p class="note warn">${esc([...new Set(external.map((r) => mTitle(r.id)))].join("・"))} に依頼文と読んだページを送ります。料金: ${esc([...new Set(external.map((r) => `${mTitle(r.id)} ${priceText(modelOf(r.id))}`))].join(" / "))}</p>` : ""}`;
 }
 export function wireModelTab(root, choice, onChange) {
   root.querySelectorAll(".opt[data-all]").forEach((b) => b.addEventListener("click", () => { choice.all = b.dataset.all; onChange(); }));
@@ -115,22 +115,22 @@ export function wireModelTab(root, choice, onChange) {
 
 // ---- 設定のパネルの「接続と使用量」のモデルの窓口の部分 ----
 export function gatewayStatusHtml() {
-  if (!modelStatus) return `<p class="ngline"><i class="dot ng"></i>モデルの窓口につながらない（状態と使用量を読めない）。調査は、窓口が戻るまで始められないことがあります。</p>`;
+  if (!modelStatus) return `<p class="ngline"><i class="dot ng"></i>モデルの窓口につながらない</p>`;
   const st = modelStatus.models || {}, spend = modelStatus.spend || {}, limits = spend.limits || {};
   const models = CATALOG?.models || Object.keys(st).map((id) => ({ id, title: id }));
   const unmeasured = Object.values(st).reduce((n, s) => n + (s.unmeasured || 0), 0);
   return `
-    <p class="since">確かめた時刻 ${new Date(statusAt).toLocaleTimeString("ja-JP")} · 接続はモデルごとの一覧 API への応答（推論は確かめていない）</p>
+    <p class="since">${new Date(statusAt).toLocaleTimeString("ja-JP")} に確認（一覧 API の応答）</p>
     <table class="usage"><thead><tr><th>モデル</th><th>接続</th><th>呼び出し</th><th>トークン（入力・出力）</th><th>費用（USD）</th></tr></thead><tbody>
       ${models.map((m) => { const s = st[m.id] || {}; return `<tr><td>${esc(m.title)}</td><td>${dot(m.id)}${s.ok ? `${s.seconds ?? "?"} 秒` : esc(s.error || "応答なし")}</td>
-        <td class="mono">${fmtNum(s.calls)}${s.errors ? `（失敗 ${fmtNum(s.errors)}）` : ""}${s.refused ? `（上限で断った ${fmtNum(s.refused)}）` : ""}${s.unmeasured ? `（費用を測れなかった ${fmtNum(s.unmeasured)}）` : ""}</td>
+        <td class="mono">${fmtNum(s.calls)}${s.errors ? `（失敗 ${fmtNum(s.errors)}）` : ""}${s.refused ? `（上限で断った ${fmtNum(s.refused)}）` : ""}${s.unmeasured ? `（未計測 ${fmtNum(s.unmeasured)}）` : ""}</td>
         <td class="mono">${fmtNum(s.prompt_tokens)}・${fmtNum(s.completion_tokens)}</td><td class="mono">${isPriced(m) ? fmtUsd(s.cost_usd || 0) : "—"}</td></tr>`; }).join("")}
     </tbody></table>
-    <p class="since">呼び出しとトークンは、窓口を立ち上げてからの合計</p>
+    <p class="since">窓口の起動からの合計</p>
     <p class="spend">今日（${esc(spend.day || "")}）の推計費用 <b class="mono">${fmtUsd(spend.today_usd || 0)}</b>
-      ${unmeasured || spend.unmeasured_today ? `<br><span class="warn">費用を測れなかった呼び出し ${fmtNum(spend.unmeasured_today || unmeasured)} 件（この分は費用に含まない）</span>` : ""}</p>
+      ${unmeasured || spend.unmeasured_today ? `<br><span class="warn">未計測 ${fmtNum(spend.unmeasured_today || unmeasured)} 件（費用に含まない）</span>` : ""}</p>
     <p class="spend">${limits.daily_usd || limits.run_usd
-      ? `上限: ${limits.daily_usd ? `1 日 ${fmtUsd(limits.daily_usd)}` : ""}${limits.daily_usd && limits.run_usd ? "・" : ""}${limits.run_usd ? `1 つの調査 ${fmtUsd(limits.run_usd)}` : ""}。上限到達後に有料呼び出しを停止（計上済みの額で、次の送信の前に判定する）`
+      ? `上限: ${limits.daily_usd ? `1 日 ${fmtUsd(limits.daily_usd)}` : ""}${limits.daily_usd && limits.run_usd ? "・" : ""}${limits.run_usd ? `1 調査 ${fmtUsd(limits.run_usd)}` : ""}（上限到達後に有料呼び出しを停止）`
       : "費用の上限なし"}</p>`;
 }
 

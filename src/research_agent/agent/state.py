@@ -95,7 +95,7 @@ class Feasibility(TypedDict):
 # 依頼ごとに変えられる上限（エージェントの名乗りの settings_schema。画面の設定の欄から送られる）
 SETTINGS = {
     "max_seconds": {"type": "integer", "title": "時間の上限（秒）", "default": MAX_SECONDS, "minimum": 420, "maximum": 3600,
-                    "description": "利用者の答えを待つ時間は数えない。報告をまとめる時間（5 分）を含む"},
+                    "description": "答え待ちは含まず、報告の 5 分を含む"},
     "max_pages": {"type": "integer", "title": "読むページの数", "default": MAX_PAGES, "minimum": 2, "maximum": 30,
                   "description": "読めたページだけで数える"},
     "images": {"type": "boolean", "title": "画像も探す", "default": True},

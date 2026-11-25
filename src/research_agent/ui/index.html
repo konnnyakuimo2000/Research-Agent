@@ -42,7 +42,7 @@
       <button type="button" class="cbtn" id="runsBtn" aria-label="履歴" title="履歴を出す・隠す">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
       </button>
-      <button type="button" class="headsum" id="headSummary" aria-haspopup="dialog" aria-controls="setPanel" title="次の依頼に効く設定（押すと設定を開く）"></button>
+      <button type="button" class="headsum" id="headSummary" aria-haspopup="dialog" aria-controls="setPanel" title="次の依頼の設定"></button>
       <span class="headctl" id="headCtl"></span>
       <p class="headwarn" id="headWarn" role="status" hidden></p>
     </header>
@@ -64,7 +64,7 @@
     <div class="flow" id="flow">
       <div class="canvas" id="canvas" hidden><svg class="edges" id="edges"></svg></div>
       <div class="canvas graph" id="graph"><svg class="edges" id="gedges"></svg></div>
-      <p class="flow-empty" id="flowEmpty">調査の作業記録: 調査を始めると、エージェントが記録した作業と、集まった根拠が、ここにノードと線で現れます。<br>ホイールやピンチで拡大、ドラッグで移動できます。</p>
+      <p class="flow-empty" id="flowEmpty">調査を始めると、ここに作業の流れが出ます。<br>ホイールで拡大、ドラッグで移動。</p>
 
       <div class="hud hud-top" role="group" aria-label="表示">
         <button type="button" data-view="flow" aria-pressed="true" title="工程別の流れ" aria-label="Flow（工程別の流れ）">Flow</button>
