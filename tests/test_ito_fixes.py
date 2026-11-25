@@ -70,3 +70,26 @@ def test_an_answer_that_only_contains_the_target_name_resets_the_target():
         out = n.ask_user(state)
     assert out["target"] is None and out["verified"] == [] and out["clarifications"] == ["伊藤雄一"]
     assert Command  # noqa: B018 - 再開の形（Command）は LangGraph が扱う
+
+
+class AnsweredLLM:
+    """答えの後の検索の整理: 利用者が答えた名前を、根拠も名前だけで返す（前の調査で LLM が返したのと同じ）。"""
+
+    def chat_json(self, system, user, schema, **kw):
+        return {"known": [], "unknown": [], "candidate_ids": [], "target_id": "", "target_evidence": "",
+                "specific_subject": "伊藤雄一", "specific_evidence": "伊藤雄一"}
+
+
+def test_the_name_the_user_answered_becomes_the_subject():
+    n = Nodes(Settings(llm_base_url="http://llm.test/v1", llm_model="m", llm_api_key="k", searxng_url="http://s.test"),
+              AnsweredLLM())
+    state = {"request": "青学の伊藤先生について", "clarifications": ["伊藤雄一"], "candidates": [], "searched": [],
+             "pages": {}, "tier1_searched": True,
+             "decision": {"action": "search", "query": "青山学院大学 伊藤雄一 教授"}}
+    with patch.object(nodes_mod.wikimedia, "search_entities", return_value=[]), \
+            patch.object(nodes_mod.wikimedia, "get_entities", return_value={}), \
+            patch.object(nodes_mod.searxng, "web_search", return_value=searxng.WebSearchResponse(results=WEB)):
+        out = n.search(state)
+    assert out["target"] and out["target"]["label"] == "伊藤雄一"
+    # 対象が決まったので、同じ名字の別の先生（伊藤晴祥）のページは読む一覧に入らない
+    assert WEB[0].url in out["reading_list"] and WEB[1].url not in out["reading_list"]

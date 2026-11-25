@@ -59,7 +59,7 @@ def test_a_waiting_run_continues_once_after_a_restart(tmp_path):
     wait_for(lambda: run.status == "waiting")
     assert run.question == "どちらの東京タワーですか？" and calls == ["search"]
     kept = tmp_path / "waiting" / f"{run.id}.waiting.pkl"
-    assert kept.exists()
+    wait_for(kept.exists)
     seqs = [e["seq"] for e in run.recorder.events]
 
     # 立ち上げ直し（チェックポイントの置き場も新しい）

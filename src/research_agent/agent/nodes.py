@@ -209,8 +209,10 @@ class Nodes:
         # 根拠は依頼文と、利用者の答え（「松田泰治」）から探す。前は答えた後にこの道を通らなかったので、
         # Wikidata にない人（大学の先生の多く）は、名前を答えても対象が決まらなかった
         context = " ".join([state["request"]] + state.get("clarifications", []))
+        # 利用者が答えた名前（「伊藤雄一」）なら、それ自体が根拠（前は名前だけの根拠を認めず、答えても対象が決まらないまま
+        # 同じ名字の別の先生のページも読み、3 人の事実を 1 つの報告に混ぜていた。2026-11-25 の伊藤先生）
         if (not target and not state.get("target") and subject
-                and evidence_ok(update.get("specific_evidence", ""), context, subject)):
+                and (from_user or evidence_ok(update.get("specific_evidence", ""), context, subject))):
             # 依頼文の条件（所属・型番など）で、検索結果の対象が 1 つに決まった。同名の別の意味は聞き返さない
             same = [c for c in candidates if normalize(c["label"]) == normalize(subject)]
             target = same[0] if same else {"id": "", "label": subject,
@@ -279,7 +281,11 @@ class Nodes:
             # 題名・抜粋に対象の名前がある結果だけを読む（観点の言葉で無関係なページが混ざるため）。
             # 対象がまだ決まっていなければ、検索に使った名前で見る（「EE-3」を含まない会社のページなどを読まない）。
             # どれを読み、どれを先に読むかは page_choice.choose_pages（副作用なし）で決める
-            names_for_match = [current["label"]] + list(names) if current else list(names)
+            # 対象が決まっていれば、対象の名前の一部でしかない名前（対象「伊藤雄一」に対する「伊藤」）では見ない
+            # （同じ名字の別の先生のページを読んでいた）。別の表記（英語名など）は残す
+            label = current["label"] if current else ""
+            names_for_match = ([label] + [n for n in names if not (mentions(label, [n]) and normalize(n) != normalize(label))]
+                               if current else list(names))
             choice = choose_pages(state, result, web.results, decision, names_for_match)
             relevant, urls = choice.relevant, list(choice.urls)
             if not state.get("tier1_searched"):

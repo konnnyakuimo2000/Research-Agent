@@ -249,9 +249,12 @@ class RunManager:
 
     def _end(self, run: Run, outcome: Done | Waiting | Cancelled) -> None:
         if isinstance(outcome, Waiting) and not run.cancelled:
-            run.status, run.question = "waiting", outcome.question
-            run.emit("run.waiting", question=outcome.question)
-            self._save_waiting(run)
+            # 答え待ちにすることと残すことを、答え・止めると同じ鍵の中で行う（残す前に答えや止めるが来て、
+            # 消した後に残してしまう・残す前に答え待ちに見える、を防ぐ）
+            with self._lock:
+                run.status, run.question = "waiting", outcome.question
+                run.emit("run.waiting", question=outcome.question)
+                self._save_waiting(run)
             return
         self._drop_waiting(run)
         if isinstance(outcome, Done) and not run.cancelled:
