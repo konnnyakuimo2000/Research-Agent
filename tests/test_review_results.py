@@ -55,7 +55,8 @@ def test_a_restarted_gateway_fetches_the_pending_result(tmp_path):
     gw = again.state.gateway
     assert wait_for(lambda: gw.store.get(run_id)["status"] == "done")
     assert gw.result(run_id)["report"] == "[]" and gw.result(run_id)["artifacts"]
-    assert len(gw.store.events(run_id)) == events                              # 調査も終わりのイベントも二重にしない
+    # 調査も終わりのイベントも二重にしない。足すのは、保存できた印（run.saved）の 1 件だけ
+    assert len(gw.store.events(run_id)) == events + 1 and gw.store.events(run_id)[-1]["type"] == "run.saved"
     assert client.result.calls == 2
 
 

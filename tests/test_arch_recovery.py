@@ -63,14 +63,15 @@ def test_an_end_written_only_to_the_log_is_finished_on_restart(tmp_path):
     agent = Agent()
     gw = restart(tmp_path, agent)
     rec = gw.store.get("r1")
-    assert rec["status"] == "done" and rec["events"] == 3 and rec["seconds"] == 4.5
+    assert rec["status"] == "done" and rec["events"] == 4 and rec["seconds"] == 4.5   # 3 件 + 保存した印
     assert gw.result("r1")["report"] == "東京タワーの高さは 333 m [1]"
     assert agent.relayed == 0 and agent.results == 1                       # 終わった依頼の中継は始めない
     # 同じ記録のまま、もう 1 回立ち上げ直しても、状態も件数も変わらない（成果物も取り直さない）
     gw2 = restart(tmp_path, agent)
     rec2 = gw2.store.get("r1")
-    assert (rec2["status"], rec2["events"], rec2["seconds"]) == ("done", 3, 4.5)
-    assert agent.results == 1 and len(gw2.store.events("r1")) == 3
+    assert (rec2["status"], rec2["events"], rec2["seconds"]) == ("done", 4, 4.5)   # 3 件 + 保存した印（run.saved）
+    assert agent.results == 1 and [e["type"] for e in gw2.store.events("r1")][-2:] == ["run.end", "run.saved"]
+    assert len(gw2.store.events("r1")) == 4
 
 
 def test_a_question_written_only_to_the_log_shows_as_waiting(tmp_path):

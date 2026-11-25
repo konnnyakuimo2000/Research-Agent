@@ -105,6 +105,13 @@ registerRenderer("run.end", (e) => {
 }, "chat");
 registerRenderer("run.error", (e) => { chatAgent(`<p>エラーで続けられませんでした: ${esc(e.error)}</p>`); statusEl = null; hooks.setLive(""); hooks.updateSend(); }, "chat");
 registerRenderer("run.paused", () => { if (!ctx.replay) hooks.setLive("paused"); now("一時停止を受け付けた（区切りで止まる）"); hooks.updateSend(); }, "chat");
+// 一時停止: 作業の区切りで実際に止まった（run.paused は受け付けただけ）
+registerRenderer("run.held", () => { if (!ctx.replay) hooks.setLive("paused"); now("作業の区切りで止まった（再開すると続く）"); hooks.updateSend(); }, "chat");
+// ゲートウェイが報告と成果物を保存した（報告の下に小さく出す）
+registerRenderer("run.saved", () => {
+  const last = [...$("chat").querySelectorAll(".a .body")].pop();
+  if (last && !last.querySelector(".saved")) last.insertAdjacentHTML("beforeend", `<p class="q saved">報告と成果物を保存した</p>`);
+}, "chat");
 registerRenderer("run.resumed", () => { if (!ctx.replay) hooks.setLive("running"); now("再開した"); hooks.updateSend(); }, "chat");
 registerRenderer("run.cancelled", () => {
   finish((streamText ? renderReport(streamText) : "") + `<p class="q">止めました。</p>`, streamText); hooks.setComposer(false); hooks.loadRuns();

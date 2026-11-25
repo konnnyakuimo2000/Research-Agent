@@ -107,7 +107,7 @@ def test_pause_stops_before_the_next_step_and_resume_finishes(tmp_path):
     m.resume(run.id)
     assert wait_for(lambda: run.status == "done")
     assert g.steps == 3
-    assert types(run) == ["run.start", "run.paused", "run.resumed", "run.end"]
+    assert types(run) == ["run.start", "run.paused", "run.held", "run.resumed", "run.end"]
     try:
         m.resume(run.id)
         raise AssertionError("止まっていない依頼は再開できない")

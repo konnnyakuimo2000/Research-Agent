@@ -390,11 +390,30 @@ class Gateway:
             except OSError as e:
                 log.warning("could not save the result of %s: %s", run_id, e)
                 return False
+            self._mark_saved(run_id)                     # 印を足してから完了にする（完了と見えたら、印もある）
             self.store.update(run_id, status="done")
             return True
         finally:
             with self._lock:
                 self._saving.discard(run_id)
+
+    def _mark_saved(self, run_id: str) -> None:
+        """報告と成果物を保存できたことを、イベントの記録の最後に足す（画面が「保存した」と出せるように）。
+        通番は記録の最後の続き。動いている依頼の配信にも足す（終わりを知らせる前）。"""
+        with self._add_lock:
+            feed = self.feeds.get(run_id)
+            events = feed.events if feed and feed.events else self.store.events(run_id)
+            last = events[-1] if events else {}
+            env = {"v": 1, "seq": (last.get("seq") or 0) + 1, "t": last.get("t", 0), "run_id": run_id, "task_id": "",
+                   "type": "run.saved", "data": {}}
+            try:
+                self.store.append(run_id, env)
+            except OSError as e:
+                log.warning("could not mark %s saved: %s", run_id, e)
+                return
+            self.store.update(run_id, events=env["seq"])
+            if feed and not feed.finished:
+                feed.add(env)
 
     def _report_from_events(self, run_id: str) -> str:
         for env in reversed(self.events(run_id)):

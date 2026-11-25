@@ -107,7 +107,7 @@ def test_settings_travel_from_the_screen_api_to_the_graph(tmp_path):
     assert r.status_code == 200 and r.json()["settings"] == {"max_pages": 6, "images": False}
     run_id = r.json()["id"]
     assert wait_for(lambda: s.gw.store.get(run_id)["status"] == "done")
-    report = _envs(s.c.get(f"/api/runs/{run_id}/events").text)[-1]["data"]["report"]
+    report = [e for e in _envs(s.c.get(f"/api/runs/{run_id}/events").text) if e["type"] == "run.end"][-1]["data"]["report"]
     assert report == "[('images', False), ('max_pages', 6)]"
     assert next(x for x in s.c.get("/api/runs").json()["runs"] if x["id"] == run_id)["settings"] == {"max_pages": 6, "images": False}
 

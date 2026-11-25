@@ -20,7 +20,9 @@ VERSION = 1
 
 LEVEL0_TYPES = {"run.start", "run.end", "run.error", "run.cancelled", "message.delta", "status"}
 LEVEL1_TYPES = {"task.created", "task.start", "task.end", "step.start", "step.end", "question", "answer",
-                "run.waiting", "run.paused", "run.resumed", "artifact"}
+                "run.waiting", "run.paused", "run.resumed", "artifact",
+                "run.held",      # 一時停止を受け付けた後、作業の区切りで実際に止まった（エージェントが出す）
+                "run.saved"}     # 報告と成果物を保存した（ゲートウェイが、保存できた後に記録へ足す）
 CORE_TYPES = LEVEL0_TYPES | LEVEL1_TYPES
 # 終わりの状態になるイベント
 TERMINAL_TYPES = {"run.end", "run.error", "run.cancelled"}

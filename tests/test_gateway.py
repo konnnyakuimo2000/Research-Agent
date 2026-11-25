@@ -221,8 +221,8 @@ def test_chat_agent_runs_on_the_same_screen_api(s):
     assert run["agent"] == "chat"
     assert wait_for(lambda: s.gw.store.get(run["id"])["status"] == "done")
     envs = _envs(s.c.get(f"/api/runs/{run['id']}/events").text)
-    assert [e["type"] for e in envs] == ["run.start", "message.delta", "message.delta", "run.end"]
-    assert envs[-1]["data"]["report"] == "こんにちは" and all(e["run_id"] == run["id"] for e in envs)
+    assert [e["type"] for e in envs] == ["run.start", "message.delta", "message.delta", "run.end", "run.saved"]
+    assert envs[-2]["data"]["report"] == "こんにちは" and all(e["run_id"] == run["id"] for e in envs)
     assert s.c.get(f"/api/runs/{run['id']}/result").json() == {"report": "こんにちは", "artifacts": []}
     listed = s.c.get("/api/runs").json()["runs"]
     assert listed[0]["id"] == run["id"] and listed[0]["agent"] == "chat"
@@ -238,8 +238,8 @@ def test_research_run_through_the_screen_api(s):
     assert wait_for(lambda: s.gw.store.get(run["id"])["status"] == "done")
     envs = _envs(s.c.get(f"/api/runs/{run['id']}/events").text)
     kinds = [e["type"] for e in envs]
-    assert kinds[0] == "run.start" and "run.waiting" in kinds and kinds[-1] == "run.end"
-    assert envs[-1]["data"]["report"].endswith("tag0:1")
+    assert kinds[0] == "run.start" and "run.waiting" in kinds and kinds[-2:] == ["run.end", "run.saved"]
+    assert envs[-2]["data"]["report"].endswith("tag0:1")
     result = s.c.get(f"/api/runs/{run['id']}/result").json()
     assert {a["kind"] for a in result["artifacts"]} >= {"research/v1:facts", "research/v1:sources"}
     assert (s.tmp / f"{run['id']}.events.jsonl").exists()
@@ -295,7 +295,7 @@ def test_a_fake_agent_that_only_speaks_the_contract_can_be_swapped_in(tmp_path):
     run = st.c.post("/api/runs", json={"request": "x", "agent": "fake"}).json()
     assert wait_for(lambda: st.gw.store.get(run["id"])["status"] == "done")
     envs = _envs(st.c.get(f"/api/runs/{run['id']}/events").text)
-    assert [e["type"] for e in envs] == ["run.start", "step.start", "papers/v1:paper.found", "run.end"]
+    assert [e["type"] for e in envs] == ["run.start", "step.start", "papers/v1:paper.found", "run.end", "run.saved"]
     assert st.c.get(f"/api/runs/{run['id']}/result").json()["artifacts"][0]["kind"] == "papers/v1:list"
 
 
@@ -313,7 +313,7 @@ def test_records_made_before_the_split_are_listed_and_replayed(tmp_path):
                          "question": "", "created": listed[0]["created"], "events": 3, "seconds": 2, "models": {},
                          "settings": {}, "effective_settings": None}
     envs = _envs(st.c.get("/api/runs/20261101-000000-abcd/events").text)
-    assert [e["type"] for e in envs] == ["run.start", "research/v1:page.done", "run.end"]
+    assert [e["type"] for e in envs] == ["run.start", "research/v1:page.done", "run.end"]   # 取り込んだ古い記録（保存の印はない）
     assert envs[-1]["data"] == {"report": "水星は惑星 [1]。"}
     assert "event: missing" in st.c.get("/api/runs/no-such/events").text
 
@@ -328,5 +328,5 @@ def test_restarted_gateway_picks_up_a_waiting_run(tmp_path):
     assert again.post(f"/api/runs/{run['id']}/answer", json={"answer": "2"}).status_code == 200
     assert wait_for(lambda: gw2.store.get(run["id"])["status"] == "done")
     envs = _envs(again.get(f"/api/runs/{run['id']}/events").text)
-    assert envs[-1]["data"]["report"].endswith("tag0:2")
+    assert envs[-2]["data"]["report"].endswith("tag0:2")
     assert [e["seq"] for e in envs] == list(range(1, len(envs) + 1))     # 重ならず、抜けもない

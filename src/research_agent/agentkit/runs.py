@@ -78,7 +78,10 @@ class Run:
         return self.recorder.add({"type": type_, **data})
 
     def checkpoint(self) -> bool:
-        """作業の切れ目で呼ぶ。一時停止中なら再開まで待つ。止められたら True。"""
+        """作業の切れ目で呼ぶ。一時停止中なら再開まで待つ。止められたら True。
+        一時停止中にここへ来たら、実際に止まったこと（run.held）を知らせる（前は「受け付けた」までしか分からなかった）。"""
+        if not self.gate.is_set() and not self.cancelled:
+            self.emit("run.held")
         self.gate.wait()
         return self.cancelled
 
