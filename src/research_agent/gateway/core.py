@@ -126,6 +126,8 @@ class Gateway:
         if rec.get("status") in (*LIVE, FINISHING):
             raise RunBusy("調査が終わってから削除できます")
         cleaned = self.store.delete(run_id)
+        if self.catalog and rec.get("agent_run"):
+            self.catalog.delete_call_log(rec["agent_run"])     # 窓口に残った LLM とのやり取りも消す
         with self._lock:
             self.feeds.pop(run_id, None)
             self._finished_at.pop(run_id, None)
@@ -146,6 +148,21 @@ class Gateway:
         if not rec.get("agent_run"):                        # 分ける前の記録（窓口を通していない）
             return {"usd": 0.0, "models": {}, "limit_usd": None}
         return self.catalog.run_usage(rec["agent_run"])
+
+    def llm_log(self, run_id: str) -> str | None:
+        """LLM とのやり取りの記録のテキスト。依頼がなければ KeyError、記録がなければ None。"""
+        from research_agent.gateway.llm_log import render
+        rec = self.store.get(run_id)
+        if rec is None:
+            raise KeyError(run_id)
+        if self.catalog is None or not rec.get("agent_run"):
+            return None
+        calls = self.catalog.call_log(rec["agent_run"])
+        if calls is None:
+            return None
+        client = self.registry.clients.get(rec["agent"])
+        roles = {r["role"]: r.get("title", r["role"]) for r in ((client.manifest() or {}).get("model_roles", []) if client else [])}
+        return render(rec, calls, roles)
 
     def result(self, run_id: str) -> dict | None:
         return self.store.result(run_id)

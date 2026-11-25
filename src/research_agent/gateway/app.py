@@ -11,6 +11,7 @@
     POST /api/runs/{id}/answer|pause|resume|cancel
     DELETE /api/runs/{id}                  終わった依頼を消す（一覧・イベント・結果）。終わっていなければ 409
     GET  /api/runs/{id}/result             結果（報告と成果物）
+    GET  /api/runs/{id}/llm-log            LLM とのやり取りの記録（テキスト。?download=1 でファイルとして）
     GET  /api/status?agent=…               そのエージェントが使うモデルなどにつながるか
     GET  /api/models                       モデルの窓口のモデル（役割の既定・能力・外部か・値段・使えるか）。
                                            POST /api/runs の models で選び直せる
@@ -32,7 +33,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import RedirectResponse, Response, StreamingResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from research_agent import assets
@@ -204,6 +205,17 @@ def create_app(registry: Registry | None = None, runs_dir: Path | None = None, a
         if result is None:
             raise HTTPException(status_code=404, detail="結果はありません")
         return result
+
+    @app.get("/api/runs/{run_id}/llm-log")
+    def api_llm_log(run_id: str, download: int = 0, key: str | None = None,
+                    authorization: str | None = Header(default=None)) -> PlainTextResponse:
+        check_key(authorization, key)
+        text = call(gw.llm_log, run_id)
+        if text is None:
+            raise HTTPException(status_code=404, detail="この調査の LLM とのやり取りの記録はありません"
+                                                        "（記録を始める前の調査か、モデルの窓口を通していない）")
+        headers = {"Content-Disposition": f'attachment; filename="{run_id}-llm.txt"'} if download else {}
+        return PlainTextResponse(text, headers=headers)
 
     @app.get("/api/runs/{run_id}/events")
     def api_events(run_id: str, request: Request, after: int = 0, key: str | None = None,

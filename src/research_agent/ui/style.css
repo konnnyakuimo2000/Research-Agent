@@ -521,3 +521,4 @@ button:focus-visible, .node:focus-visible, input:focus-visible { outline: 2px so
 .kdetail small { color: var(--muted); }
 .kcaps { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .kprice input { width: 80px; font: inherit; font-size: 12px; font-family: var(--font-data); color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 2px 5px; }
+a.linkbtn { text-decoration: none; display: inline-block; }

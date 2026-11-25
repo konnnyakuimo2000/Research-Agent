@@ -72,8 +72,7 @@ class ModelCatalog:
         try:
             headers = {"Authorization": f"Bearer {self.key}"} if self.key else {}
             r = (self.http or httpx.Client(trust_env=False, timeout=10)).get(base + path, headers=headers)
-            r.raise_for_status()
-            return r.json()
+            return r.json() if r.status_code < 400 else None
         except (httpx.HTTPError, ValueError):
             return None
 
@@ -94,6 +93,19 @@ class ModelCatalog:
         if method != "GET" and not path.endswith("/check"):
             self.get(refresh=True)
         return data
+
+    def call_log(self, agent_run: str) -> list[dict] | None:
+        """1 つの調査の LLM とのやり取り（窓口の記録。なければ・つながらなければ None）。"""
+        value = self._read(f"/logs/{agent_run}")
+        return None if value is None else value.get("calls", [])
+
+    def delete_call_log(self, agent_run: str) -> None:
+        """依頼を削除したとき、窓口の記録も消す（つながらなければ何もしない）。"""
+        try:
+            headers = {"Authorization": f"Bearer {self.key}"} if self.key else {}
+            (self.http or httpx.Client(trust_env=False, timeout=10)).delete(self.url.rstrip("/") + f"/logs/{agent_run}", headers=headers)
+        except httpx.HTTPError:
+            pass
 
     def run_usage(self, agent_run: str) -> dict | None:
         """1 つの調査の費用（つながらなければ None）。"""

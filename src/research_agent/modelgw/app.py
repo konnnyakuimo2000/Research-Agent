@@ -12,6 +12,8 @@
     POST /v1/keys/check          {key} → 鍵の形から提供元を判別し、その提供元のモデル一覧で確かめる（残さない）
     POST /v1/keys                {key, models: [{model, title, capabilities, price}]} → 鍵を残し、選んだモデルを足す
     DELETE /v1/keys/{id}         鍵と、その鍵のモデルを外す
+    GET  /v1/logs/{id}           1 つの調査の LLM とのやり取り（送った全文と応答。calllog.py）
+    DELETE /v1/logs/{id}         その記録を消す（依頼を削除したとき）
 
 - provider が "anthropic" のモデル（Claude）は、変換の部品（anthropic_provider）を通して送る。応答は OpenAI の形
 - 値段（price）を書いたモデルは、呼び出しごとに費用を数える（応答に x_model_cost を付ける）。
@@ -47,6 +49,7 @@ from openai import APIConnectionError, APIStatusError
 from research_agent.config import Settings
 from research_agent.llm import LLM
 from research_agent.modelgw.anthropic_provider import AnthropicChat, UnsupportedRequest
+from research_agent.modelgw.calllog import PARAMS, CallLog, output_format, plain_messages
 from research_agent.modelgw.keys import PROVIDERS, KeyProblem, KeyStore, clean_choice, list_models as provider_models
 from research_agent.modelgw.registry import ModelSpec, Usage, load_catalog
 from research_agent.modelgw.spend import Spend
@@ -135,7 +138,7 @@ def needs_of(body: dict) -> set[str]:
 def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = None, default: str | None = None,
                key: str | None = None, http_client: httpx.Client | None = None,
                roles: dict[str, str] | None = None, limits: dict | None = None, spend_file: Path | None = None,
-               anthropic_http: object = None, keys_file: Path | None = None) -> FastAPI:
+               anthropic_http: object = None, keys_file: Path | None = None, log_dir: Path | None = None) -> FastAPI:
     """anthropic_http は Claude の部品が使う HTTP の部品（httpx2.Client。テストで偽の応答を返すため）。
     keys_file は画面から入れた鍵の置き場（None なら残さない）。"""
     if specs is None:
@@ -144,6 +147,7 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
         specs, default, roles, limits = catalog.specs, catalog.default, catalog.roles, catalog.limits
         spend_file = spend_file or Path(os.getenv("MODEL_SPEND_FILE", "") or REPO_ROOT / "runs" / "model_spend.json")
         keys_file = keys_file or Path(os.getenv("MODEL_KEYS_FILE", "") or REPO_ROOT / "runs" / ".secrets" / "model_keys.json")
+        log_dir = log_dir or Path(os.getenv("MODEL_CALL_LOG_DIR", "") or REPO_ROOT / "runs" / "llm_logs")
     default = default or specs[0].id
     roles = dict(roles or {})
     key = os.getenv("MODEL_GATEWAY_KEY", "") if key is None else key
@@ -154,6 +158,7 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
     for s in keys.specs():                           # 画面から入れた鍵のモデル（設定ファイルの id と重なれば設定ファイルが優先）
         models.setdefault(s.id, Model(s, http_client, anthropic_http))
     spend = Spend(limits, spend_file)
+    calls = CallLog(log_dir)
     app = FastAPI(title="model-gateway")
     app.state.models = models
     app.state.spend = spend
@@ -192,6 +197,20 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
         mark = {"gateway": True, "x_model_wait": round(waited, 1), "x_model_id": model.spec.id}
         return JSONResponse(status_code=status, content={
             "error": {"message": f"{type(e).__name__}: {e}", "type": "upstream_error", "code": status, **mark}, **mark})
+
+    def record(call: tuple, model: Model, body: dict, messages: list, started: float, text: str | None = None,
+               error: str = "", usage: object = None, upstream: str = "") -> None:
+        """調査の id がある呼び出しの、送った全文と応答を残す（calllog.py）。"""
+        budget, role = call
+        if not budget:
+            return
+        calls.add(budget, {
+            "role": role, "model": model.spec.id, "upstream": upstream or model.spec.model,
+            "seconds": round(time.perf_counter() - started, 2), "stream": bool(body.get("stream")),
+            "params": {k: body[k] for k in PARAMS if k in body}, "format": output_format(body),
+            "messages": plain_messages(messages), "response": text, "error": error,
+            "usage": {"prompt_tokens": getattr(usage, "prompt_tokens", None), "completion_tokens": getattr(usage, "completion_tokens", None)}
+            if usage is not None else None})
 
     def track(model: Model, started: float, waited: float, usage: object, budget: str | None,
               role: str = "", upstream: str = "") -> float:
@@ -273,6 +292,20 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
         health_cache.clear()
         return {"id": entry_id, "removed": [m["id"] for m in entry["models"]]}
 
+    # ---- LLM とのやり取りの記録 ----
+    @app.get("/v1/logs/{budget}")
+    def logs_read(budget: str, authorization: str | None = Header(default=None)) -> dict:
+        check(authorization)
+        entries = calls.read(budget)
+        if entries is None:
+            raise HTTPException(status_code=404, detail="この調査の LLM とのやり取りの記録はありません")
+        return {"id": budget, "calls": entries}
+
+    @app.delete("/v1/logs/{budget}")
+    def logs_delete(budget: str, authorization: str | None = Header(default=None)) -> dict:
+        check(authorization)
+        return {"id": budget, "deleted": calls.delete(budget)}
+
     @app.get("/v1/usage")
     def usage(authorization: str | None = Header(default=None)) -> dict:
         check(authorization)
@@ -339,20 +372,25 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
                 try:
                     r, waited = model.llm.call(messages, **kwargs)
                 except (APIConnectionError, APIStatusError) as e:
+                    record(call, model, body, messages, started, error=f"{type(e).__name__}: {e}")
                     return failure(e, getattr(e, "model_wait", 0.0), model, call)
                 except UnsupportedRequest as e:
+                    record(call, model, body, messages, started, error=f"送らずに断った: {e}")
                     return refuse(400, str(e), model, "unsupported_request")
                 finally:
                     with model.usage.lock:
                         model.usage.active -= 1
                 cost = track(model, started, waited, r.usage, x_model_budget, role, getattr(r, "model", "") or "")
+                msg = r.choices[0].message if r.choices else None
+                record(call, model, body, messages, started, text=getattr(msg, "content", None) or "", usage=r.usage,
+                       upstream=getattr(r, "model", "") or "")
             finally:
                 release()                                   # 費用を記録してから、同じ調査の次の呼び出しを通す
             return JSONResponse({**r.model_dump(exclude_none=True), "x_model_wait": round(waited, 1),
                                  "x_model_id": model.spec.id, "x_model_cost": round(cost, 6)})
-        return stream(model, messages, kwargs, started, call, release)
+        return stream(model, body, messages, kwargs, started, call, release)
 
-    def stream(model: Model, messages: list[dict], kwargs: dict, started: float, call: tuple, release):
+    def stream(model: Model, body: dict, messages: list[dict], kwargs: dict, started: float, call: tuple, release):
         budget, role = call
         waited = [0.0]
         chunks = model.llm.stream_chunks(messages, on_wait=lambda s: waited.__setitem__(0, waited[0] + s), **kwargs)
@@ -362,29 +400,36 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
             with model.usage.lock:
                 model.usage.active -= 1
             release()
+            record(call, model, body, messages, started, error=f"{type(e).__name__}: {e}")
             return failure(e, waited[0], model, call)
         except UnsupportedRequest as e:
             with model.usage.lock:
                 model.usage.active -= 1
             release()
+            record(call, model, body, messages, started, error=f"送らずに断った: {e}")
             return refuse(400, str(e), model, "unsupported_request")
 
         def gen() -> Iterator[str]:
-            usage, upstream, broke = None, getattr(first, "model", "") or "", False
+            usage, upstream, broke, parts, error = None, getattr(first, "model", "") or "", False, [], ""
+
+            def text_of(c) -> str:
+                return "".join((getattr(ch.delta, "content", None) or "") for ch in (c.choices or []))
             try:
                 if first is not None:
                     usage = first.usage
+                    parts.append(text_of(first))
                     yield f"data: {json.dumps({**first.model_dump(exclude_none=True), 'x_model_wait': round(waited[0], 1), 'x_model_id': model.spec.id}, ensure_ascii=False)}\n\n"
                 for chunk in chunks:
                     usage = chunk.usage or usage
                     upstream = upstream or getattr(chunk, "model", "") or ""
+                    parts.append(text_of(chunk))
                     yield f"data: {json.dumps(chunk.model_dump(exclude_none=True), ensure_ascii=False)}\n\n"
                 yield "data: [DONE]\n\n"
             except (APIConnectionError, APIStatusError) as e:        # 途中で切れた（やり直さない）
                 log.warning("model %s stream broke: %s", model.spec.id, e)
                 with model.usage.lock:
                     model.usage.errors += 1
-                broke = True
+                broke, error = True, f"途中で切れた: {type(e).__name__}: {e}"
                 yield f"data: {json.dumps({'error': {'message': f'{type(e).__name__}: {e}'}, 'gateway': True})}\n\n"
             finally:
                 with model.usage.lock:
@@ -393,6 +438,8 @@ def create_app(models_path: Path | None = None, specs: list[ModelSpec] | None = 
                     track(model, started, waited[0], usage, budget, role, upstream)
                     if broke:
                         spend.answered(budget, role, model.spec.id, "", ok=False)
+                    record(call, model, body, messages, started, text="".join(parts), error=error, usage=usage,
+                           upstream=upstream)
                 finally:
                     release()
 

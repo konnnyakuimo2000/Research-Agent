@@ -6,7 +6,7 @@
 // 「標準に戻す」は、名乗りの既定と窓口の既定モデルに戻す（適用か保存で反映）。ブラウザの保存の形は前と同じ
 // （settings:<エージェント> = { preset, values }、models:<エージェント> = { all, roles }、agent = エージェント）
 import { $, esc } from "../core/util.js";
-import { api, store } from "../core/api.js";
+import { api, store, withKey } from "../core/api.js";
 import { ctx } from "../core/ctx.js";
 import { changed, coerce, defaults, fieldsHtml, hasFields, readFields } from "../core/schema-form.js";
 import { answeredMeta, choiceLabel, emptyChoice, fmtUsd, gatewayStatusHtml, invalidChoices, loadModelStatus, modelOf,
@@ -242,7 +242,11 @@ function runHtml(r) {
     <h4>役割ごとのモデル（開始時の割り当て）</h4>
     ${Object.keys(r.models || {}).length ? `<table class="usage"><tbody>${Object.entries(r.models).map(([role, id]) => `<tr><td>${esc(roles[role] || role)}</td><td>${esc(mTitle(id))}${modelOf(id) ? "" : "（今は一覧にない）"}</td></tr>`).join("")}</tbody></table>`
       : `<p class="note">記録なし</p>`}
-    <h4>実際に応答したモデル</h4><p class="spend" id="runAnswered">読み込み中…</p>`;
+    <h4>実際に応答したモデル</h4><p class="spend" id="runAnswered">読み込み中…</p>
+    <h4>LLM とのやり取り</h4>
+    <p class="fbtns"><a class="linkbtn" href="${esc(withKey(`/api/runs/${encodeURIComponent(r.id)}/llm-log`))}" target="_blank" rel="noopener">テキストで開く</a>
+      <a class="linkbtn" href="${esc(withKey(`/api/runs/${encodeURIComponent(r.id)}/llm-log?download=1`))}" download>保存</a></p>
+    <p class="since">送った全文と応答（記録を始めた後の調査だけ）</p>`;
 }
 async function fillAnswered(r) {
   const el = $("runAnswered"); if (!el || !r) return;
