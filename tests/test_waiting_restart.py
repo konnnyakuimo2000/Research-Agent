@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from typing import TypedDict
 
@@ -45,6 +46,14 @@ def make_graph(calls: list[str]):
     return g.compile(checkpointer=InMemorySaver())
 
 
+def saved_status(path):
+    import pickle
+    try:
+        return pickle.loads(path.read_bytes())["run"].get("status")
+    except (OSError, EOFError, pickle.UnpicklingError):
+        return None
+
+
 def wait_for(cond, seconds=5.0):
     end = time.time() + seconds
     while not cond() and time.time() < end:
@@ -59,7 +68,7 @@ def test_a_waiting_run_continues_once_after_a_restart(tmp_path):
     wait_for(lambda: run.status == "waiting")
     assert run.question == "どちらの東京タワーですか？" and calls == ["search"]
     kept = tmp_path / "waiting" / f"{run.id}.waiting.pkl"
-    wait_for(kept.exists)
+    wait_for(lambda: saved_status(kept) == "waiting")        # 作業の区切りでも残すので、答え待ちとして残るまで待つ
     seqs = [e["seq"] for e in run.recorder.events]
 
     # 立ち上げ直し（チェックポイントの置き場も新しい）
@@ -94,3 +103,53 @@ def test_a_broken_record_is_skipped(tmp_path):
     (tmp_path / "waiting").mkdir()
     (tmp_path / "waiting" / "bad.waiting.pkl").write_bytes(b"not a pickle")
     assert ResearchRuns(make_graph([]), tmp_path).restore_waiting() == []
+
+
+def make_three_steps(calls: list[str], block: threading.Event | None = None):
+    """a → b → c。block を渡すと、b の途中で止まる（立ち上げ直す前のエージェントが、作業の途中で消えたことを表す）。"""
+    def a(state: St) -> dict:
+        calls.append("a")
+        return {"found": "A"}
+
+    def b(state: St) -> dict:
+        calls.append("b")
+        if block is not None:
+            block.wait(30)
+        return {"found": state["found"] + "B"}
+
+    def c(state: St) -> dict:
+        calls.append("c")
+        return {"answer": state["found"] + "C"}
+
+    g = StateGraph(St)
+    for name, fn in (("a", a), ("b", b), ("c", c)):
+        g.add_node(name, fn)
+    g.add_edge(START, "a")
+    g.add_edge("a", "b")
+    g.add_edge("b", "c")
+    g.add_edge("c", END)
+    return g.compile(checkpointer=InMemorySaver())
+
+
+def test_a_running_run_continues_from_the_last_step_after_a_restart(tmp_path):
+    first_calls: list[str] = []
+    stuck = threading.Event()                          # 放さない（前のエージェントは b の途中で消えた）
+    first = ResearchRuns(make_three_steps(first_calls, stuck), tmp_path)
+    run = first.start({"text": "x"})
+    kept = tmp_path / "waiting" / f"{run.id}.waiting.pkl"
+    wait_for(lambda: first_calls == ["a", "b"] and kept.exists())
+    before = [e["seq"] for e in run.recorder.events]
+
+    calls: list[str] = []
+    second = ResearchRuns(make_three_steps(calls), tmp_path)
+    assert second.restore_waiting() == [run.id]
+    back = second.get(run.id)
+    wait_for(lambda: back.status == "done")
+    assert calls == ["b", "c"]                         # 終わっていた a はやり直さず、途中だった b から続けた
+    assert back.result["report"] == "ABC"
+    seqs = [e["seq"] for e in back.recorder.events]
+    assert seqs[:len(before)] == before and seqs == list(range(1, len(seqs) + 1))   # 通番は途切れない
+    assert any("立ち上げ直した" in (e.get("text") or "") for e in back.recorder.events)
+    assert not kept.exists() and not (tmp_path / "waiting" / "events" / f"{run.id}.jsonl").exists()   # 終わったら消す
+    stuck.set()                                        # 前のエージェントのスレッドを片付ける（テストの終わりの後始末）
+    wait_for(lambda: run.status in ("done", "error"), 10)

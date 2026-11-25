@@ -14,11 +14,15 @@ Done(報告) / Waiting(質問) / Cancelled()
   エージェントの途中の状態（snapshot_state。調査ならグラフのチェックポイント）を waiting_dir に残す
 - 立ち上げたとき restore_waiting で戻す。同じ依頼に答えると、続きから 1 回だけ動く（答えた時点で残したものを消すので、
   答えた後に立ち上げ直しても、同じ質問がもう一度答え待ちにはならない）
-- 動いている途中（外部の呼び出しの最中）の依頼は戻さない（処理が重ならないようにするには別の設計が要る）
+- 調べている途中の依頼も、作業の区切りごとに同じ形で残し（save_progress。エージェントが区切りで呼ぶ）、立ち上げたら
+  最後の区切りから続ける。区切りの途中だった作業は、初めからやり直す（その作業のイベントは二重に出ることがある）
+- イベントは依頼ごとのファイル（waiting_dir/events/<id>.jsonl）にも 1 件ずつ書く。立ち上げ直した後も、通番は
+  ゲートウェイが受け取った続きから付く（区切りの後に出したイベントも失わない）。終わったら消す
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import pickle
 import threading
@@ -94,6 +98,7 @@ class RunManager:
         self.runs: dict[str, Run] = {}
         self._lock = threading.Lock()
         self.waiting_dir = waiting_dir
+        self.events_dir = waiting_dir / "events" if waiting_dir else None
 
     # ---- エージェントごとに書く ----
 
@@ -116,6 +121,14 @@ class RunManager:
     def _waiting_path(self, run_id: str) -> Path | None:
         return self.waiting_dir / f"{run_id}.waiting.pkl" if self.waiting_dir else None
 
+    def _events_path(self, run_id: str) -> Path | None:
+        return self.events_dir / f"{run_id}.jsonl" if self.events_dir else None
+
+    def save_progress(self, run: Run) -> None:
+        """作業の区切りで呼ぶ: 調べている途中の依頼を残す（立ち上げ直したら、この区切りから続ける）。"""
+        if run.status in ("running", "paused") and not run.cancelled:
+            self._save_waiting(run)
+
     def _save_waiting(self, run: Run) -> None:
         path = self._waiting_path(run.id)
         if path is None:
@@ -123,7 +136,8 @@ class RunManager:
         try:
             data = {"run": {"id": run.id, "request": run.request, "input": run.input, "settings": run.settings,
                             "models": run.models, "thread_id": run.thread_id, "question": run.question,
-                            "created": run.created, "started": run.recorder.started, "events": list(run.recorder.events)},
+                            "status": run.status, "created": run.created, "started": run.recorder.started,
+                            "events": list(run.recorder.events)},
                     "state": self.snapshot_state(run)}
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(".tmp")
@@ -137,6 +151,11 @@ class RunManager:
         if path is not None:
             path.unlink(missing_ok=True)
 
+    def _drop_events(self, run: Run) -> None:
+        path = self._events_path(run.id)
+        if path is not None:
+            path.unlink(missing_ok=True)
+
     def restore_waiting(self) -> list[str]:
         """立ち上げたとき: 残っている答え待ちの依頼を戻す。戻した依頼の id を返す。
         ファイルは、このエージェントが書いたもの（waiting_dir の中）だけを読む。"""
@@ -147,18 +166,38 @@ class RunManager:
             try:
                 data = pickle.loads(path.read_bytes())
                 r = data["run"]
-                recorder = Recorder(r["id"])
-                recorder.events, recorder.started = list(r["events"]), r["started"]
-                run = Run(r["id"], r["request"], r["input"], r["settings"], recorder, r["models"], status="waiting",
-                          question=r["question"], created=r["created"], thread_id=r["thread_id"])
+                status = r.get("status", "waiting")
+                recorder = Recorder(r["id"], self._events_path(r["id"]))
+                # イベントは、ファイルに書いたもの（区切りの後に出した分も含む）があればそれを使う
+                recorder.events, recorder.started = self._read_events(r["id"]) or list(r["events"]), r["started"]
+                run = Run(r["id"], r["request"], r["input"], r["settings"], recorder, r["models"], status=status,
+                          question=r["question"] if status == "waiting" else "", created=r["created"],
+                          thread_id=r["thread_id"])
                 self.restore_state(run, data.get("state"))
             except Exception:  # noqa: BLE001 - 戻せない記録（版が違うなど）は飛ばす
-                log.exception("could not restore waiting run from %s", path.name)
+                log.exception("could not restore run from %s", path.name)
                 continue
             with self._lock:
                 self.runs[run.id] = run
             out.append(run.id)
-            log.info("restored waiting run %s (%d events)", run.id, len(run.recorder.events))
+            log.info("restored %s run %s (%d events)", status, run.id, len(run.recorder.events))
+            if status in ("running", "paused"):
+                if status == "paused":
+                    run.gate.clear()                       # 一時停止のまま戻す（再開を押したら続く）
+                run.emit("status", text="エージェントを立ち上げ直したため、最後の区切りから続ける")
+                self._spawn(run, ("resume", None))
+        return out
+
+    def _read_events(self, run_id: str) -> list[dict]:
+        path = self._events_path(run_id)
+        if path is None or not path.exists():
+            return []
+        out = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                out.append(json.loads(line))
+            except ValueError:
+                continue                                   # 書いている途中で止まった最後の行
         return out
 
     # ---- 操作 ----
@@ -168,7 +207,7 @@ class RunManager:
         run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:4]
         text = str(input.get("text", ""))
         models = {str(k): str(v) for k, v in (models or {}).items() if v}
-        run = Run(run_id, text, input, settings or {}, Recorder(run_id), models)
+        run = Run(run_id, text, input, settings or {}, Recorder(run_id, self._events_path(run_id)), models)
         with self._lock:
             self.runs[run_id] = run
         run.emit("run.start", request=text, **({"models": models} if models else {}))
@@ -270,6 +309,8 @@ class RunManager:
         self._cleanup(run)
 
     def _cleanup(self, run: Run) -> None:
+        self._drop_waiting(run)
+        self._drop_events(run)
         try:
             self.cleanup(run)
         except Exception:  # noqa: BLE001 - 片付けの失敗で結果を変えない

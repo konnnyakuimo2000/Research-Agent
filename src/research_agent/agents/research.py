@@ -84,9 +84,15 @@ class ResearchRuns(RunManager):
 
     def work(self, run: Run, payload: tuple[str, object]) -> Done | Waiting | Cancelled:
         kind, value = payload
-        graph_input = ({"request": run.request, "models": run.models, "budget": run.id, "settings": run.settings}
-                       if kind == "start"
-                       else Command(resume=value))
+        if kind == "resume":
+            # 立ち上げ直した後: 最後の区切り（チェックポイント）から続ける。一時停止のまま戻した依頼は、再開を待つ
+            if run.checkpoint():
+                return Cancelled()
+            graph_input = None
+        else:
+            graph_input = ({"request": run.request, "models": run.models, "budget": run.id, "settings": run.settings}
+                           if kind == "start"
+                           else Command(resume=value))
         config = {"configurable": {"thread_id": run.thread_id}, "recursion_limit": RECURSION_LIMIT}
         question = ""
         for mode, chunk in self.graph.stream(graph_input, config, stream_mode=["updates", "custom"]):
@@ -100,6 +106,7 @@ class ResearchRuns(RunManager):
                     text = _describe(node, update)
                     if text:
                         run.emit("status", text=text)
+            self.save_progress(run)       # 作業の区切りごとに残す（立ち上げ直したら、ここから続ける）
             if run.checkpoint():          # 一時停止中は次の作業を始めない。止められたらやめる
                 return Cancelled()
         if question:
