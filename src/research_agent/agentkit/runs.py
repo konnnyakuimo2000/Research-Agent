@@ -8,15 +8,24 @@
 
 エージェントごとの中身は、RunManager を継いで work() に書く。work() は次のどれかを返す:
 Done(報告) / Waiting(質問) / Cancelled()
+
+答え待ちの依頼は、エージェントを立ち上げ直しても続けられる（全体アーキテクチャの分析 2）:
+- 答え待ちになったら、依頼（id・スレッド id・質問・入力・設定）と、それまでのイベント（通番と時刻）と、
+  エージェントの途中の状態（snapshot_state。調査ならグラフのチェックポイント）を waiting_dir に残す
+- 立ち上げたとき restore_waiting で戻す。同じ依頼に答えると、続きから 1 回だけ動く（答えた時点で残したものを消すので、
+  答えた後に立ち上げ直しても、同じ質問がもう一度答え待ちにはならない）
+- 動いている途中（外部の呼び出しの最中）の依頼は戻さない（処理が重ならないようにするには別の設計が要る）
 """
 
 from __future__ import annotations
 
 import logging
+import pickle
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from research_agent.agent.telemetry import Recorder
 
@@ -81,9 +90,10 @@ class StateError(Exception):
 class RunManager:
     keep_seconds = 3600.0     # 終わった依頼を覚えておく時間（ゲートウェイが記録を受け取り終えるまで）
 
-    def __init__(self) -> None:
+    def __init__(self, waiting_dir: Path | None = None) -> None:
         self.runs: dict[str, Run] = {}
         self._lock = threading.Lock()
+        self.waiting_dir = waiting_dir
 
     # ---- エージェントごとに書く ----
 
@@ -93,6 +103,63 @@ class RunManager:
 
     def cleanup(self, run: Run) -> None:
         """終わった・失敗した・止めた依頼の後片付け（会話の記録を消すなど）。"""
+
+    def snapshot_state(self, run: Run) -> object:
+        """答え待ちの依頼の、エージェントの途中の状態（立ち上げ直しても続けるため。pickle できるもの）。"""
+        return None
+
+    def restore_state(self, run: Run, state: object) -> None:
+        """snapshot_state で残したものを戻す。"""
+
+    # ---- 答え待ちの依頼を残す・戻す ----
+
+    def _waiting_path(self, run_id: str) -> Path | None:
+        return self.waiting_dir / f"{run_id}.waiting.pkl" if self.waiting_dir else None
+
+    def _save_waiting(self, run: Run) -> None:
+        path = self._waiting_path(run.id)
+        if path is None:
+            return
+        try:
+            data = {"run": {"id": run.id, "request": run.request, "input": run.input, "settings": run.settings,
+                            "models": run.models, "thread_id": run.thread_id, "question": run.question,
+                            "created": run.created, "started": run.recorder.started, "events": list(run.recorder.events)},
+                    "state": self.snapshot_state(run)}
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_bytes(pickle.dumps(data))
+            tmp.replace(path)
+        except Exception:  # noqa: BLE001 - 残せなくても答え待ちは続ける（立ち上げ直したら続けられないだけ）
+            log.exception("could not keep waiting run %s", run.id)
+
+    def _drop_waiting(self, run: Run) -> None:
+        path = self._waiting_path(run.id)
+        if path is not None:
+            path.unlink(missing_ok=True)
+
+    def restore_waiting(self) -> list[str]:
+        """立ち上げたとき: 残っている答え待ちの依頼を戻す。戻した依頼の id を返す。
+        ファイルは、このエージェントが書いたもの（waiting_dir の中）だけを読む。"""
+        if not self.waiting_dir or not self.waiting_dir.exists():
+            return []
+        out = []
+        for path in sorted(self.waiting_dir.glob("*.waiting.pkl")):
+            try:
+                data = pickle.loads(path.read_bytes())
+                r = data["run"]
+                recorder = Recorder(r["id"])
+                recorder.events, recorder.started = list(r["events"]), r["started"]
+                run = Run(r["id"], r["request"], r["input"], r["settings"], recorder, r["models"], status="waiting",
+                          question=r["question"], created=r["created"], thread_id=r["thread_id"])
+                self.restore_state(run, data.get("state"))
+            except Exception:  # noqa: BLE001 - 戻せない記録（版が違うなど）は飛ばす
+                log.exception("could not restore waiting run from %s", path.name)
+                continue
+            with self._lock:
+                self.runs[run.id] = run
+            out.append(run.id)
+            log.info("restored waiting run %s (%d events)", run.id, len(run.recorder.events))
+        return out
 
     # ---- 操作 ----
 
@@ -114,6 +181,7 @@ class RunManager:
             if run.status != "waiting":
                 raise StateError("この依頼は答えを待っていません")
             run.status, run.question = "running", ""
+        self._drop_waiting(run)          # 答えたら消す（立ち上げ直しても、同じ質問に二度は答えない）
         self._spawn(run, ("answer", text))
         return run
 
@@ -172,6 +240,7 @@ class RunManager:
             except Exception as e:  # noqa: BLE001 - 原因を画面に出す
                 log.exception("run %s failed", run.id)
                 run.status, run.ended = "error", time.time()
+                self._drop_waiting(run)
                 run.emit("run.error", error=f"{type(e).__name__}: {e}")
                 run.recorder.finish()
                 self._cleanup(run)
@@ -182,7 +251,9 @@ class RunManager:
         if isinstance(outcome, Waiting) and not run.cancelled:
             run.status, run.question = "waiting", outcome.question
             run.emit("run.waiting", question=outcome.question)
+            self._save_waiting(run)
             return
+        self._drop_waiting(run)
         if isinstance(outcome, Done) and not run.cancelled:
             run.status = "done"
             run.result.setdefault("report", outcome.report)

@@ -59,9 +59,28 @@ MANIFEST = {
 
 class ResearchRuns(RunManager):
     def __init__(self, graph, data_dir: Path | None = None) -> None:
-        super().__init__()
+        # 答え待ちの依頼は data_dir/waiting に残し、立ち上げ直したら戻す（agentkit/runs.py）
+        super().__init__(data_dir / "waiting" if data_dir else None)
         self.graph = graph
         self.dir = data_dir
+
+    def snapshot_state(self, run: Run) -> object:
+        """グラフのチェックポイントのうち、この依頼のスレッドの分（InMemorySaver の中身。直列化済みの値）。"""
+        saver, tid = getattr(self.graph, "checkpointer", None), run.thread_id
+        if saver is None or not hasattr(saver, "storage"):
+            return None
+        return {"storage": {ns: dict(v) for ns, v in saver.storage.get(tid, {}).items()},
+                "writes": {k: v for k, v in saver.writes.items() if k[0] == tid},
+                "blobs": {k: v for k, v in saver.blobs.items() if k[0] == tid}}
+
+    def restore_state(self, run: Run, state: object) -> None:
+        saver = getattr(self.graph, "checkpointer", None)
+        if not state or saver is None or not hasattr(saver, "storage"):
+            raise RuntimeError("グラフのチェックポイントを戻せない")
+        for ns, checkpoints in state["storage"].items():
+            saver.storage[run.thread_id][ns].update(checkpoints)
+        saver.writes.update(state["writes"])
+        saver.blobs.update(state["blobs"])
 
     def work(self, run: Run, payload: tuple[str, object]) -> Done | Waiting | Cancelled:
         kind, value = payload
@@ -174,4 +193,5 @@ def create_app(graph=None, settings=None, data_dir: Path | None = None, key: str
         graph = build_graph(settings, LLM(settings))
         data_dir = data_dir or REPO_ROOT / "runs" / "agent-research"
     manager = ResearchRuns(graph, data_dir)
+    manager.restore_waiting()          # 立ち上げ直す前に答え待ちだった依頼を戻す
     return agent_app(MANIFEST, manager, lambda: health(settings), key=key)
