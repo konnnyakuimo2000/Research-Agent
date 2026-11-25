@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import bisect
 import json
 import sqlite3
 import threading
@@ -163,6 +164,8 @@ class Feed:
     seen: float = 0.0            # 中継がエージェントから最後に何か（イベント・生存の合図）を受け取った時刻
     failed_since: float = 0.0    # エージェントから受け取れなくなった時刻（中継を作り直しても引き継ぐ。受け取れたら 0）
     condition: threading.Condition = field(default_factory=threading.Condition)
+    seqs: list[int] = field(default_factory=list)   # events の通番（増える順）。読む位置を二分探索で見つける
+    scanned: int = 0             # wait_after が見たイベントの延べ件数（配信の重さを測るため）
 
     @property
     def last_seq(self) -> int:
@@ -171,6 +174,7 @@ class Feed:
     def add(self, env: dict) -> None:
         with self.condition:
             self.events.append(env)
+            self.seqs.append(env["seq"])
             self.condition.notify_all()
 
     def finish(self) -> None:
@@ -179,10 +183,18 @@ class Feed:
             self.condition.notify_all()
 
     def wait_after(self, seq: int, timeout: float) -> list[dict]:
-        """seq より後のイベント。なければ timeout 秒まで待つ。"""
+        """seq より後のイベント。なければ timeout 秒まで待つ。
+
+        通番は増える順に並んでいるので、読む位置を二分探索で見つけ、新しい分だけを返す。前は読むたびに全件を
+        なめていたので、1 件ずつ 1,000 件を配ると延べ 500,500 件を見ていた（再レビュー）。"""
         with self.condition:
-            new = [e for e in self.events if e["seq"] > seq]
+            new = self._after(seq)
             if not new and not self.finished:
                 self.condition.wait(timeout)
-                new = [e for e in self.events if e["seq"] > seq]
+                new = self._after(seq)
             return new
+
+    def _after(self, seq: int) -> list[dict]:
+        new = self.events[bisect.bisect_right(self.seqs, seq):]
+        self.scanned += len(new)
+        return new

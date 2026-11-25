@@ -124,6 +124,8 @@ export class FlowBase {
   }
   snap() { this.layout(); Object.values(this.n).forEach((n) => { n.cur = { ...n.tgt }; }); }
   isEmpty() { return Object.keys(this.n).length === 0; }
+  // 点・粒などの動きが残っているか（残っている間は描き続ける）
+  busy() { return this.tokens.length > 0 || this.particles.length > 0 || (this.ghosts?.length || 0) > 0; }
   bounds() {
     const ns = Object.values(this.n);
     if (!ns.length) return { x0: 0, y0: 0, x1: 400, y1: 300 };

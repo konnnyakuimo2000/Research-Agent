@@ -1,7 +1,7 @@
 // カメラ（拡大・縮小・移動）。見せている図（流れの図・木）が bounds() で中身の範囲を返す。
 // 図が広がると、全体が収まるよう滑らかに縮小する。ホイール・ピンチで拡大、ドラッグで移動（そのときは自動をやめる）
 import { $, clamp } from "./util.js";
-import { ctx } from "./ctx.js";
+import { ctx, wake } from "./ctx.js";
 
 const MIN_ZOOM = 0.22, MAX_ZOOM = 2.5, FIT_MAX = 1;
 const flow = $("flow");
@@ -9,7 +9,7 @@ let cam = { x: 0, y: 0, s: 1 }, camT = { ...cam }, auto = true;
 let view = null;            // 見せている図 { el, margin, bounds(), aimBox?() }
 
 export function useView(v) { view = v; }
-export function fitMode(on) { auto = on; $("zoomFit").setAttribute("aria-pressed", String(on)); }
+export function fitMode(on) { auto = on; wake(); $("zoomFit").setAttribute("aria-pressed", String(on)); }
 export function resetCamera() { fitMode(true); cam = { x: 0, y: 0, s: 1 }; camT = { ...cam }; }
 // 全体に合わせる目標を決める。すぐ合わせるなら snap
 export function fitTarget(snap = false) {
@@ -27,13 +27,13 @@ export function fitTarget(snap = false) {
   if (snap) cam = { ...camT };
 }
 function zoomAt(mx, my, factor) {
-  fitMode(false);
+  fitMode(false); wake(1.5);
   const s = clamp(camT.s * factor, 0.05, MAX_ZOOM);   // 自分で縮小するときは、自動より小さくできる
   camT = { x: mx - (mx - camT.x) * (s / camT.s), y: my - (my - camT.y) * (s / camT.s), s };
 }
 // そのノード（図の中の箱）を見せる
 export function jumpTo(box) {
-  fitMode(false);
+  fitMode(false); wake(1.5);
   const s = Math.max(camT.s, 0.95);
   camT = { s, x: flow.clientWidth * 0.4 - (box.x + box.w / 2) * s, y: flow.clientHeight * 0.45 - (box.y + box.h / 2) * s };
 }
@@ -74,6 +74,7 @@ flow.addEventListener("pointermove", (e) => {
     }
     const dx = now.x - prev.x, dy = now.y - prev.y;
     camT.x += dx; camT.y += dy; cam.x += dx; cam.y += dy;   // ドラッグは遅れなく動かす
+    wake(0.5);
   } else if (pointers.size === 2 && pinch) {
     const [a, b] = [...pointers.values()], d = Math.hypot(a.x - b.x, a.y - b.y), r = flow.getBoundingClientRect();
     zoomAt((a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top, d / pinch.d); pinch.d = d;

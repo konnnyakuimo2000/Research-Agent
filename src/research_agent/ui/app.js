@@ -9,7 +9,7 @@
 //   extensions/ … 2 段の拡張の部品。依頼のエージェントが名乗った拡張だけを読み込む（research-v1 など）
 import { $, esc } from "./core/util.js";
 import { api, store, withKey } from "./core/api.js";
-import { ctx, hasFlow, caps } from "./core/ctx.js";
+import { ctx, hasFlow, caps, wake } from "./core/ctx.js";
 import { dispatch, layoutFor, loadExtensions, norm, rememberExtensions, resetExtensions, runExtensions } from "./core/events.js";
 import { fitMode, fitTarget, resetCamera, stepCamera, useView } from "./core/camera.js";
 import { tree } from "./views/tree.js";
@@ -51,7 +51,7 @@ function reset() {
   const Flow = layoutFor("flow") || GraphFlow;
   ctx.flow = new Flow(ctx.runAgent);
   closeDetails(); $("flowEmpty").hidden = false;
-  resetCamera(); useView(activeView());
+  resetCamera(); useView(activeView()); wake(1);
 }
 function setView(v) {
   ctx.view = v;
@@ -60,9 +60,10 @@ function setView(v) {
   $("flowEmpty").hidden = !activeView().isEmpty();
   document.querySelectorAll("[data-view]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === v)));
   useView(activeView()); fitMode(true); fitTarget(true);   // 切り替えたら、カメラもすぐ全体に合わせる
+  wake();
 }
 document.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
-function handle(e) { dispatch(e); ctx.flow.on(e); }
+function handle(e) { dispatch(e); ctx.flow.on(e); wake(); }
 
 // ---- 調査の開始・答え・一覧 ----
 let source = null, waitingRun = null, liveState = "";   // liveState: 動いている調査の状態（running / paused / ""）
@@ -210,8 +211,12 @@ function frame(ts) {
     }
     if (!queue.length && !source) updateSend();   // 再生し終えたら、送信ボタンに戻す
   }
-  activeView().draw(dt);
-  stepCamera(dt);
+  // 何も起きていない画面では描き直しを休む（前は再生が終わっても毎フレーム、線の計算と SVG の書き直しをしていた）
+  if (performance.now() < ctx.awakeUntil || ctx.flow?.busy?.() || (ctx.replay && playing && queue.length)) {
+    activeView().draw(dt);
+    stepCamera(dt);
+    ctx.frames.drawn++;
+  } else ctx.frames.idle++;
   requestAnimationFrame(frame);
 }
 
@@ -232,7 +237,8 @@ async function loadRuns() {
 }
 function highlightRun() { $("runs").querySelectorAll(".run").forEach((b) => b.classList.toggle("on", b.dataset.id === ctx.runId)); }
 
-window.addEventListener("resize", () => { tree.layout(); ctx.flow?.layout(); });
+window.addEventListener("resize", () => { tree.layout(); ctx.flow?.layout(); wake(); });
+window.researchAgentFrames = ctx.frames;   // 描いた・休んだフレームの数（ブラウザで確かめるため）
 reset(); requestAnimationFrame(frame);
 const params = new URLSearchParams(location.search);
 if (params.has("speed")) speed = +params.get("speed") || 0;   // 再生の速さ（0 = すぐ全部を出す。確認用）
