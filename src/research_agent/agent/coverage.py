@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 from research_agent.config import REPO_ROOT
 from research_agent.agent.reprints import original_of
-from research_agent.tiers import canonical, page_tier, tier_of
+from research_agent.tiers import page_tier, tier_of
 
 ASPECTS_FILE = REPO_ROOT / "config" / "aspects.toml"
 OTHER_TYPE = "その他"      # どの種類にも当たらない対象
@@ -167,10 +167,6 @@ def facts_to_compare(verified: list[dict]) -> dict[str, list[dict]]:
 
 def different_sites(facts: list[dict]) -> bool:
     return len({_host(f["source"]) for f in facts}) >= 2
-
-
-def unfilled(coverage: list[CoverageRow]) -> list[CoverageRow]:
-    return [r for r in coverage if r["status"] != CONFIRMED]
 
 
 def gaps_text(coverage: list[CoverageRow]) -> str:

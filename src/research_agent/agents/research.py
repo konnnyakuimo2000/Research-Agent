@@ -115,18 +115,15 @@ def _describe(node: str, update: object) -> str:
 
 def result_of(state: dict) -> dict:
     """結果の形（4.4）: 報告と、research/v1 の成果物。"""
-    from research_agent.agent.nodes import collect_sources
-    from research_agent.tiers import UrlNumbers, page_tier
+    from research_agent.agent.report import SourceTable, collect_sources
+    from research_agent.tiers import page_tier
 
     try:
         sources = collect_sources(state)
     except Exception:  # noqa: BLE001
         sources = []
     # 出典 ID は、報告の本文の出典番号と同じ対応表から作る（s3 = 本文の [3]）。表記が違うだけの同じ資料は同じ ID
-    number = UrlNumbers([s["url"] for s in sources])
-
-    def sid(url: str) -> str:
-        return f"s{number[url]}" if url and url in number else ""
+    sid = SourceTable(sources).id_of
 
     facts = [{"id": f"f{i}", "text": f.get("text", ""), "quote": f.get("quote", ""), "aspect": f.get("aspect", ""),
               "source_id": sid(f.get("source", "")), "url": f.get("source", ""), "task_id": ""}

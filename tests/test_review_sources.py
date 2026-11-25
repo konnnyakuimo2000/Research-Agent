@@ -66,3 +66,26 @@ def test_artifact_source_ids_follow_the_report_numbers():
     assert [(s["id"], s["url"]) for s in arts["sources"]] == [("s1", P1), ("s2", P2)]
     assert [f["source_id"] for f in arts["facts"]] == ["s1", "s2", "s1"]     # 追跡用のパラメータ違いは同じ資料
     assert arts["images"][0]["source_id"] == "s2"
+
+
+def test_the_report_and_the_artifacts_number_sources_from_one_table():
+    from unittest.mock import patch
+
+    from research_agent.agent.nodes import Nodes
+
+    class Writer:
+        def chat_text(self, system, user, temperature=0.5):
+            return "本文 [1][2]。"
+
+    sent = {}
+    state = {"request": "x", "pages": {P1: "一", P2: "二"},
+             "verified": [{"text": "a", "quote": "q", "aspect": "x", "source": P2},
+                          {"text": "b", "quote": "q", "aspect": "x", "source": P1 + "&utm_source=x"}]}
+    with patch("research_agent.agent.nodes.telemetry.emitter",
+               return_value=lambda kind, **data: sent.setdefault(kind, data)):
+        answer = Nodes(None, Writer()).respond(state)["answer"]
+    report_ids = {s["url"]: s["id"] for s in sent["report"]["sources"]}
+    arts = {a["kind"].split(":")[1]: a["data"] for a in result_of({**state, "answer": answer})["artifacts"]}
+    assert {s["url"]: s["id"] for s in arts["sources"]} == report_ids == {P2: "s1", P1 + "&utm_source=x": "s2"}
+    assert f"[1] 二 — {P2}" in answer and "[2]" in answer                 # 一覧の番号も同じ表から
+    assert [f["source_id"] for f in arts["facts"]] == ["s1", "s2"]

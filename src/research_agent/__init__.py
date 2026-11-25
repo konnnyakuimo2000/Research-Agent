@@ -1,2 +1,1 @@
-def main() -> None:
-    print("Hello from research-agent!")
+"""Research-Agent: 公開の Web とデータベースを調べ、引用を照合した事実で出典付きの報告を書く調査エージェント。"""

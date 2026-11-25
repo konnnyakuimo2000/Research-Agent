@@ -32,3 +32,27 @@ def test_reconnecting_from_the_middle_has_no_gaps_or_repeats():
     assert [e["seq"] for e in feed.wait_after(37, 0)] == list(range(38, 51))
     assert [e["seq"] for e in feed.wait_after(0, 0)] == list(range(1, 51))
     assert feed.wait_after(50, 0) == []
+
+
+# ---- CLI（research-agent コマンドと scripts/agent.py が同じ処理を使う） ----
+
+def test_both_command_lines_share_the_same_arguments(capsys):
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    import pytest
+
+    from research_agent import cli
+
+    with pytest.raises(SystemExit) as stop:
+        cli.main(["--help"])
+    assert stop.value.code == 0
+    out = capsys.readouterr().out
+    assert "request" in out and "--verbose" in out                    # 前は「Hello from research-agent!」だけ
+    script = Path(__file__).resolve().parents[1] / "scripts" / "agent.py"
+    r = subprocess.run([sys.executable, str(script), "--help"], capture_output=True, text=True, encoding="utf-8")
+    assert r.returncode == 0 and "--verbose" in r.stdout and "request" in r.stdout
+    from importlib.metadata import entry_points
+    assert any(e.name == "research-agent" and e.value == "research_agent.cli:main"
+               for e in entry_points(group="console_scripts"))

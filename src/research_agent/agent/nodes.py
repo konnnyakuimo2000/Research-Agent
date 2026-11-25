@@ -23,15 +23,18 @@ from research_agent.agent import query_plan
 from research_agent.agent import reprints
 from research_agent.agent import telemetry
 from research_agent.agent.guard import check_decision, has_choices, is_ambiguous, pages_to_read
+from research_agent.agent.report import (SourceTable, aspect_headings, assemble, collect_sources,  # noqa: F401
+                                         drop_sentences_with, images_section, infeasible_report, sources_text,
+                                         strip_program_sections, unsupported_names, _image_lines)
 from research_agent.agent.names import mentions, same_name
 from research_agent.agent.quotes import normalize, quote_in_text
 from research_agent.agent.state import (DOMINANCE_RATIO, MAX_CANDIDATES, MAX_FEATURES, MAX_IMAGE_CHECKS,
                                     MAX_IMAGE_FETCHES, MAX_REF_DEPTH, MAX_REFERENCE_IMAGES,
                                     PAGES_PER_READ, REFS_PER_PAGE, WANTED_IMAGES, AgentState,
-                                    Candidate, PageRead, Source, setting)
+                                    Candidate, PageRead, setting)
 from research_agent.config import Settings
 from research_agent.llm import LLM, ContextPool, LLMOutputError
-from research_agent.tiers import UrlNumbers, adjusted_tier, by_tier, canonical, host_of, page_tier, tier_of
+from research_agent.tiers import adjusted_tier, by_tier, canonical, host_of, page_tier, tier_of
 from research_agent.tools import databases, fetch, images, searxng, wikimedia
 
 L3_STAGE = "L3-分野別データベース"
@@ -749,8 +752,9 @@ class Nodes:
         return [valid[i] for i in dict.fromkeys(out.get("matched_ids", [])) if i in valid]
 
     def respond(self, state: AgentState) -> dict:
-        sources = collect_sources(state)
-        materials = prompts.respond_user(state, sources)
+        """報告の本文は LLM が書き、ほかの節（食い違い・確かめきれなかったこと・画像・出典）は report が組み立てる。"""
+        table = SourceTable(collect_sources(state))
+        materials = prompts.respond_user(state, table.sources)
         body = strip_program_sections(self._llm("report", state).chat_text(prompts.RESPOND_SYSTEM, materials))
         if bad := unsupported_names(body, materials):
             # 材料にない名前（読みから作った英語名など）を書いた → 1 回だけ書き直させ、それでも残る文は除く
@@ -760,92 +764,13 @@ class Nodes:
             body = strip_program_sections(self._llm("report", state).chat_text(prompts.RESPOND_SYSTEM, retry))
             if bad := unsupported_names(body, materials):
                 body = drop_sentences_with(body, bad)
-        parts = [aspect_headings(body, [a["name"] for a in state.get("aspects", [])]).strip()]
-        if infeasible := (state.get("feasibility") or {}).get("infeasible_parts"):
-            parts.append("\n### 調べられなかったこと（公開情報では調べられないため）\n"
-                         + "\n".join(f"- {x}" for x in infeasible))
-        # 食い違いと確認できなかった観点は、プログラムが書く（LLM に書かせない）
-        if state.get("conflicts"):
-            number = UrlNumbers([s["url"] for s in sources])
-            lines = [f"- {c['aspect']}・{c['topic']}: "
-                     + " / ".join(f"「{f['text']}」[{number[f['source']]}]" for f in c["facts"] if f["source"] in number)
-                     for c in state["conflicts"]]
-            parts.append("\n### 出典どうしの食い違い\n" + "\n".join(lines))
-        # 確かめきれなかった観点（出典がない・出典が弱い）は、1 つの節にまとめて、読む人の言葉で書く
-        if gaps := "\n".join(x for x in (cov.gaps_text(state.get("coverage", [])),
-                                         cov.weak_text(state.get("coverage", []))) if x):
-            parts.append("\n### 確かめきれなかったこと\n" + gaps)
-        if state.get("images_checked"):
-            parts.append("\n" + images_section(state))
-        # 調査の道具の細かい状態（応答しなかった検索エンジン・調べたデータベース・失敗した処理の名前）は書かない。
-        # それらはテレメトリーの画面と実行の記録に残る。検索そのものが使えなかったときだけ、読む人に知らせる
-        if any(f.startswith(("Web 検索", "Wikidata の検索")) for f in state.get("failures", [])):
-            parts.append("\n※ 検索の一部が使えなかったため、調べきれていない可能性があります。")
-        if sources:
-            parts.append("\n### 出典\n" + sources_text(state, sources))
-        answer = "\n".join(parts)
+        answer = assemble(state, body, table)
         # 出典は本文の番号の順（[1] が 1 つ目）。id は成果物の source_id と同じ（s1 = [1]）。画面はこれで番号から資料を開く
-        telemetry.emitter()("report", answer=answer, sources=[{**s, "id": f"s{i}", "host": telemetry.host(s["url"])}
-                                                               for i, s in enumerate(sources, 1)])
+        telemetry.emitter()("report", answer=answer, sources=[{**e, "host": telemetry.host(e["url"])}
+                                                               for e in table.entries()])
         return {"answer": answer, "trace": [{"node": "respond", "answer": answer}]}
 
 
-# プログラムが付ける節の見出し。LLM が本文に同じ節を書いたら取り除く（同じ内容が二重に出ないように）
-_PROGRAM_SECTIONS = ("食い違い", "確認できなかった", "調べられなかった", "わからなかった", "出典", "参考", "画像")
-
-
-def _heading_text(line: str) -> str | None:
-    """見出しの行（「### 〜」または行全体が太字の「**〜**」）なら、その文字を返す。"""
-    s = line.strip()
-    if s.startswith("#"):
-        return s.lstrip("#").strip()
-    if len(s) > 4 and s.startswith("**") and s.endswith("**") and s.count("**") == 2:
-        return s[2:-2].strip()
-    return None
-
-
-def aspect_headings(body: str, aspects: list[str]) -> str:
-    """観点の名前だけの行（「正式名・型番」「**経歴**」「経歴：」）を、小見出し（### 経歴）に直す。
-    LLM が見出しの記号を省くことがあり、そのままでは画面でも Open WebUI でも見出しにならなかった。"""
-    names = {a.strip() for a in aspects if a.strip()}
-    out = []
-    for line in body.splitlines():
-        core = line.strip().strip("*#").strip().rstrip(":：").strip()
-        out.append(f"### {core}" if core in names and not line.lstrip().startswith("### ") else line)
-    return "\n".join(out)
-
-
-def strip_program_sections(body: str) -> str:
-    """LLM の本文から、プログラムが付ける節（食い違い・確認できなかったこと・出典・画像）を取り除く。"""
-    out, skipping = [], False
-    for line in body.splitlines():
-        heading = _heading_text(line)
-        if heading is not None:
-            skipping = any(w in heading for w in _PROGRAM_SECTIONS)
-        if not skipping:
-            out.append(line)
-    return "\n".join(out)
-
-
-# 名前らしい表記: 大文字で始まる英字の語、「・」でつないだカタカナ（人名など）
-_LATIN_NAME = re.compile(r"[A-Z][A-Za-zÀ-ÿ]{2,}")
-_KATAKANA_NAME = re.compile(r"[ァ-ヴー]+(?:・[ァ-ヴー]+)+")
-
-
-def unsupported_names(body: str, materials: str) -> list[str]:
-    # 本文にある名前らしい表記のうち、材料（LLM に渡したもの）にないもの。読みから作った英語名などを見つける
-    m = normalize(materials).lower()
-    found = set(_LATIN_NAME.findall(body)) | set(_KATAKANA_NAME.findall(body))
-    return sorted(t for t in found if normalize(t).lower() not in m)
-
-
-def drop_sentences_with(body: str, words: list[str]) -> str:
-    # 指定の表記を含む文を除く（見出しは残す）
-    pieces = re.split(r"(?<=[。\n])", body)
-    return "".join(p for p in pieces if p.lstrip().startswith("#") or not any(w in p for w in words))
-
-
-# 依頼文によく出る決まり文句（対象を絞り込む根拠にならない）
 _GENERIC_PHRASES = ("について", "に関して", "調べて", "教えて", "知りたい", "ください", "とは", "の情報", "情報")
 
 
@@ -971,98 +896,6 @@ def pick_candidate(answer: str, candidates: list[Candidate]) -> Candidate | None
     if digits.isdigit() and 1 <= int(digits) <= len(candidates):
         return candidates[int(digits) - 1]
     return None
-
-
-def _image_lines(img: dict, name: str) -> list[str]:
-    """報告の画像 1 枚: 画像と、1 行の説明（写っているもの・出典へのリンク）。
-
-    確信度・Tier・ライセンスの項目を毎回並べると、調査の記録のようになって読みにくい（細かい判定は実行の記録に残る）。
-    読む人に知らせる必要があるときだけ、注意を添える: 対象かどうか確かめきれていない、対象そのものではない、
-    利用に許可が要る。
-    """
-    desc = img.get("description", "") or name
-    source = f"[{img.get('title') or telemetry.host(img['page_url'])}]({img['page_url']})"
-    notes = []
-    if img["level"] == imaging.REFERENCE:
-        related = img.get("related", "")
-        notes.append(f"{name}そのものではなく、関係のある「{related}」の画像です" if related
-                     else f"{name}そのものの画像ではありません")
-    elif img["level"] != imaging.CONFIRMED:
-        notes.append(f"{name}の画像かどうかは確かめきれていません")
-    if imaging.needs_permission(img.get("license") or ""):
-        notes.append("利用には権利者の許可が必要です（確認のために表示しています）")
-    caption = f"{desc}（出典: {source}）" + "".join(f" ※ {n}。" for n in notes)
-    return [f"![{desc}]({img['src']})", caption, ""]
-
-
-def images_section(state: AgentState) -> str:
-    """報告の「画像」（設計書 9.1, 9.2）。採用した画像と、見つからなかった場合の申告をプログラムが書く。
-
-    参考画像（L5）は対象そのものではないので、対象の画像が見つからなかったことを先に書いてから出す。
-    """
-    name = (state.get("target") or {}).get("label", "対象")
-    found = [i for i in state.get("images", []) if i["level"] != imaging.REFERENCE]
-    references = [i for i in state.get("images", []) if i["level"] == imaging.REFERENCE]
-    lines = ["### 画像"]
-    for img in found:
-        lines += _image_lines(img, name)
-    if not found:
-        lines.append(f"{name}の画像として確かめられるものは見つかりませんでした。")
-        if imaging.asks_for_images(state.get("request", "")):
-            # 画像を求められていたときは、次にできることを添える（試した候補の内訳は実行の記録に残る）
-            lines.append("公式サイトや所蔵機関の資料をあたるか、お持ちの画像があれば、それが対象かを確かめられます。")
-    if references:
-        lines += ["", "参考として、関係のあるものの画像を載せます。", ""]
-        for img in references:
-            lines += _image_lines(img, name)
-    return "\n".join(lines).rstrip()
-
-
-def collect_sources(state: AgentState) -> list[Source]:
-    """回答で使う出典を、概要 → わかったことの順に重複なく並べる（出典番号はこの順）。"""
-    pages = state.get("pages", {})
-    urls = [state["summary_url"]] if state.get("target_summary") and state.get("summary_url") else []
-    urls += [k["source"] for k in state.get("verified", [])]
-    # 表記が違うだけの同じページ（追跡用パラメータの違いなど）は 1 つの出典にする
-    by_key: dict[str, str] = {}
-    for u in urls:
-        by_key.setdefault(canonical(u), u)
-    ordered = list(by_key.values())
-    # Tier はページ単位の調整（公式サイト・LLM の判定）を含めたもの
-    return [{"title": pages.get(u, u), "url": u, "tier": page_tier(u, state)} for u in ordered]
-
-
-def sources_text(state: AgentState, sources: list[Source]) -> str:
-    """報告の出典一覧（題名と URL）。転載のページには、元のページの番号を添える。
-
-    出典ごとの Tier（信頼度の段階）は書かない。信頼度の低い出典の事実は本文で断定しない書き方にしてあり、
-    段階の内訳はテレメトリーの画面と実行の記録に残る。
-    """
-    number = UrlNumbers([s["url"] for s in sources])
-    copies = state.get("reprints", {})
-    lines = []
-    for i, s in enumerate(sources, 1):
-        line = f"[{i}] {s['title']} — {s['url']}"
-        original = reprints.original_of(s["url"], copies)
-        if canonical(original) != canonical(s["url"]) and original in number and number[original] != i:
-            line += f"（[{number[original]}] とほぼ同じ文章）"
-        lines.append(line)
-    return "\n".join(lines)
-
-
-def infeasible_report(request: str, f: dict) -> str:
-    parts = f.get("infeasible_parts") or [request]
-    lines = ["この依頼は、公開されている情報からは調べられないと判断しました。", "",
-             "### 調べられないこと"]
-    lines += [f"- {p}" for p in parts]
-    lines += ["", "### 理由", f.get("reason", "")]
-    lines += ["", "### 試したこと",
-              "公開情報（Web・百科事典など）の検索は行っていません。公開されていない情報は、"
-              "検索しても見つからないか、関係のない情報を誤って示してしまうおそれがあるためです。"]
-    if f.get("suggestions"):
-        lines += ["", "### 代わりにできること"] + [f"- {s}" for s in f["suggestions"]]
-    lines += ["", "公開されている情報で調べられる形（例: 対象の名前や、公開されている資料）があれば、教えてください。"]
-    return "\n".join(lines)
 
 
 def route_feasibility(state: AgentState) -> str:
