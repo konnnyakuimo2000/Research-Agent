@@ -15,6 +15,7 @@ export const NEEDS_PERMISSION = /all rights reserved|著作権あり|無断転�
 const workName = (node) => WORK[node] || labelOf(node);
 
 // この拡張の状態（依頼を開き直すたびに捨てる）
+const DB_STATE = { ok: "取得", empty: "該当なし", failed: "失敗", unconfigured: "設定なし", disabled: "使わない", skipped: "引かない" };
 export const S = { round: null, rounds: 0, dbNode: {}, sources: [], summary: new RunSummary() };
 export function resetTree() { Object.assign(S, { round: null, rounds: 0, dbNode: {}, sources: [], summary: new RunSummary() }); }
 
@@ -192,8 +193,11 @@ export const treeRenderers = {
     const id = w + "-db"; S.dbNode[w] = id;
     T.add(id, w, 3, card("分野別データベース · L3", e.used.join(" → ") || "この種類に使えるものがない", `記録 ${e.records.length} 件（${e.seconds} 秒）${e.failures.length ? " · 失敗あり" : ""}`,
       "", e.records[0] ? icon(host(e.records[0].url)) : "") + toggleBtn,
-      { title: "分野別データベース（L3）", kv: [["引いたもの", esc(e.used.join("、"))], ["使えなかったもの", esc(e.failures.join("、"))]],
-        list: e.records.map((r) => `${esc(r.database)}: ${link(r.url)}`) }, e.failures.length && !e.records.length ? "failed" : "done");
+      { title: "分野別データベース（L3）", kv: [["引いたもの", esc(e.used.join("、"))], ["使えなかったもの", esc(e.failures.join("、"))],
+          // データベースごとの結果（旧ログにはない: 記録なし。正常に応答して該当なしは 0 件）
+          ["結果", e.statuses ? e.statuses.map((s) => esc(`${s.name}: ${DB_STATE[s.state] || s.state}${s.state === "ok" ? ` ${s.records} 件` : s.reason ? `（${s.reason}）` : ""}`)).join("<br>") : "記録なし"]],
+        list: e.records.map((r) => `${esc(r.database)}${r.kind ? `（${esc(r.kind)}${r.source_id ? ` · ${esc(r.source_id)}` : ""}）` : ""}: ${link(r.url)}`) },
+      e.failures.length && !e.records.length ? "failed" : "done");
   },
   "page.planned": (e) => pageNode(e, "planned"),
   "page.start": (e) => { pageNode(e, "running"); T.step("p:" + e.url, 0, "work"); T.setSub("p:" + e.url, e.db ? "DB記録を読込中" : "本文を取得中");
@@ -299,6 +303,9 @@ export const treeRenderers = {
   },
   "report": (e) => {
     S.sources = e.sources || [];
+    // 報告に引用した分野別データベースの資料（出典から逆引き。旧ログにはない）
+    const db = S.dbNode[T.work];
+    if (db && info()[db]) info()[db].kv.push(["報告に引用した資料", e.db_cited ? `${e.db_cited.length} 件` : "記録なし"]);
     const w = T.work;
     if (N()[w]) { T.setSub(w, `${WORDS.report} · 出典 ${S.sources.length} 件`); info()[w].list = S.sources.map((s, i) => `[${i + 1}] ${esc(s.title)} — ${link(s.url)} · T${s.tier}`); }
   },

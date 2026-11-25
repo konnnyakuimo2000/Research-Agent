@@ -165,6 +165,14 @@ def images_section(state: AgentState) -> str:
     return "\n".join(lines).rstrip()
 
 
+def cited_db_records(state: AgentState, table: SourceTable) -> list[dict]:
+    """報告に引用した分野別データベースの資料（出典から逆引き。表記が違うだけの同じ資料は 1 つ）。"""
+    dbs = state.get("db_records", {})
+    cited = dict.fromkeys(canonical(e["url"]) for e in table.entries() if canonical(e["url"]) in dbs)
+    return [{"url": dbs[k]["url"], "database": dbs[k]["database"], "source_id": dbs[k].get("source_id", ""),
+             "kind": dbs[k].get("kind", "")} for k in cited]
+
+
 def collect_sources(state: AgentState) -> list[Source]:
     """回答で使う出典を、概要 → わかったことの順に重複なく並べる（出典番号はこの順）。"""
     pages = state.get("pages", {})
@@ -187,9 +195,16 @@ def sources_text(state: AgentState, sources: list[Source]) -> str:
     """
     number = UrlNumbers([s["url"] for s in sources])
     copies = state.get("reprints", {})
+    dbs = state.get("db_records", {})
     lines = []
     for i, s in enumerate(sources, 1):
         line = f"[{i}] {s['title']} — {s['url']}"
+        rec = dbs.get(canonical(s["url"]))
+        if rec and rec.get("kind"):
+            # 構造化データから作った資料には、種類と資料 ID を添える（所蔵元のページがあれば、それも）
+            line += f"（{rec['kind']}" + (f" · 資料 ID {rec['source_id']}" if rec.get("source_id") else "") + "）"
+            if rec.get("holder_url"):
+                line += f" 所蔵元: {rec['holder_url']}"
         original = reprints.original_of(s["url"], copies)
         if canonical(original) != canonical(s["url"]) and original in number and number[original] != i:
             line += f"（[{number[original]}] とほぼ同じ文章）"

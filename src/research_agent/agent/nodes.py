@@ -23,7 +23,7 @@ from research_agent.agent import query_plan
 from research_agent.agent import reprints
 from research_agent.agent import telemetry
 from research_agent.agent.guard import check_decision, has_choices, is_ambiguous, pages_to_read
-from research_agent.agent.report import (SourceTable, aspect_headings, assemble, collect_sources,  # noqa: F401
+from research_agent.agent.report import (SourceTable, aspect_headings, assemble, cited_db_records, collect_sources,  # noqa: F401
                                          drop_sentences_with, images_section, infeasible_report, sources_text,
                                          strip_program_sections, unsupported_names, _image_lines)
 from research_agent.agent.names import mentions, same_name
@@ -449,21 +449,27 @@ class Nodes:
         name = state["target"]["label"]
         started = time.perf_counter()
         try:
-            records, failed, used = databases.lookup(state["subject_type"], name)
+            result = databases.lookup(state["subject_type"], name, state.get("request", ""))
+            records, failed, used = result[:3]
+            statuses = getattr(result, "statuses", [])
         except Exception as e:  # noqa: BLE001
-            records, failed, used = [], [f"分野別データベース（{type(e).__name__}）"], []
+            records, failed, used, statuses = [], [f"分野別データベース（{type(e).__name__}）"], [], []
         db_records = dict(state.get("db_records", {}))
         db_images = list(state.get("db_images", []))
         for r in records:
-            db_records[canonical(r.url)] = {"url": r.url, "title": r.title, "text": r.text, "database": r.database}
+            db_records[canonical(r.url)] = {"url": r.url, "title": r.title, "text": r.text, "database": r.database,
+                                            "source_id": getattr(r, "source_id", ""), "kind": getattr(r, "kind", ""),
+                                            "holder_url": getattr(r, "holder_url", ""),
+                                            "fields": [list(f) for f in getattr(r, "fields", [])]}
             db_images += [{**im, "database": r.database} for im in r.images]
         log.info("databases: %s -> %d records %s (%.1fs)", state["subject_type"], len(records), failed,
                  time.perf_counter() - started)
         sites = [s for s in databases.sites_for(state["subject_type"]) if s not in state.get("seen_sites", [])]
-        (ev or telemetry.Emitter())("databases", used=used, failures=failed,
+        (ev or telemetry.Emitter())("databases", used=used, failures=failed, statuses=statuses,
                                     seconds=round(time.perf_counter() - started, 1),
                                     records=[{"url": r.url, "title": r.title, "database": r.database,
-                                              "images": len(r.images)} for r in records])
+                                              "images": len(r.images), "source_id": getattr(r, "source_id", ""),
+                                              "kind": getattr(r, "kind", "")} for r in records])
         return {
             "databases_checked": True,
             "db_records": db_records,
@@ -767,7 +773,8 @@ class Nodes:
         answer = assemble(state, body, table)
         # 出典は本文の番号の順（[1] が 1 つ目）。id は成果物の source_id と同じ（s1 = [1]）。画面はこれで番号から資料を開く
         telemetry.emitter()("report", answer=answer, sources=[{**e, "host": telemetry.host(e["url"])}
-                                                               for e in table.entries()])
+                                                               for e in table.entries()],
+                            db_cited=cited_db_records(state, table))
         return {"answer": answer, "trace": [{"node": "respond", "answer": answer}]}
 
 
