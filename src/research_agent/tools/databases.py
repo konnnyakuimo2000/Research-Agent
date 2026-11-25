@@ -335,8 +335,13 @@ def ndl(name: str, by_creator: bool = False) -> list[Record]:
         seen.add(source_id)
         publisher = "、".join(p.text.strip() for p in item.findall("dc:publisher", _NS) if p.text and p.text.strip())
         issued = item.findtext("dcterms:issued", "", _NS) or item.findtext("dc:date", "", _NS) or ""
-        fields = [(k, v) for k, v in (("書名", title), ("著者", creator), ("出版者", publisher), ("刊行年", issued.strip()),
-                                      ("資料 ID", source_id)) if v]
+        # 種別（図書・記事など）。記事は出版者・刊行年がなく、掲載誌が dc:description にある（「掲載誌：日経アーキテクチュア 892」）
+        kinds = [c.text.strip() for c in item.findall("category") if c.text and c.text.strip() not in ("紙", "デジタル")]
+        desc = (item.findtext("dc:description", "", _NS) or "").strip()
+        series = (item.findtext("dcndl:seriesTitle", "", _NS) or "").strip()
+        fields = [(k, v) for k, v in (("書名", title), ("種別", "・".join(kinds[:2])), ("著者", creator), ("出版者", publisher),
+                                      ("刊行年", issued.strip()), ("掲載", desc.removeprefix("掲載誌：") if desc.startswith("掲載誌") else ""),
+                                      ("シリーズ", series), ("資料 ID", source_id)) if v]
         text = "国立国会図書館サーチの書誌情報（資料 1 冊）\n" + "\n".join(f"{k}: {v}" for k, v in fields)
         out.append(Record(link, f"国立国会図書館サーチ: {title}", text, "国立国会図書館サーチ",
                           source_id=source_id, kind="書誌情報", fields=fields))
