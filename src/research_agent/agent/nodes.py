@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import unquote, urlparse
 
 from langgraph.types import interrupt
@@ -31,7 +30,7 @@ from research_agent.agent.state import (DOMINANCE_RATIO, MAX_CANDIDATES, MAX_FEA
                                     PAGES_PER_READ, REFS_PER_PAGE, WANTED_IMAGES, AgentState,
                                     Candidate, PageRead, Source, setting)
 from research_agent.config import Settings
-from research_agent.llm import LLM, LLMOutputError
+from research_agent.llm import LLM, ContextPool, LLMOutputError
 from research_agent.tiers import UrlNumbers, adjusted_tier, by_tier, canonical, host_of, page_tier, tier_of
 from research_agent.tools import databases, fetch, images, searxng, wikimedia
 
@@ -354,7 +353,7 @@ class Nodes:
         for u in urls:   # 読む順番が来たページ（2 つずつ並行に読むので、残りは「予定」）
             ev("page.planned", **telemetry.page_info(u, state),
                db=state.get("db_records", {}).get(canonical(u), {}).get("database", ""))
-        with ThreadPoolExecutor(max_workers=2) as pool:   # LLM 側の同時実行数の上限と合わせる
+        with ContextPool(max_workers=2) as pool:   # LLM 側の同時実行数の上限と合わせる
             results = list(pool.map(lambda u: self._read_one(state, u, ev), urls))
 
         pages = dict(state.get("pages", {}))
@@ -541,7 +540,7 @@ class Nodes:
         """観点ごとに、別々のサイトの事実どうしが食い違っていないかを調べる（設計書 7.4 T-3）。"""
         groups = cov.facts_to_compare(state.get("verified", []))
         started = time.perf_counter()
-        with ThreadPoolExecutor(max_workers=2) as pool:   # 1 回の呼び出しで 1 つの観点だけを扱う（M-1）
+        with ContextPool(max_workers=2) as pool:   # 1 回の呼び出しで 1 つの観点だけを扱う（M-1）
             llm = self._llm("decide", state)
             outs = list(pool.map(lambda item: llm.chat_json(
                 prompts.CONFLICT_SYSTEM, prompts.conflict_user(*item), prompts.CONFLICT_SCHEMA), groups.items()))
@@ -609,7 +608,7 @@ class Nodes:
         # 先に画像を取りに行き（プログラム。速い）、使える大きさのものだけを LLM で確かめる（遅い）。
         # 取れない・小さすぎる候補で、確かめる回数（MAX_IMAGE_CHECKS）を使い切らないように
         usable: list[tuple[images.ImageCandidate, images.FetchedImage]] = []
-        with ThreadPoolExecutor(max_workers=4) as pool:
+        with ContextPool(max_workers=4) as pool:
             for c, fetched in zip(ranked[:MAX_IMAGE_FETCHES], pool.map(lambda c: images.fetch_image(c.src), ranked[:MAX_IMAGE_FETCHES])):
                 ev("image.fetched", **image_event(c, state), ok=fetched.ok, reason=fetched.reason,
                    size=f"{fetched.width}×{fetched.height}" if fetched.width else "")
@@ -617,7 +616,7 @@ class Nodes:
                     usable.append((c, fetched))
                 else:
                     log_rows.append({**self._image_row(c, state), "level": imaging.REJECTED, "reason": fetched.reason})
-        with ThreadPoolExecutor(max_workers=2) as pool:
+        with ContextPool(max_workers=2) as pool:
             for start in range(0, min(len(usable), MAX_IMAGE_CHECKS), 2):
                 batch = usable[start:min(start + 2, MAX_IMAGE_CHECKS)]
                 for row in pool.map(lambda cf: self._check_image(state, *cf, ev), batch):

@@ -31,17 +31,15 @@ def test_connection_wait_is_counted():
 
 
 def test_timed_records_wait_and_reports_outage():
-    class FakeLLM:
-        waited = 0.0
-
-    llm = FakeLLM()
+    from research_agent.llm import WAIT_METER
 
     def node(state):
-        llm.waited += 500                # このノードの間に 500 秒待った（実際には待たない）
+        WAIT_METER.get().add(500)        # このノードの間に 500 秒待った（実際には待たない）
         return {"x": 1}
 
-    with patch("research_agent.agent.graph.time.perf_counter", side_effect=[0.0, 600.0]):
-        out = timed("decide", node, llm)({"failures": []})
+    # 時計: ノードの始まり 0 秒、待ちを記録した時 300 秒、ノードの終わり 600 秒
+    with patch("research_agent.agent.graph.time.perf_counter", side_effect=[0.0, 300.0, 600.0]):
+        out = timed("decide", node)({"failures": []})
     assert out["trace"] == [{"node": "decide", "seconds": 600.0, "llm_wait": 500.0}]
     assert out["failures"] == [LLM_OUTAGE]
 

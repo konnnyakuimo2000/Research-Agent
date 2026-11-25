@@ -109,9 +109,18 @@ function newResearch() {
   openSeq++; closeSource(); ctx.runId = null; ctx.runAgent = ctx.agentId; reset(); setLayout(ctx.agentId); resetChat(); setEmpty(true);
   ctx.replay = false; liveState = ""; setComposer(false); highlightRun(); $("input").focus();
 }
-$("newBtn").addEventListener("click", newResearch);
+$("newBtn").addEventListener("click", () => { closeSide(); newResearch(); });
 $("plusBtn").addEventListener("click", newResearch);
-$("runsBtn").addEventListener("click", () => { document.querySelector(".app").classList.toggle("noside"); setTimeout(() => fitMode(true), 50); });
+// 履歴: 広い画面では列を出す・隠す。狭い画面（列にしない幅）では、チャットの上に重ねて開く
+const narrow = () => window.matchMedia("(max-width: 1180px)").matches;
+const closeSide = () => document.querySelector(".app").classList.remove("sideopen");
+$("runsBtn").addEventListener("click", () => {
+  const app = document.querySelector(".app");
+  if (narrow()) app.classList.toggle("sideopen");
+  else { app.classList.toggle("noside"); setTimeout(() => fitMode(true), 50); }
+});
+$("scrim").addEventListener("click", closeSide);
+document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") closeSide(); });
 
 // 入力欄: Enter で送る（Shift+Enter は改行。日本語の変換を確定する Enter では送らない）。行が増えたら高さを伸ばす
 const input = $("input");
@@ -216,7 +225,7 @@ async function loadRuns() {
     $("runs").innerHTML = runs.map((r) => `<button type="button" class="run" data-id="${esc(r.id)}" data-agent="${esc(r.agent || "")}" data-live="${["running", "waiting", "paused"].includes(r.status)}">
       <span class="r1">${esc(r.request || "(依頼なし)")}</span><span class="r2">${esc(r.id.slice(0, 13).replace(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2}).*/, "$2/$3 $4:$5"))} · ${label[r.status] || r.status}${ctx.AGENTS[r.agent] && r.agent !== defAgent ? " · " + esc(ctx.AGENTS[r.agent].name) : ""}${runModelTag(r.models) ? " · " + esc(runModelTag(r.models)) : ""}</span></button>`).join("")
       || `<p class="r2" style="padding:8px;color:var(--muted)">まだ調査はありません</p>`;
-    $("runs").querySelectorAll(".run").forEach((b) => b.addEventListener("click", () => open(b.dataset.id, b.dataset.live === "true", b.dataset.agent)));
+    $("runs").querySelectorAll(".run").forEach((b) => b.addEventListener("click", () => { closeSide(); open(b.dataset.id, b.dataset.live === "true", b.dataset.agent); }));
     showRecent(runs);
     highlightRun();
   } catch (err) { $("runs").innerHTML = `<p style="padding:8px;color:var(--muted)">一覧を読めません: ${esc(err.message)}</p>`; }

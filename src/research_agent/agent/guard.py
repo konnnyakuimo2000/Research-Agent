@@ -125,20 +125,35 @@ def read_keys(state: AgentState) -> set[str]:
     return {canonical(u) for p in state.get("pages_read", []) for u in (p["url"], p.get("final_url") or p["url"])}
 
 
+def page_slots(state: AgentState) -> tuple[int, int, int]:
+    """読むページの残りの枠: (通常の枠, 狙って探したページだけが使える追加の枠, 失敗を含む残りの試行回数)。
+    枠は読めたページだけで数える（PDF・接続できないページで枠を使わない）。research_step と同じ数え方。"""
+    max_pages = setting(state, "max_pages")
+    read = state.get("pages_read", [])
+    ok = sum(1 for p in read if p.get("ok"))
+    attempts = max(MAX_PAGE_ATTEMPTS, 2 * max_pages) - len(read)
+    return max(0, max_pages - ok), max(0, max_pages + EXTRA_PAGES - ok), max(0, attempts)
+
+
 def pages_to_read(state: AgentState, limit: int | None = None) -> list[str]:
     """次に読むページ（狙って探したページが先）。read_pages と、読むかどうかの判断（research_step）で同じものを使う。
 
     前は判断の側が URL をそのまま比べていたので、転送先として読み終えたページ（研究者データベースの
     kyoinId=… → resid/… など）を「まだ読んでいない」と見て、何も読めない read_pages を上限まで繰り返した。
+    選ぶ時点で残りの枠に収める。前は毎回 limit（4）件まで選んだので、max_pages=2 でも 4 件読んでいた（再レビュー）。
+    追加の枠を使えるのは、狙って探したページだけ。
     """
     done = read_keys(state)
+    normal, extra, attempts = page_slots(state)
     out: list[str] = []
     seen: set[str] = set()
-    for u in by_tier(state.get("priority_urls", [])) + state.get("reading_list", []):
-        key = canonical(u)
-        if key not in done and key not in seen:
-            seen.add(key)
-            out.append(u)
+    for priority, urls in ((True, by_tier(state.get("priority_urls", []))), (False, state.get("reading_list", []))):
+        cap = min(extra if priority else normal, attempts)
+        for u in urls:
+            key = canonical(u)
+            if key not in done and key not in seen and len(out) < cap:
+                seen.add(key)
+                out.append(u)
     return out[:limit] if limit else out
 
 

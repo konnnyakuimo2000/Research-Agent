@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import json
 import re
-import threading
 import time
 import uuid
 from collections.abc import Iterator
@@ -67,29 +66,55 @@ def is_background_task(messages: list[dict]) -> bool:
 
 
 class Sessions:
-    """質問して答えを待っている会話: 会話の鍵 → (ゲートウェイの依頼 ID, 質問した時刻)。"""
+    """質問して答えを待っている会話: 会話の鍵 → (ゲートウェイの依頼 ID, 質問した時刻)。
 
-    def __init__(self) -> None:
-        self.pending: dict[str, tuple[str, float]] = {}
-        self.lock = threading.Lock()
+    ゲートウェイの記録と同じ SQLite に置く（前はメモリだけで、ゲートウェイを立ち上げ直すと、Open WebUI での答え「1」が
+    新しい依頼になっていた。再レビュー）。対応は、答えをエージェントに渡せてから消す（渡せなければ、もう一度答えられる）。
+    """
 
-    def take(self, key: str | None) -> tuple[str | None, list[str]]:
-        """答えを待っている依頼（なければ None）と、期限が切れた依頼の一覧。"""
-        now = time.time()
+    def __init__(self, store) -> None:
+        self.db, self.lock = store.db, store._lock
         with self.lock:
-            expired = [k for k, (_, t) in self.pending.items() if now - t > PENDING_TTL]
-            stale = [self.pending.pop(k)[0] for k in expired]
-            waiting = self.pending.pop(key, None) if key else None
-        return (waiting[0] if waiting else None), stale
+            self.db.execute("CREATE TABLE IF NOT EXISTS sessions (key TEXT PRIMARY KEY, run_id TEXT, asked REAL)")
+            self.db.commit()
+
+    @property
+    def pending(self) -> dict[str, tuple[str, float]]:
+        with self.lock:
+            return {k: (r, t) for k, r, t in self.db.execute("SELECT key, run_id, asked FROM sessions")}
+
+    def expire(self) -> list[str]:
+        """答えを待つ期限が切れた依頼（対応は消す）。"""
+        limit = time.time() - PENDING_TTL
+        with self.lock:
+            stale = [r for (r,) in self.db.execute("SELECT run_id FROM sessions WHERE asked < ?", (limit,))]
+            self.db.execute("DELETE FROM sessions WHERE asked < ?", (limit,))
+            self.db.commit()
+        return stale
+
+    def peek(self, key: str | None) -> str | None:
+        """答えを待っている依頼（なければ None）。消さない（答えを渡せてから done で消す）。"""
+        if not key:
+            return None
+        with self.lock:
+            row = self.db.execute("SELECT run_id FROM sessions WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else None
 
     def put(self, key: str, run_id: str) -> None:
         with self.lock:
-            self.pending[key] = (run_id, time.time())
+            self.db.execute("INSERT OR REPLACE INTO sessions (key, run_id, asked) VALUES (?, ?, ?)",
+                            (key, run_id, time.time()))
+            self.db.commit()
+
+    def done(self, key: str) -> None:
+        with self.lock:
+            self.db.execute("DELETE FROM sessions WHERE key = ?", (key,))
+            self.db.commit()
 
 
 def router(gw: Gateway, check_key) -> APIRouter:
     r = APIRouter()
-    sessions = Sessions()
+    sessions = Sessions(gw.store)
     r.sessions = sessions  # type: ignore[attr-defined]  - テストから見るため
 
     def wait_report(run_id: str) -> str:
@@ -107,7 +132,8 @@ def router(gw: Gateway, check_key) -> APIRouter:
         return report if report is not None else "".join(parts)
 
     def run_parts(agent_id: str, levels: list[int], text: str, key: str | None) -> Iterator[str | None]:
-        waiting, stale = sessions.take(key)
+        stale = sessions.expire()
+        waiting = sessions.peek(key)
         for run_id in stale:                      # 答えを待つ期限が切れた依頼は止める（記録も消える）
             try:
                 gw.control(run_id, "cancel")
@@ -118,6 +144,7 @@ def router(gw: Gateway, check_key) -> APIRouter:
             if waiting:
                 after = gw.store.get(waiting)["events"] or 0
                 gw.answer(waiting, text)
+                sessions.done(key)                    # 渡せたので対応を消す（渡せなければ残り、次の答えで再開できる）
                 run_id = waiting
             else:
                 run_id = gw.start(agent_id, text)["id"]

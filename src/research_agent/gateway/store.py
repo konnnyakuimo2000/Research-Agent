@@ -161,6 +161,7 @@ class Feed:
     relaying: bool = False
     generation: int = 0          # 中継をつなぎ直すたびに増やす（古い中継は、目が覚めたら自分で抜ける）
     seen: float = 0.0            # 中継がエージェントから最後に何か（イベント・生存の合図）を受け取った時刻
+    failed_since: float = 0.0    # エージェントから受け取れなくなった時刻（中継を作り直しても引き継ぐ。受け取れたら 0）
     condition: threading.Condition = field(default_factory=threading.Condition)
 
     @property

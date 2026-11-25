@@ -191,7 +191,7 @@ class Gateway:
     def _relay(self, run_id: str, feed: Feed, gen: int = 0) -> None:
         rec = self.store.get(run_id)
         client = self.registry.clients.get(rec["agent"]) if rec else None
-        failed_since, wait = 0.0, RETRY_SECONDS
+        wait = RETRY_SECONDS
         stale = lambda: feed.generation != gen    # noqa: E731 - 見張りが新しい中継を始めた
         while True:
             with self._lock:
@@ -205,7 +205,7 @@ class Gateway:
                         if stale():
                             return                       # 新しい中継に任せる（状態には触らない）
                         feed.seen = time.time()
-                        failed_since, wait = 0.0, RETRY_SECONDS
+                        feed.failed_since, wait = 0.0, RETRY_SECONDS
                         if name == "message":
                             self._add(run_id, feed, data)
                         elif name in ("end", "rest", "missing"):
@@ -230,14 +230,21 @@ class Gateway:
                         feed.relaying = False
                         return
                 continue
-            # 切れた: 待ってからつなぎ直す。長くつなげなければ諦める
-            failed_since = failed_since or time.time()
-            if time.time() - failed_since > GIVE_UP_SECONDS:
-                self.store.update(run_id, status="stopped")
-                feed.finish()
+            # 切れた: 待ってからつなぎ直す。長くつなげなければ諦める。開始時刻は依頼ごとに持つので、見張りが中継を
+            # 作り直しても通算で数える（前はスレッドの中で持っていて、作り直すたびに数え直しになっていた）
+            feed.failed_since = feed.failed_since or time.time()
+            if time.time() - feed.failed_since > GIVE_UP_SECONDS:
+                self._give_up(run_id, feed)
                 return self._stop_relay(feed, gen)
             time.sleep(wait)
             wait = min(wait * 2, 30.0)
+
+    def _give_up(self, run_id: str, feed: Feed) -> None:
+        """長くエージェントから受け取れなかった: 「途中で止まった」にして、購読している画面にも終わりを知らせる。"""
+        self.store.update(run_id, status="stopped")
+        feed.finish()
+        with self._lock:
+            feed.relaying = False
 
     def _stop_relay(self, feed: Feed, gen: int | None = None) -> None:
         with self._lock:
@@ -270,6 +277,14 @@ class Gateway:
             status = (self.store.get(run_id) or {}).get("status")
             stalled = feed.relaying and now - feed.seen > STALL_SECONDS
             dropped = not feed.relaying and status in ("running", "paused")
+            if stalled:
+                # 何も届かない状態も障害として数える（最後に受け取った時から）。つなぎ直しても通算で上限を超えたら止める
+                feed.failed_since = feed.failed_since or feed.seen
+                if now - feed.failed_since > GIVE_UP_SECONDS:
+                    log.warning("relay %s gave up after %.0f s without events", run_id, now - feed.failed_since)
+                    feed.generation += 1                 # 動いている中継は、目が覚めたら自分で抜ける
+                    self._give_up(run_id, feed)
+                    continue
             if stalled or dropped:
                 log.warning("relay %s %s; reconnecting", run_id, "stalled" if stalled else "was not running")
                 self._ensure_relay(run_id, force=True)

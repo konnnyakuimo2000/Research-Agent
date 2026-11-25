@@ -10,11 +10,13 @@
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import json
 import logging
 import threading
 import time
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import httpx
@@ -63,6 +65,53 @@ def gateway_failure(e: Exception) -> tuple[bool, float]:
     return False, 0.0
 
 
+class WaitMeter:
+    """1 つのノードの実行（1 つの調査の 1 つの作業）で、LLM に接続できずに待った時間を測る。
+
+    待ちは時間の区間で記録し、重なりを除いた長さを返す（並行してページを読むと、同じ時間に 2 つの待ちが起きるため）。
+    前は LLM の部品全体で 1 つの合計を持ち、ノードの始まりと終わりの差を取っていたので、同時に動く別の調査の待ちが
+    混ざり、その調査の報告にも「LLM に接続できなかった」と書かれていた（再レビュー）。
+    """
+
+    def __init__(self) -> None:
+        self._spans: list[tuple[float, float]] = []
+        self._lock = threading.Lock()
+
+    def add(self, seconds: float) -> None:
+        if seconds <= 0:
+            return
+        end = time.perf_counter()
+        with self._lock:
+            self._spans.append((end - seconds, end))
+
+    def seconds(self) -> float:
+        with self._lock:
+            spans = sorted(self._spans)
+        total, cur_start, cur_end = 0.0, None, None
+        for a, b in spans:
+            if cur_end is None or a > cur_end:
+                if cur_end is not None:
+                    total += cur_end - cur_start
+                cur_start, cur_end = a, b
+            else:
+                cur_end = max(cur_end, b)
+        if cur_end is not None:
+            total += cur_end - cur_start
+        return total
+
+
+# 今のノードの実行の計測器（timed が置く）。ContextPool で並行に動かす仕事にも引き継ぐ
+WAIT_METER: contextvars.ContextVar[WaitMeter | None] = contextvars.ContextVar("llm_wait_meter", default=None)
+
+
+class ContextPool(ThreadPoolExecutor):
+    """仕事を渡した時点の contextvars を写して動かすスレッドのプール（ThreadPoolExecutor は引き継がない）。
+    並行して読むページの LLM の待ちを、そのノードの計測器に記録するため。"""
+
+    def submit(self, fn, /, *args, **kwargs):
+        return super().submit(contextvars.copy_context().run, fn, *args, **kwargs)
+
+
 class LLM:
     def __init__(self, settings: Settings, http_client: httpx.Client | None = None,
                  semaphore: Any = None, extra_body: dict | None = None, client: Any = None) -> None:
@@ -95,6 +144,9 @@ class LLM:
         if seconds:
             with self._lock:
                 self._waited += seconds
+            meter = WAIT_METER.get()
+            if meter is not None:
+                meter.add(seconds)
 
     def _kwargs(self, kwargs: dict) -> dict:
         extra = {**self.extra_body, **(kwargs.pop("extra_body", None) or {})}

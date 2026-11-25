@@ -22,7 +22,7 @@ from research_agent.agent import telemetry
 from research_agent.agent.nodes import Nodes, route, route_feasibility
 from research_agent.agent.state import AgentState
 from research_agent.config import Settings, load_settings
-from research_agent.llm import LLM
+from research_agent.llm import LLM, WAIT_METER, WaitMeter
 
 
 LLM_OUTAGE = "研究室の LLM サーバーに一時的に接続できなかった（待った時間は調査の時間に数えていない）"
@@ -35,7 +35,8 @@ def timed(name: str, fn: Callable[[AgentState], dict], llm: LLM | None = None) -
     """
     def run(state: AgentState) -> dict:
         started = time.perf_counter()
-        waited = getattr(llm, "waited", 0.0)
+        meter = WaitMeter()                         # このノードの実行で待った時間だけを測る（別の調査の待ちを混ぜない）
+        token = WAIT_METER.set(meter)
         ev = telemetry.emitter()
         step = len([t for t in state.get("trace", []) if "seconds" in t]) + 1
         ev("step.start", node=name, step=step, decision=(state.get("decision") or {}).get("action", ""))
@@ -45,9 +46,11 @@ def timed(name: str, fn: Callable[[AgentState], dict], llm: LLM | None = None) -
             if not isinstance(e, GraphBubbleUp):   # 聞き返し（interrupt）は失敗ではない
                 ev("step.end", node=name, step=step, error=f"{type(e).__name__}: {e}")
             raise
+        finally:
+            WAIT_METER.reset(token)
         seconds = round(time.perf_counter() - started, 1)
-        # 並列に読むノードでは待ちが重なって数えられるので、ノードの時間を超えないようにする
-        wait = round(min(seconds, getattr(llm, "waited", 0.0) - waited), 1)
+        # 待ちは重なりを除いて数える（並列に読むページの待ちを二重に数えない）。念のためノードの時間で頭打ちにする
+        wait = round(min(seconds, meter.seconds()), 1)
         ev("step.end", node=name, step=step, seconds=seconds, llm_wait=max(wait, 0))
         entry = {"node": name, "seconds": seconds} | ({"llm_wait": wait} if wait > 0 else {})
         out = {**out, "trace": out.get("trace", []) + [entry]}
