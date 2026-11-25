@@ -200,15 +200,41 @@ class Gateway:
 
     def resume_live(self) -> None:
         """立ち上げ直したとき: 動いていた依頼の中継を、記録の続きから始め直す。成果物の保存を待っていた依頼は、
-        成果物だけを取り直す（調査もイベントの中継もやり直さない）。"""
-        for rec in self.store.listing(1000, LIVE):
+        成果物だけを取り直す（調査もイベントの中継もやり直さない）。
+
+        先に、一覧（SQLite）より先にイベントの記録（JSONL）へ書かれていたイベントを、一覧に当てはめる（_reconcile）。
+        _add は JSONL に書いてから SQLite を更新するので、その間で止まると、終わりのイベントは記録にあるのに一覧は
+        「実行中」のまま、成果物も取りに行かないままになっていた（全体アーキテクチャの分析 1）。"""
+        for rec in self.store.listing(1000, LIVE, hidden=True):
+            rec = self._reconcile(rec)
+            if rec.get("status") not in LIVE:
+                continue                                  # 記録の上では終わっていた（成果物の取得は下で）
             feed = Feed()
             for e in self.store.events(rec["id"]):
                 feed.add(e)
             self.feeds[rec["id"]] = feed
             self._ensure_relay(rec["id"])
-        if self.store.listing(1000, (FINISHING,)):
+        if self.store.listing(1000, (FINISHING,), hidden=True):
             threading.Thread(target=self.retry_results, daemon=True, name="result-retry").start()
+
+    def _reconcile(self, rec: dict) -> dict:
+        """一覧が知っている通番（events）より後のイベントを、通番の順に一覧の状態へ当てはめる。何度呼んでも同じ
+        （当てはめた分だけ events が進むので、2 回目は何もしない）。当てはめた後の記録を返す。"""
+        done, fields = rec.get("events") or 0, {}
+        for env in sorted(self.store.events(rec["id"]), key=lambda e: e.get("seq", 0)):
+            if env.get("seq", 0) <= done:
+                continue
+            fields["events"], fields["seconds"] = env["seq"], env.get("t", 0)
+            status = STATUS_OF.get(env.get("type"))
+            if status:
+                fields["status"] = status
+                fields["question"] = (env.get("data") or {}).get("question", "") if status == "waiting" else ""
+        if fields:
+            log.warning("run %s: applied %d events recorded before the list was updated (status %s → %s)",
+                        rec["id"], fields["events"] - done, rec.get("status"), fields.get("status", rec.get("status")))
+            self.store.update(rec["id"], **fields)
+            rec = {**rec, **fields}
+        return rec
 
     def _ensure_relay(self, run_id: str, force: bool = False) -> None:
         """中継を始める。force なら、動いている（はずの）中継があっても新しい世代で始め直す（見張りから）。"""
@@ -333,7 +359,7 @@ class Gateway:
     def retry_results(self, now: float | None = None) -> list[str]:
         """成果物の保存を待っている依頼（保存中）の成果物を取り直す。保存できた依頼を返す（見張りと起動のときに呼ぶ）。"""
         saved = []
-        for rec in self.store.listing(1000, (FINISHING,)):
+        for rec in self.store.listing(1000, (FINISHING,), hidden=True):
             client = self.registry.clients.get(rec["agent"])
             if self._save_result(rec["id"], client, rec, now):
                 saved.append(rec["id"])

@@ -238,8 +238,10 @@ def extract_schema(aspect_names: list[str]) -> dict:
     }
 
 
-def extract_user(state: AgentState, title: str, text: str, base_tier: int = 4) -> str:
+def extract_user(state: AgentState, title: str, text: str, base_tier: int = 4, full_chars: int = 0) -> str:
+    """full_chars は切る前の本文の長さ。切ったときは、その印を別の項目に書く（本文そのものは変えない。引用の照合に使うため）。"""
     target = state.get("target")
+    cut = {"本文の切り詰め": f"先頭 {len(text):,} 文字だけを送った（全体 {full_chars:,} 文字。残り {full_chars - len(text):,} 文字は送っていない）"}         if full_chars > len(text) else {}
     return json.dumps({
         "依頼": state.get("request", ""),
         "調査対象": f"{target['label']}（{target['description']}）" if target else state.get("request", ""),
@@ -248,6 +250,7 @@ def extract_user(state: AgentState, title: str, text: str, base_tier: int = 4) -
         "ページの仮の Tier": base_tier,
         "ページのタイトル": title,
         "ページの本文": text,
+        **cut,
     }, ensure_ascii=False, indent=1)
 
 

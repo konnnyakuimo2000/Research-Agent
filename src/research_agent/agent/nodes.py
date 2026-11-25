@@ -498,7 +498,7 @@ class Nodes:
         base = page_tier(source, state)
         ev("page.llm", url=url)
         try:
-            out = self._llm("extract", state).chat_json(prompts.EXTRACT_SYSTEM, prompts.extract_user(state, page.title, text, base),
+            out = self._llm("extract", state).chat_json(prompts.EXTRACT_SYSTEM, prompts.extract_user(state, page.title, text, base, len(page.text)),
                                      prompts.extract_schema(names))
         except LLMOutputError as err:
             # このページだけの失敗にする（並行して読んでいる他のページの結果を失わない）

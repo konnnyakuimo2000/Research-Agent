@@ -84,9 +84,10 @@ class RunStore:
             row = self.db.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
         return dict(row) if row else None
 
-    def listing(self, limit: int = 50, statuses: tuple[str, ...] | None = None) -> list[dict]:
+    def listing(self, limit: int = 50, statuses: tuple[str, ...] | None = None, hidden: bool = False) -> list[dict]:
+        """hidden=True なら、画面の一覧に出さない依頼（Open WebUI から始めたもの）も含める（立ち上げ直しの復旧用）。"""
         self.import_legacy()          # CLI（scripts/agent.py）で実行した調査も一覧に出す
-        sql, args = "SELECT * FROM runs WHERE hidden = 0", []
+        sql, args = ("SELECT * FROM runs WHERE 1 = 1" if hidden else "SELECT * FROM runs WHERE hidden = 0"), []
         if statuses:
             sql += f" AND status IN ({','.join('?' * len(statuses))})"
             args += list(statuses)
