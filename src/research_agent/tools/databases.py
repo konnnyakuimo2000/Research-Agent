@@ -73,7 +73,8 @@ def wanted(db: dict, request: str) -> bool:
     when = db.get("when") or []
     if not when or not request:
         return True
-    return any(w in request for w in when) or bool(_GENERAL.search(request))
+    # general = false のデータベース（写真などの所蔵品）は、全体を尋ねる依頼では引かない（その資料を求めたときだけ）
+    return any(w in request for w in when) or (db.get("general", True) and bool(_GENERAL.search(request)))
 
 
 def sites_for(subject_type: str) -> list[str]:

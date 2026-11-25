@@ -92,7 +92,7 @@ def test_only_databases_the_request_asks_for_are_queried():
                                 if s["name"] in ("国立国会図書館サーチ", "ジャパンサーチ")} == {
         "国立国会図書館サーチ": "skipped", "ジャパンサーチ": "skipped"}
     assert photo[2] == ["ジャパンサーチ"]
-    assert general[2] == ["国立国会図書館サーチ", "ジャパンサーチ"]
+    assert general[2] == ["国立国会図書館サーチ"]                           # 所蔵品（写真）は、求めたときだけ
     assert no_request[2] == ["国立国会図書館サーチ", "ジャパンサーチ"]        # 依頼文がなければ、これまでどおり全部引く
 
 

@@ -109,7 +109,11 @@ def sibling_only(text: str, name: str) -> bool:
         return False
     t = unicodedata.normalize("NFKC", text).lower()
     hits = [m.end() for m in re.finditer(re.escape(n), t)]
-    return bool(hits) and all(i < len(t) and t[i].isdigit() for i in hits)
+    return bool(hits) and all(_SIBLING_NUMBER.match(t, i) for i in hits)
+
+
+# 名前のすぐ後（空白 1 つまで）の番号。後ろに単位が続くもの（「333m」「2026年」）は番号ではなく数量
+_SIBLING_NUMBER = re.compile(r"\s?\d+(?![\d.,]*\s*(?:m|km|cm|mm|kg|g|t|%|メートル|年|月|日|時|分|人|万|億|千|円|ドル|度|℃))")
 
 
 # よく使う大学の略称（依頼の「九大」を、ページの「九州大学」と照らし合わせるため）

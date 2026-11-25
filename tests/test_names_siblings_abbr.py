@@ -18,7 +18,10 @@ def test_a_numbered_sibling_is_not_the_subject():
     assert sibling_only("小惑星探査機「はやぶさ2号」の成果", "はやぶさ")
     assert not sibling_only("はやぶさ (探査機) - Wikipedia", "はやぶさ")
     assert not sibling_only("はやぶさとはやぶさ2の違い", "はやぶさ")            # 本体の名前もある
-    assert not sibling_only("東京タワー 333m の秘密", "東京タワー")              # 空白の後の数字は別
+    assert sibling_only("小惑星探査機「はやぶさ 2」の ミッション概要 - J-Stage", "はやぶさ")   # 空白 1 つの後の番号も
+    assert not sibling_only("東京タワー 333m の秘密", "東京タワー")              # 単位の付いた数は数量
+    assert not sibling_only("東京タワー2026年の催し", "東京タワー")
+    assert sibling_only("iPhone 15 のレビュー", "iPhone")
     assert not sibling_only("はやぶさ2 - Wikipedia", "はやぶさ2")                # 対象自体が番号付き
     results = [web("はやぶさ (探査機) - Wikipedia", "https://ja.wikipedia.org/wiki/はやぶさ_(探査機)"),
                web("はやぶさ2 - Wikipedia", "https://ja.wikipedia.org/wiki/はやぶさ2")]
