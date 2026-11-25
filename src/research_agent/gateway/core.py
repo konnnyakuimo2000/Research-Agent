@@ -26,7 +26,10 @@ from research_agent.gateway.store import Feed, RunStore
 log = logging.getLogger(__name__)
 
 LIVE = ("running", "paused", "waiting")
-STATUS_OF = {"run.waiting": "waiting", "run.paused": "paused", "run.resumed": "running", "run.end": "done",
+# 終わりのイベント（run.end）を受け取ったら「保存中」。成果物をエージェントから取って保存できたら「完了」にする。
+# 「保存中」は、成果物の取得待ちの記録を兼ねる（ゲートウェイを立ち上げ直しても、取り直せる）
+FINISHING = "finishing"
+STATUS_OF = {"run.waiting": "waiting", "run.paused": "paused", "run.resumed": "running", "run.end": FINISHING,
              "run.error": "error", "run.cancelled": "cancelled"}
 RETRY_SECONDS = 2.0          # 中継が切れたときに、つなぎ直すまでの最初の待ち（倍々に延ばす）
 GIVE_UP_SECONDS = 1800.0     # この間ずっとつなげなければ、「途中で止まった」にする
@@ -35,6 +38,7 @@ FEED_KEEP_SECONDS = 600.0
 # つなぎ直す（PC のスリープの後に、接続が何も受け取らないまま待ち続け、一覧が「実行中」のまま戻らないことがあった）
 STALL_SECONDS = 90.0
 WATCH_SECONDS = 30.0
+RESULT_GIVE_UP_SECONDS = 1800.0   # 成果物をこの間とれなければ、イベントにある報告の本文だけで結果を作る
 
 
 class Unavailable(Exception):
@@ -50,6 +54,7 @@ class Gateway:
         self._wanted: dict[str, bool] = {}
         self._lock = threading.Lock()
         self._add_lock = threading.Lock()        # 古い中継と新しい中継が同じイベントを二重に書かないように
+        self._saving: set[str] = set()           # 成果物を取りに行っている依頼（同じ依頼を二重に取りに行かない）
         self._finished_at: dict[str, float] = {}
 
     # ---- エージェント ----
@@ -156,13 +161,16 @@ class Gateway:
     # ---- 中継 ----
 
     def resume_live(self) -> None:
-        """立ち上げ直したとき: 動いていた依頼の中継を、記録の続きから始め直す。"""
+        """立ち上げ直したとき: 動いていた依頼の中継を、記録の続きから始め直す。成果物の保存を待っていた依頼は、
+        成果物だけを取り直す（調査もイベントの中継もやり直さない）。"""
         for rec in self.store.listing(1000, LIVE):
             feed = Feed()
             for e in self.store.events(rec["id"]):
                 feed.add(e)
             self.feeds[rec["id"]] = feed
             self._ensure_relay(rec["id"])
+        if self.store.listing(1000, (FINISHING,)):
+            threading.Thread(target=self.retry_results, daemon=True, name="result-retry").start()
 
     def _ensure_relay(self, run_id: str, force: bool = False) -> None:
         """中継を始める。force なら、動いている（はずの）中継があっても新しい世代で始め直す（見張りから）。"""
@@ -266,7 +274,54 @@ class Gateway:
                 log.warning("relay %s %s; reconnecting", run_id, "stalled" if stalled else "was not running")
                 self._ensure_relay(run_id, force=True)
                 restarted.append(run_id)
+        self.retry_results(now)
         return restarted
+
+    def retry_results(self, now: float | None = None) -> list[str]:
+        """成果物の保存を待っている依頼（保存中）の成果物を取り直す。保存できた依頼を返す（見張りと起動のときに呼ぶ）。"""
+        saved = []
+        for rec in self.store.listing(1000, (FINISHING,)):
+            client = self.registry.clients.get(rec["agent"])
+            if self._save_result(rec["id"], client, rec, now):
+                saved.append(rec["id"])
+        return saved
+
+    def _save_result(self, run_id: str, client: AgentClient | None, rec: dict, now: float | None = None) -> bool:
+        """成果物をエージェントから取って保存し、「完了」にする。取れなければ「保存中」のまま（後で取り直す）。
+
+        取れないまま RESULT_GIVE_UP_SECONDS たったら（エージェントも立ち上げ直して成果物を失ったなど）、
+        イベントに残っている報告の本文だけで結果を作って保存する（いつまでも保存中のまま残さない）。"""
+        with self._lock:
+            if run_id in self._saving:
+                return False
+            self._saving.add(run_id)
+        try:
+            try:
+                if client is None:
+                    raise AgentError(404, "エージェントがない")
+                result = client.result(rec["agent_run"])
+            except (httpx.HTTPError, AgentError) as e:
+                log.warning("could not fetch the result of %s: %s", run_id, e)
+                if (now or time.time()) - (rec.get("updated") or 0) < RESULT_GIVE_UP_SECONDS:
+                    return False
+                result = {"report": self._report_from_events(run_id), "artifacts": [],
+                          "note": "成果物をエージェントから取得できなかったため、報告の本文だけを保存した"}
+            try:
+                self.store.save_result(run_id, result)
+            except OSError as e:
+                log.warning("could not save the result of %s: %s", run_id, e)
+                return False
+            self.store.update(run_id, status="done")
+            return True
+        finally:
+            with self._lock:
+                self._saving.discard(run_id)
+
+    def _report_from_events(self, run_id: str) -> str:
+        for env in reversed(self.events(run_id)):
+            if env.get("type") == "run.end":
+                return (env.get("data") or {}).get("report", "")
+        return ""
 
     def _add(self, run_id: str, feed: Feed, env: dict) -> None:
         with self._add_lock:
@@ -283,11 +338,11 @@ class Gateway:
             feed.add(env)
 
     def _finish(self, run_id: str, client: AgentClient, rec: dict, feed: Feed) -> None:
-        if (self.store.get(run_id) or {}).get("status") == "done":
-            try:
-                self.store.save_result(run_id, client.result(rec["agent_run"]))
-            except (httpx.HTTPError, AgentError, OSError) as e:
-                log.warning("could not save the result of %s: %s", run_id, e)
+        current = self.store.get(run_id) or {}
+        if current.get("status") == FINISHING:
+            # 保存できなければ「保存中」のまま残り、見張りと起動のときに取り直す（前は一度失敗すると、一覧は完了なのに
+            # 結果 API が 404 のままだった。再レビュー 5）
+            self._save_result(run_id, client, current)
         feed.finish()
         self._finished_at[run_id] = time.time()
 

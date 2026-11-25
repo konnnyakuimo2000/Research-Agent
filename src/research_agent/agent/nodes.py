@@ -397,7 +397,10 @@ class Nodes:
                 if label and not same_name(term, label):
                     variants.setdefault(term, 1)   # 本文にあった別の呼び方（7.2 の 3）。題名で見つかったものより弱く扱う
             verified += facts
-            page_imgs += [{**im, "page_url": page.url, "title": page.title} for im in page.images]
+            # 画像の掲載元は、本文と同じく転送をたどった後のページ（Tier・文脈の評価と報告の出典に使う）。
+            # 前は要求した URL を入れていたので、Tier 1 の URL から Tier 4 のページへ転送されたとき、画像だけ Tier 1 として
+            # 評価され、「確認済み」に上がることがあった（再レビュー 6）。要求した URL は取得の履歴として残す
+            page_imgs += [{**im, "page_url": final, "requested_url": page.url, "title": page.title} for im in page.images]
             ok, reason = page.ok and not meta.get("error"), meta.get("error") or page.reason
             reads.append({"url": page.url, "final_url": final, "ok": ok, "reason": reason,
                           "extracted": len(facts) + len(dropped), "verified": len(facts)})

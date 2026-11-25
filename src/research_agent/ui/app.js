@@ -210,7 +210,8 @@ async function loadRuns() {
   try {
     const { runs } = await api(withKey("/api/runs"));
     RUNS = Object.fromEntries(runs.map((r) => [r.id, r]));
-    const label = { running: "調べている", paused: "一時停止中", waiting: "答え待ち", done: "完了", error: "エラー", stopped: "途中で止まった", cancelled: "止めた" };
+    const label = { running: "調べている", paused: "一時停止中", waiting: "答え待ち", finishing: "報告を保存中", done: "完了",
+      error: "エラー", stopped: "途中で止まった", cancelled: "止めた" };
     const defAgent = Object.values(ctx.AGENTS).find((a) => a.default)?.id;
     $("runs").innerHTML = runs.map((r) => `<button type="button" class="run" data-id="${esc(r.id)}" data-agent="${esc(r.agent || "")}" data-live="${["running", "waiting", "paused"].includes(r.status)}">
       <span class="r1">${esc(r.request || "(依頼なし)")}</span><span class="r2">${esc(r.id.slice(0, 13).replace(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2}).*/, "$2/$3 $4:$5"))} · ${label[r.status] || r.status}${ctx.AGENTS[r.agent] && r.agent !== defAgent ? " · " + esc(ctx.AGENTS[r.agent].name) : ""}${runModelTag(r.models) ? " · " + esc(runModelTag(r.models)) : ""}</span></button>`).join("")

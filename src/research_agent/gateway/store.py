@@ -106,8 +106,11 @@ class RunStore:
         return out
 
     def save_result(self, run_id: str, result: dict) -> None:
-        (self.dir / f"{run_id}.result.json").write_text(json.dumps(result, ensure_ascii=False, indent=1, default=str),
-                                                       encoding="utf-8")
+        """結果を一時ファイルに書いてから置き換える（書いている途中で止まっても、壊れた結果を残さない）。"""
+        path = self.dir / f"{run_id}.result.json"
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(result, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+        tmp.replace(path)
 
     def result(self, run_id: str) -> dict | None:
         path = self.dir / f"{run_id}.result.json"
