@@ -59,6 +59,29 @@ def _unwrap_labels(html: str) -> str:
     return _LABEL_TAG.sub(lambda m: f"<{m.group(1)}span", html)
 
 
+_META_CHARSET = re.compile(rb"""<meta[^>]+charset\s*=\s*["']?\s*([A-Za-z0-9_\-]+)""", re.IGNORECASE)
+
+
+def html_text(r: httpx.Response) -> str:
+    """HTML の本文を文字にする。見出し（Content-Type）に文字コードがなければ、ページの中の <meta charset> を見る。
+
+    古い官公庁・大学のページは Shift_JIS が多く、見出しは「text/html」とだけ名乗る。前は UTF-8 として読み、
+    文字化けした本文から事実が 1 件も取れなかった（2026-11-24 の「はやぶさ」の調査の ISAS の技術解説）。
+    """
+    if "charset=" in r.headers.get("content-type", "").lower():
+        return r.text
+    m = _META_CHARSET.search(r.content[:4096])
+    if m:
+        try:
+            return r.content.decode(m.group(1).decode("ascii"), errors="replace")
+        except LookupError:
+            pass
+    try:
+        return r.content.decode("utf-8")
+    except UnicodeDecodeError:
+        return r.content.decode("cp932", errors="replace")
+
+
 def fetch_page(url: str, timeout: float = 20.0) -> Page:
     """ページを取得して本文を取り出す。公開の宛先だけ（http.get の公開取得）、HTML は MAX_BYTES まで。
 
@@ -86,15 +109,16 @@ def fetch_page(url: str, timeout: float = 20.0) -> Page:
         # PDF などは未対応（本文を読めないものは出典にしない）
         return Page(url, reason=f"未対応の形式（{ctype.split(';')[0] or '不明'}）", final_url=final)
 
-    text = trafilatura.extract(_unwrap_labels(r.text), include_comments=False, include_tables=True,
+    html = html_text(r)
+    text = trafilatura.extract(_unwrap_labels(html), include_comments=False, include_tables=True,
                                favor_precision=True) or ""
-    meta = trafilatura.extract_metadata(r.text)
+    meta = trafilatura.extract_metadata(html)
     title = (meta.title if meta and meta.title else "") or final
     if len(text) < 100:
         return Page(url, title=title, reason="本文が取り出せない", final_url=final)
     # 画像・リンクの相対 URL は、本文の発行元（最終の URL）を基準にする
-    return Page(url, title=title, text=text, ok=True, images=page_images(r.text, final),
-                links=page_links(r.text, final), final_url=final)
+    return Page(url, title=title, text=text, ok=True, images=page_images(html, final),
+                links=page_links(html, final), final_url=final)
 
 
 _REF_MARKERS = ("reference", "references", "citation", "cite", "footnote", "出典", "参考文献", "脚注", "注釈")

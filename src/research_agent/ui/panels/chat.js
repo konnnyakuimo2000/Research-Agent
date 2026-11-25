@@ -37,6 +37,8 @@ export function renderReport(md) {
   const inline = (s) => esc(s)
     .replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, src) => `<img src="${imageUrl(src.replace(/&amp;/g, "&"))}" alt="${alt}">`)
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    // Markdown のリンク [文字](URL)（画像の出典など）
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (m, label, u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${label}</a>`)
     .replace(/(^|[^"=])(https?:\/\/[^\s<）)]+)/g, (m, pre, u) => `${pre}<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`)
     .replace(/\[(\d{1,3})\]/g, '<button type="button" class="cite" data-src="$1">$1</button>');
   const out = []; let list = false;

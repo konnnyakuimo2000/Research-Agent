@@ -173,15 +173,15 @@ def unfilled(coverage: list[CoverageRow]) -> list[CoverageRow]:
 
 
 def gaps_text(coverage: list[CoverageRow]) -> str:
-    """報告の「確認できなかったこと」をプログラムで作る（設計書 9.1, 9.2）。出典が 1 つもない観点だけ。"""
-    return "\n".join(f"- {r['aspect']}: 確認できる出典が見つからなかった"
+    """報告の「確かめきれなかったこと」のうち、出典が 1 つもない観点（設計書 9.1, 9.2）。"""
+    return "\n".join(f"- {r['aspect']}: 信頼できる出典が見つかりませんでした"
                      for r in coverage if r["status"] == MISSING)
 
 
 def weak_text(coverage: list[CoverageRow]) -> str:
-    """報告の「出典が限られること」。本文には書いたが、出典が弱い観点（設計書 6.3 の基準に届かない）。
+    """報告の「確かめきれなかったこと」のうち、本文には書いたが出典が弱い観点（設計書 6.3 の基準に届かない）。
 
-    「確認できなかった」と書くと、本文に書いた内容と食い違って見えるので分けて書く。
+    読む人の言葉で書く（Tier などの内部の言葉は使わない。細かい内訳は実行の記録に残る）。
     """
     lines = []
     for r in coverage:
@@ -189,11 +189,11 @@ def weak_text(coverage: list[CoverageRow]) -> str:
             continue
         sites = r.get("independent") or len({_host(u) for u in r["sources"]})
         if sites == 1:
-            lines.append(f"- {r['aspect']}: 1 サイト（Tier {r['best_tier']}）の情報だけで、ほかの出典では確かめていない")
+            lines.append(f"- {r['aspect']}: 1 つのサイトにしか書かれておらず、ほかの出典では確かめられていません")
         else:
             # 出典不足で 2 サイト以上 → どれも Tier 3〜4（Tier 1〜2 が入っていれば確認済みになる）
-            lines.append(f"- {r['aspect']}: {sites} サイトに書かれているが、いずれも販売店・個人のサイトなど"
-                         f"（最も信頼度の高いもので Tier {r['best_tier']}）で、公的機関・メーカー・百科事典では確かめていない")
+            lines.append(f"- {r['aspect']}: 販売店や個人のサイトなどにしか書かれておらず、公的機関・メーカー・"
+                         "百科事典では確かめられていません")
     return "\n".join(lines)
 
 

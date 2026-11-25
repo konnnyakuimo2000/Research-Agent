@@ -292,6 +292,12 @@ class Nodes:
                 result["priority_urls"] = by_tier(state.get("priority_urls", [])
                                                   + [w.url for w in relevant
                                                      if canonical(w.url) not in read and not fetch.is_unreadable(w.url)])
+            summary = result.get("summary_url", "")
+            if summary and not state.get("summary_url") and canonical(summary) not in read:
+                # 対象の Wikipedia の記事は、全体を見渡せる最初の資料なので先に読む。読む一覧は Tier の順に並ぶので、
+                # 前は Tier 1 のページ（別の探査機のページも含む）で枠が埋まり、最後まで読まないことがあった（はやぶさ）
+                result["priority_urls"] = [summary] + [u for u in result.get("priority_urls", state.get("priority_urls", []))
+                                                       if canonical(u) != canonical(summary)]
             # この検索で初めて見つかった、対象のページの数（次の検索を選ぶときの「空振り」の判定に使う）
             known_urls = read | {canonical(u) for u in state.get("reading_list", [])}
             new_relevant = len({canonical(w.url) for w in relevant} - known_urls)
@@ -752,7 +758,7 @@ class Nodes:
             body = strip_program_sections(self._llm("report", state).chat_text(prompts.RESPOND_SYSTEM, retry))
             if bad := unsupported_names(body, materials):
                 body = drop_sentences_with(body, bad)
-        parts = [body.strip()]
+        parts = [aspect_headings(body, [a["name"] for a in state.get("aspects", [])]).strip()]
         if infeasible := (state.get("feasibility") or {}).get("infeasible_parts"):
             parts.append("\n### 調べられなかったこと（公開情報では調べられないため）\n"
                          + "\n".join(f"- {x}" for x in infeasible))
@@ -763,19 +769,16 @@ class Nodes:
                      + " / ".join(f"「{f['text']}」[{number[f['source']]}]" for f in c["facts"] if f["source"] in number)
                      for c in state["conflicts"]]
             parts.append("\n### 出典どうしの食い違い\n" + "\n".join(lines))
-        if weak := cov.weak_text(state.get("coverage", [])):
-            parts.append("\n### 出典が限られること\n" + weak)
-        if gaps := cov.gaps_text(state.get("coverage", [])):
-            parts.append("\n### 確認できなかったこと\n" + gaps)
+        # 確かめきれなかった観点（出典がない・出典が弱い）は、1 つの節にまとめて、読む人の言葉で書く
+        if gaps := "\n".join(x for x in (cov.gaps_text(state.get("coverage", [])),
+                                         cov.weak_text(state.get("coverage", []))) if x):
+            parts.append("\n### 確かめきれなかったこと\n" + gaps)
         if state.get("images_checked"):
             parts.append("\n" + images_section(state))
-        if state.get("failures"):
-            parts.append("\n※ 調査中に使えなかったもの（その分、調べ尽くせていない可能性があります）:\n"
-                         + "\n".join(f"- {f}" for f in state["failures"]))
-        if state.get("unresponsive"):
-            parts.append(f"\n※ SearXNG で応答しなかった検索エンジン: {', '.join(state['unresponsive'])}")
-        if state.get("databases_used"):
-            parts.append(f"\n※ 分野別データベースも調べました: {'、'.join(state['databases_used'])}")
+        # 調査の道具の細かい状態（応答しなかった検索エンジン・調べたデータベース・失敗した処理の名前）は書かない。
+        # それらはテレメトリーの画面と実行の記録に残る。検索そのものが使えなかったときだけ、読む人に知らせる
+        if any(f.startswith(("Web 検索", "Wikidata の検索")) for f in state.get("failures", [])):
+            parts.append("\n※ 検索の一部が使えなかったため、調べきれていない可能性があります。")
         if sources:
             parts.append("\n### 出典\n" + sources_text(state, sources))
         answer = "\n".join(parts)
@@ -795,6 +798,17 @@ def _heading_text(line: str) -> str | None:
     if len(s) > 4 and s.startswith("**") and s.endswith("**") and s.count("**") == 2:
         return s[2:-2].strip()
     return None
+
+
+def aspect_headings(body: str, aspects: list[str]) -> str:
+    """観点の名前だけの行（「正式名・型番」「**経歴**」「経歴：」）を、小見出し（### 経歴）に直す。
+    LLM が見出しの記号を省くことがあり、そのままでは画面でも Open WebUI でも見出しにならなかった。"""
+    names = {a.strip() for a in aspects if a.strip()}
+    out = []
+    for line in body.splitlines():
+        core = line.strip().strip("*#").strip().rstrip(":：").strip()
+        out.append(f"### {core}" if core in names and not line.lstrip().startswith("### ") else line)
+    return "\n".join(out)
 
 
 def strip_program_sections(body: str) -> str:
@@ -956,25 +970,25 @@ def pick_candidate(answer: str, candidates: list[Candidate]) -> Candidate | None
 
 
 def _image_lines(img: dict, name: str) -> list[str]:
+    """報告の画像 1 枚: 画像と、1 行の説明（写っているもの・出典へのリンク）。
+
+    確信度・Tier・ライセンスの項目を毎回並べると、調査の記録のようになって読みにくい（細かい判定は実行の記録に残る）。
+    読む人に知らせる必要があるときだけ、注意を添える: 対象かどうか確かめきれていない、対象そのものではない、
+    利用に許可が要る。
+    """
+    desc = img.get("description", "") or name
+    source = f"[{img.get('title') or telemetry.host(img['page_url'])}]({img['page_url']})"
+    notes = []
     if img["level"] == imaging.REFERENCE:
-        level = (f"{img['level']}（{name}そのものではありません。関係のある「{img.get('related', '')}」"
-                 f"（{img.get('relation', '')}）の画像です）")
-    else:
-        level = img["level"] + ("" if img["level"] == imaging.CONFIRMED else "（確認しきれていません）")
-    lines = [f"![{img.get('description', '')}]({img['src']})", f"- 確信度: {level}"]
-    if img["level"] != imaging.REFERENCE:
-        lines.append(f"- 写っているもの: {img.get('description', '')}")
-    if img.get("features_seen"):
-        lines.append(f"- 画像で確かめた特徴: {'、'.join(img['features_seen'])}")
-    license_ = img.get("license") or "不明（掲載ページで確認してください）"
-    if imaging.needs_permission(license_):
-        license_ += "（利用には権利者の許可が必要です。ここでは確認のために表示しています）"
-    lines += [f"- 出典: {img.get('title') or img['page_url']} — {img['page_url']}（Tier {img['tier']}）",
-              f"- ライセンス: {license_}"]
-    if img.get("also_on"):
-        # V-4: 同じ画像が別のサイトにも載っている（複数の出典での一致）
-        lines.append(f"- 同じ画像が載っている別のページ: {len(img['also_on'])} 件（{img['also_on'][0]} など）")
-    return lines + [""]
+        related = img.get("related", "")
+        notes.append(f"{name}そのものではなく、関係のある「{related}」の画像です" if related
+                     else f"{name}そのものの画像ではありません")
+    elif img["level"] != imaging.CONFIRMED:
+        notes.append(f"{name}の画像かどうかは確かめきれていません")
+    if imaging.needs_permission(img.get("license") or ""):
+        notes.append("利用には権利者の許可が必要です（確認のために表示しています）")
+    caption = f"{desc}（出典: {source}）" + "".join(f" ※ {n}。" for n in notes)
+    return [f"![{desc}]({img['src']})", caption, ""]
 
 
 def images_section(state: AgentState) -> str:
@@ -988,20 +1002,13 @@ def images_section(state: AgentState) -> str:
     lines = ["### 画像"]
     for img in found:
         lines += _image_lines(img, name)
-    checked = [r for r in state.get("image_log", []) if r.get("stage") != "L5-周辺"]
-    if not found and not imaging.asks_for_images(state.get("request", "")):
-        # 求められていない画像は、見つからなかったことを短く書くだけにする
-        lines.append(f"対象の画像として確認できるものは見つかりませんでした（候補 {len(checked)} 件を確かめました）。")
-    elif not found:
-        counts = {k: v for k, v in state.get("image_counts", {}).items() if k != "L5-周辺"}
-        reasons = list(dict.fromkeys(r.get("reason", "") for r in checked if r.get("reason")))[:3]
-        lines += ["対象の画像として確認できるものは見つかりませんでした。",
-                  "- 試したこと: " + "、".join(f"{k} {v} 件" for k, v in counts.items())
-                  + f" の候補から {len(checked)} 件を確かめ、採用 0 件",
-                  "- 主な不採用の理由: " + ("／".join(reasons) if reasons else "候補がなかった"),
-                  "- 次にできること: 対象の公式サイトや所蔵機関に問い合わせる。お持ちの画像があれば、それが対象かを確認できます"]
+    if not found:
+        lines.append(f"{name}の画像として確かめられるものは見つかりませんでした。")
+        if imaging.asks_for_images(state.get("request", "")):
+            # 画像を求められていたときは、次にできることを添える（試した候補の内訳は実行の記録に残る）
+            lines.append("公式サイトや所蔵機関の資料をあたるか、お持ちの画像があれば、それが対象かを確かめられます。")
     if references:
-        lines += ["", "参考として、関係のあるものの画像を載せます（対象そのものではありません）。", ""]
+        lines += ["", "参考として、関係のあるものの画像を載せます。", ""]
         for img in references:
             lines += _image_lines(img, name)
     return "\n".join(lines).rstrip()
@@ -1022,19 +1029,19 @@ def collect_sources(state: AgentState) -> list[Source]:
 
 
 def sources_text(state: AgentState, sources: list[Source]) -> str:
-    """報告の出典一覧。転載のページには、元のページの番号を添える（独立した出典として数えていないことを示す）。"""
+    """報告の出典一覧（題名と URL）。転載のページには、元のページの番号を添える。
+
+    出典ごとの Tier（信頼度の段階）は書かない。信頼度の低い出典の事実は本文で断定しない書き方にしてあり、
+    段階の内訳はテレメトリーの画面と実行の記録に残る。
+    """
     number = UrlNumbers([s["url"] for s in sources])
     copies = state.get("reprints", {})
-    changed = state.get("page_tiers", {})
     lines = []
     for i, s in enumerate(sources, 1):
-        line = f"[{i}] {s['title']} — {s['url']}（Tier {s['tier']}"
-        if canonical(s["url"]) in changed and changed[canonical(s["url"])] != tier_of(s["url"]):
-            line += f"。サイトの種類では Tier {tier_of(s['url'])}"
-        line += "）"
+        line = f"[{i}] {s['title']} — {s['url']}"
         original = copies.get(canonical(s["url"]))
         if original and original in number and number[original] != i:
-            line += f" ※ [{number[original]}] とほぼ同じ文章のため、独立した出典として数えていません"
+            line += f"（[{number[original]}] とほぼ同じ文章）"
         lines.append(line)
     return "\n".join(lines)
 

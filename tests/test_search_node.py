@@ -60,9 +60,15 @@ def test_respond_reports_failures():
     class TextLLM:
         def chat_text(self, system, user, temperature=0.5):
             return "本文"
-    out = Nodes(SETTINGS, TextLLM()).respond({"request": "水星", "failures": ["Web 検索（SearXNG）に接続できなかった"]})
-    assert "調査中に使えなかったもの" in out["answer"]
-    assert "SearXNG）に接続できなかった" in out["answer"]
+    out = Nodes(SETTINGS, TextLLM()).respond({"request": "水星", "failures": ["Web 検索（SearXNG）に接続できなかった"],
+                                              "unresponsive": ["brave", "duckduckgo"], "databases_used": ["ORCID"]})
+    # 検索が使えなかったことは 1 文で知らせる。道具の名前（SearXNG・検索エンジン・データベース）は書かない
+    assert "※ 検索の一部が使えなかったため、調べきれていない可能性があります。" in out["answer"]
+    for word in ("SearXNG", "brave", "duckduckgo", "ORCID", "Tier"):
+        assert word not in out["answer"]
+    # 画像の候補集めなど、検索以外の失敗は報告に書かない（実行の記録に残る）
+    quiet = Nodes(SETTINGS, TextLLM()).respond({"request": "水星", "failures": ["画像の候補集め（L2-Wikidata）に失敗した（ConnectError）"]})
+    assert "※" not in quiet["answer"] and "L2-Wikidata" not in quiet["answer"]
 
 
 def test_exact_name_matches_are_added_to_candidates():

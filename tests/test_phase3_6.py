@@ -120,8 +120,9 @@ def test_sources_text_marks_reprints_and_adjusted_tiers():
     state = {"reprints": {"https://mirror.example.com/m": "https://ja.wikipedia.org/wiki/水星"},
              "page_tiers": {"https://club.example.org/m": 3}}
     text = sources_text(state, sources)
-    assert "[2] 写し — https://mirror.example.com/m（Tier 4） ※ [1] とほぼ同じ文章" in text
-    assert "（Tier 3。サイトの種類では Tier 4）" in text
+    assert text.splitlines() == ["[1] Wikipedia — https://ja.wikipedia.org/wiki/水星",
+                                 "[2] 写し — https://mirror.example.com/m（[1] とほぼ同じ文章）",
+                                 "[3] 愛好会 — https://club.example.org/m"]          # Tier は書かない
 
 
 # ---- フェーズ 6: 分野別データベース（L3）
@@ -226,8 +227,8 @@ def test_find_images_falls_back_to_reference_images_from_related_items():
     assert out["image_counts"]["L3-分野別データベース"] == 1
     assert [(i["src"], i["level"]) for i in out["images"]] == [("https://up/genus.jpg", imaging.REFERENCE)]
     text = images_section({**state, **out})
-    assert text.index("見つかりませんでした") < text.index("参考画像")         # まず見つからなかったことを書く
-    assert "テスト種そのものではありません。関係のある「カモシカ属」（上位の分類群）の画像です" in text
+    assert text.index("見つかりませんでした") < text.index("参考として")       # まず見つからなかったことを書く
+    assert "※ テスト種そのものではなく、関係のある「カモシカ属」の画像です。" in text
 
 
 def test_image_prompt_gets_distinguishing_features():

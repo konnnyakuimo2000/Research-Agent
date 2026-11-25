@@ -32,10 +32,10 @@ def test_build_coverage_and_gaps_text():
     assert rows["場所"]["status"] == cov.WEAK
     assert rows["規模"]["status"] == cov.MISSING
     text = cov.gaps_text(list(rows.values()))
-    assert "- 規模: 確認できる出典が見つからなかった" in text
-    assert "場所" not in text and "日時" not in text              # 出典がある観点は「確認できなかった」に入れない
+    assert "- 規模: 信頼できる出典が見つかりませんでした" in text
+    assert "場所" not in text and "日時" not in text              # 出典がある観点は「見つからなかった」に入れない
     weak = cov.weak_text(list(rows.values()))
-    assert weak == "- 場所: 1 サイト（Tier 4）の情報だけで、ほかの出典では確かめていない"
+    assert weak == "- 場所: 1 つのサイトにしか書かれておらず、ほかの出典では確かめられていません"   # Tier は書かない
 
 
 def test_weak_text_for_many_low_tier_sites():
@@ -43,7 +43,7 @@ def test_weak_text_for_many_low_tier_sites():
     verified = [{"text": "t", "quote": "q", "aspect": "場所", "source": u}
                 for u in ("https://blog.example.com/a", "https://shop.example.net/b")]
     weak = cov.weak_text(cov.build_coverage(aspects, verified))
-    assert "- 場所: 2 サイトに書かれているが、いずれも販売店・個人のサイトなど（最も信頼度の高いもので Tier 4）" in weak
+    assert weak == "- 場所: 販売店や個人のサイトなどにしか書かれておらず、公的機関・メーカー・百科事典では確かめられていません"
 
 
 TARGET = {"id": "Q1", "label": "地震A", "description": "2004年の地震", "sitelinks": 80}
@@ -86,5 +86,5 @@ def test_respond_appends_gaps_from_coverage():
             return "本文"
     s = state(verified=[{"text": "t", "quote": "q", "aspect": "日時", "source": GOV}])
     answer = Nodes(None, TextLLM()).respond(s)["answer"]
-    assert "### 確認できなかったこと" in answer
-    assert "- 規模: 確認できる出典が見つからなかった" in answer
+    assert "### 確かめきれなかったこと" in answer
+    assert "- 規模: 信頼できる出典が見つかりませんでした" in answer

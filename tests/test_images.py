@@ -168,16 +168,21 @@ def test_images_section_found_and_not_found():
     found = images_section({"images_checked": True, "images": [
         {"src": "https://up/wd.jpg", "page_url": "https://commons.wikimedia.org/wiki/File:a.jpg", "tier": 2,
          "title": "File:a.jpg", "license": "CC BY-SA 3.0", "level": imaging.CONFIRMED, "description": "富士山"}]})
-    assert "![富士山](https://up/wd.jpg)" in found and "ライセンス: CC BY-SA 3.0" in found
+    # 画像と 1 行の説明（出典へのリンク）だけ。確信度・Tier・ライセンスの項目は並べない
+    assert found == ("### 画像\n![富士山](https://up/wd.jpg)\n"
+                     "富士山（出典: [File:a.jpg](https://commons.wikimedia.org/wiki/File:a.jpg)）")
+    probable = images_section({"images": [{"src": "s", "page_url": "https://ex.org/p", "tier": 4, "title": "",
+                                           "license": "All rights reserved", "level": imaging.PROBABLE,
+                                           "description": "山の写真"}], "target": {"label": "富士山"}})
+    assert "※ 富士山の画像かどうかは確かめきれていません。" in probable and "許可が必要" in probable
     empty = {"images_checked": True, "images": [], "image_counts": {"L2-Commons": 3, "L1-画像検索": 5},
-             "image_log": [{"reason": "別の物"}, {"reason": "小さすぎる（100×80）"}]}
+             "image_log": [{"reason": "別の物"}, {"reason": "小さすぎる（100×80）"}], "target": {"label": "富士山"}}
     none = images_section({**empty, "request": "富士山の写真がほしい"})
-    assert "見つかりませんでした" in none
-    assert "L2-Commons 3 件、L1-画像検索 5 件 の候補から 2 件を確かめ、採用 0 件" in none
-    assert "別の物／小さすぎる（100×80）" in none
+    assert "富士山の画像として確かめられるものは見つかりませんでした。" in none
+    assert "お持ちの画像" in none and "L2-Commons" not in none and "小さすぎる" not in none   # 内訳は記録に残す
     # 求められていない画像は、見つからなかったことを 1 行で書くだけ
     short = images_section({**empty, "request": "富士山について調べて"})
-    assert short == "### 画像\n対象の画像として確認できるものは見つかりませんでした（候補 2 件を確かめました）。"
+    assert short == "### 画像\n富士山の画像として確かめられるものは見つかりませんでした。"
 
 
 def test_guard_finds_images_before_responding_only_when_asked():
