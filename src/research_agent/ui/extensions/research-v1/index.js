@@ -21,6 +21,7 @@ registerExtension("research/v1", {
     chat: { "run.start": () => now("調査を始めた") },
   },
   layouts: { flow: ResearchFlow },
+  observe: (e) => S.summary.on(e),
   reset: resetTree,
   cite(n) {
     const s = S.sources[n - 1]; if (!s) return;

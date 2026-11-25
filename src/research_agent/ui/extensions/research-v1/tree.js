@@ -4,6 +4,7 @@ import { esc, host, tier, icon, card, toggleBtn, link, sameUrl, imageUrl } from 
 import { ctx, labelOf } from "../../core/ctx.js";
 import { tree } from "../../views/tree.js";
 import { now } from "../../panels/chat.js";
+import { RunSummary, WORDS, coverageWord, decisionDiff, imageWord } from "./summary.js";
 
 export const ACTION = { search: "検索する", read_pages: "ページを読む", find_images: "画像を探す", check_conflicts: "食い違いを調べる",
   respond: "回答する", ask_user: "聞き返す" };
@@ -14,8 +15,8 @@ export const NEEDS_PERMISSION = /all rights reserved|著作権あり|無断転�
 const workName = (node) => WORK[node] || labelOf(node);
 
 // この拡張の状態（依頼を開き直すたびに捨てる）
-export const S = { round: null, rounds: 0, dbNode: {}, sources: [] };
-export function resetTree() { Object.assign(S, { round: null, rounds: 0, dbNode: {}, sources: [] }); }
+export const S = { round: null, rounds: 0, dbNode: {}, sources: [], summary: new RunSummary() };
+export function resetTree() { Object.assign(S, { round: null, rounds: 0, dbNode: {}, sources: [], summary: new RunSummary() }); }
 
 const T = tree, N = () => tree.N, info = () => tree.info;
 // ---- 網羅表のノード ----
@@ -23,10 +24,12 @@ const aspectId = (name) => "a:" + name;
 function buildCoverage(e) {
   T.add("cov", "req", 1, card("網羅表", `観点 ${e.aspects.length} つ`, `${e.subject_type} · ${e.origin}が作成`) + toggleBtn,
     { title: "網羅表", kv: [["対象の種類", esc(e.subject_type)], ["観点を作ったもの", esc(e.origin)]],
-      note: "観点ごとに、確かめた事実の数と状態（未発見 · 出典不足 · 確認済み）をプログラムが集計する。" }, "done", true);
+      note: "観点ごとに、原文に引用が見つかった記述の数と、出典条件（Tier 1 の出典、または別サイト 2 件以上で 1 件以上が "
+        + "Tier 1〜2）を満たすかをプログラムが集計する。条件を満たしても、記述どうしが食い違うことがある（食い違い候補を併記）。" },
+    "done", true);
   e.aspects.forEach((a) => T.add(aspectId(a), "cov", 2,
-    `<div class="k"><span>観点</span><span class="mono cnt">0</span></div><div class="t">${esc(a)}</div><div class="s">未発見</div><div class="facts"></div>`,
-    { title: `観点: ${a}`, kv: [["状態", "未発見"]], facts: [] }, "aspect"));
+    `<div class="k"><span>観点</span><span class="mono cnt">0</span></div><div class="t">${esc(a)}</div><div class="s">${coverageWord("未発見")}</div><div class="facts"></div>`,
+    { title: `観点: ${a}`, kv: [["判定", coverageWord("未発見")]], facts: [] }, "aspect"));
 }
 function flyFact(pageId, f, t, delay) {
   const target = N()[aspectId(f.aspect)];
@@ -36,7 +39,7 @@ function flyFact(pageId, f, t, delay) {
     target.el.querySelector(".facts").appendChild(sq);
     target.el.querySelector(".cnt").textContent = target.el.querySelectorAll(".facts i").length;
     // 状態（確認済みなど）は、ページを読み終えたときにプログラムが集計する（coverage のイベント）
-    if (!target.el.classList.contains("ok") && !target.el.classList.contains("weak")) T.setSub(target.id, "集計を待っている");
+    if (!target.el.classList.contains("ok") && !target.el.classList.contains("weak")) T.setSub(target.id, "判定の集計を待っている");
     info()[target.id].facts.push(f);
     T.layout();
   };
@@ -54,13 +57,15 @@ function flyFact(pageId, f, t, delay) {
 function coverage(rows) {
   rows.forEach((r) => {
     const id = aspectId(r.aspect), n = N()[id]; if (!n) return;
+    const conflicted = S.summary.conflictAspects().has(r.aspect);
     n.el.classList.toggle("ok", r.status === "確認済み"); n.el.classList.toggle("weak", r.status === "出典不足");
-    T.setSub(id, r.status === "確認済み" ? "✓ 確認済み" : r.status + (r.independent > 1 ? `（${r.independent} サイト）` : ""));
+    T.setSub(id, coverageWord(r.status) + (r.independent > 1 ? `（別サイト ${r.independent}）` : "") + (conflicted ? " · 食い違い候補あり" : ""));
     n.el.querySelector(".cnt").textContent = r.facts;
-    info()[id].kv = [["状態", esc(r.status)], ["事実", `${r.facts} 件`], ["独立した出典のサイト", `${r.independent}`],
-      ["最も高い Tier", r.best_tier ? `T${r.best_tier}` : ""]];
+    info()[id].kv = [["判定", esc(coverageWord(r.status))], ["原文に引用が見つかった記述", `${r.facts} 件`],
+      ["別サイトとして数えた出典", `${r.independent}`], ["最も高い Tier", r.best_tier ? `T${r.best_tier}` : ""],
+      ["食い違い候補", conflicted ? "あり（食い違いの工程を参照）" : ""]];
   });
-  if (N().cov) T.setSub("cov", `${rows.filter((r) => r.status === "確認済み").length} / ${rows.length} 観点を確認済み`);
+  if (N().cov) T.setSub("cov", S.summary.coverageText());
 }
 
 // 転送されたページ: 本文の発行元（転送先）をノードに覚えさせ、サイト名・アイコンを切り替える。
@@ -87,7 +92,9 @@ function pageNode(e, state) {
   if (!N()[parent]) return;
   T.add(id, parent, N()[parent].depth + 1, card(e.db ? "記録 · " + e.db : "ページ", e.host, state === "planned" ? "読む順番を待っている" : "取得している", tier(e.tier), icon(e.host)) +
     `<div class="steps"><span></span><span></span><span></span></div>`,
-    { title: e.host, kv: [["URL", link(e.url)], ["Tier", `${e.tier}`]], note: "本文に一字一句ある引用の事実だけを残す（引用の照合）。" }, state);
+    { title: e.host, kv: [["資料", link(e.url)], ["Tier", `${e.tier}`]],
+      note: "モデルが抜き出した記述のうち、付けた引用が本文（正規化した後）に見つかったものだけを残す。"
+        + "引用の一致を確かめただけで、数値や否定の意味までは確かめていない。" }, state);
 }
 
 // ---- イベント → 木 ----
@@ -95,31 +102,33 @@ export const treeRenderers = {
   "step.start": (e) => {
     if (e.node === "decide") {
       S.rounds++; const id = "d" + e.step; S.round = id;
-      T.add(id, "req", 1, `<div class="row"><span class="num">判断 ${S.rounds}</span><span class="choice">LLM が考えている</span><span class="st"></span></div>`,
-        { title: `判断 ${S.rounds}` }, "round llm");
-      now(`判断 ${S.rounds} · 次に何をするかを LLM が考えている`);
+      T.add(id, "req", 1, `<div class="row"><span class="num">判断 ${S.rounds}</span><span class="choice">${WORDS.processing}</span><span class="st"></span></div>`,
+        { title: `判断 ${S.rounds}` }, "round running");
+      now(`判断 ${S.rounds} · 次の作業を決めている`);
       return;
     }
     if (e.node === "check_feasibility") {
       T.add("w" + e.step, "req", 1, `<div class="row"><span class="num">判定</span><span class="choice">調べられるか</span><span class="st"></span></div>`,
-        { title: "公開情報で調べられるか" }, "round llm feas");
-      now("依頼が公開情報で調べられるかを、LLM が判定している");
+        { title: "公開情報で調べられるか" }, "round running feas");
+      now("依頼が公開情報で調べられるかを判定している");
       return;
     }
     const id = "w" + e.step;
     if (N()[id]) { T.setState(id, "running"); return; }   // 聞き返しの答えで再開した
     T.work = id;
     const name = workName(e.node);
-    T.add(id, S.round || "req", 2, card(name, name, "始めた") + toggleBtn,
-      { title: name }, e.node === "respond" || e.node === "check_conflicts" ? "llm" : "running");
-    if (e.node === "respond") now("確かめた事実と出典番号から、LLM が報告を書いている");
-    if (e.node === "check_conflicts") now("観点ごとに、別々のサイトの事実が食い違っていないか確かめている");
+    // 工程の始まりだけが分かる段階は「処理中」。モデルへの依頼は、それを示すイベント（page.llm など）で分かったときだけ出す
+    T.add(id, S.round || "req", 2, card(name, name, e.node === "respond" ? WORDS.report : WORDS.processing) + toggleBtn,
+      { title: name }, "running");
+    if (e.node === "respond") now(WORDS.report);
+    if (e.node === "check_conflicts") now("観点ごとに、別々のサイトの記述が食い違っていないか調べている");
   },
   "step.end": (e) => {
     const id = e.node === "decide" ? "d" + e.step : "w" + e.step;
     if (e.error) { T.setState(id, "failed"); T.setSub(id, e.error); }
     else if (!N()[id]?.el.classList.contains("failed")) T.setState(id, "done");
-    if (info()[id]) info()[id].kv = [...(info()[id].kv || []), ["所要時間", `${e.seconds} 秒${e.llm_wait ? `（うち LLM サーバーの待ち ${e.llm_wait} 秒）` : ""}`]];
+    if (info()[id]) info()[id].kv = [...(info()[id].kv || []), ["この工程の時間", e.seconds == null ? "未計測" : `${e.seconds} 秒`],
+      ["うち再試行関連", e.llm_wait ? `${e.llm_wait} 秒` : ""]];
   },
   "status": () => {},     // 状態の一行は、木ではなくノードの中身で分かる
   "feasibility": (e) => {
@@ -132,16 +141,15 @@ export const treeRenderers = {
   "decision": (e) => {
     const r = S.round;
     if (!r || !N()[r]) return;
-    const llm = ACTION[e.llm?.action] || e.llm?.action || "", act = ACTION[e.action] || e.action;
-    const q = e.action === "search" && e.query ? `「${e.query}」` : "";
-    const changed = e.guard && e.llm?.action !== e.action || (e.guard && e.llm?.query !== e.query);
-    N()[r].el.querySelector(".choice").innerHTML = changed ? `<span class="was">${esc(llm)}</span> → ${esc(act + q)}` : esc(act + q);
-    if (changed) N()[r].el.querySelector(".row").insertAdjacentHTML("beforeend", `<span class="tag">変更</span>`);
+    // モデルの提案と採用した行動（流れの図と同じ差分）。実際に始まった作業は、次の工程のノードで分かる
+    const d = decisionDiff(e), changed = d.kind === "action" || d.kind === "query";
+    N()[r].el.querySelector(".choice").innerHTML = changed ? `<span class="was">${esc(d.proposal)}</span> → ${esc(d.adopted)}` : esc(d.adopted);
+    if (changed) N()[r].el.querySelector(".row").insertAdjacentHTML("beforeend", `<span class="tag">${esc(d.label)}</span>`);
     const plan = e.plan ? `点数 ${e.plan.score}（${Object.entries(e.plan.parts || {}).map(([k, v]) => `${esc(k)} ${(+v).toFixed(2)}`).join(" × ")}）` : "";
-    info()[r].kv = [["LLM の選択", esc(llm + (e.llm?.query ? `「${e.llm.query}」` : ""))], ["LLM の理由", esc(e.llm?.reason)],
-      ["実行した行動", esc(act + q)], ["プログラムの変更", esc(e.guard)], ["検索の点数", plan],
+    info()[r].kv = [["モデルの提案", esc(d.proposal)], ["提案の理由（モデルの出力）", esc(d.why)],
+      ["採用した行動", esc(d.adopted)], ["変更", esc(d.label)], ["変更理由", esc(d.reason)], ["検索の点数", plan],
       ["他の候補", (e.plan?.alternatives || []).map((a) => `${esc(a.query)}（${a.score}）`).join("<br>")]];
-    info()[r].note = changed ? "LLM の選択を、網羅表と止める条件を見たプログラムが変えた（guard）。" : "";
+    info()[r].note = changed ? "モデルの提案を、網羅表と止める条件を見たプログラムが変えた。" : "";
     T.layout();
   },
   "search.start": (e) => {
@@ -190,26 +198,32 @@ export const treeRenderers = {
         list: e.records.map((r) => `${esc(r.database)}: ${link(r.url)}`) }, e.failures.length && !e.records.length ? "failed" : "done");
   },
   "page.planned": (e) => pageNode(e, "planned"),
-  "page.start": (e) => { pageNode(e, "running"); T.step("p:" + e.url, 0, "work"); now(`${e.host} を${e.db ? "（データベースの記録として）" : ""}読んでいる`); },
+  "page.start": (e) => { pageNode(e, "running"); T.step("p:" + e.url, 0, "work"); T.setSub("p:" + e.url, e.db ? "DB記録を読込中" : "本文を取得中");
+    now(`${e.host} の${e.db ? "DB記録を読み込んでいる" : "本文を取得している"}`); },
   "page.fetched": (e) => {
     const id = "p:" + e.url; if (!N()[id]) return;
     redirected(id, e);
-    if (!e.ok) { T.setState(id, "failed"); T.step(id, 0, "ng"); T.setSub(id, e.reason); info()[id].kv.push(["結果", esc(e.reason)]); return; }
-    T.step(id, 0, "on"); if (e.title) T.setTitle(id, e.title); T.setSub(id, `取得した · ${e.chars.toLocaleString()} 文字`);
+    if (!e.ok) { T.setState(id, "failed"); T.step(id, 0, "ng"); T.setSub(id, `本文を取得できない · ${e.reason}`);
+      info()[id].kv.push(["段階", "本文を取得できない"], ["理由", esc(e.reason)]); return; }
+    const p = S.summary.pages.get(e.url);
+    T.step(id, 0, "on"); if (e.title) T.setTitle(id, e.title);
+    T.setSub(id, `${p?.db ? "DB記録を読込済み" : "本文取得済み"} · ${e.chars.toLocaleString()} 文字`);
     info()[id].title = e.title || info()[id].title;
   },
   "page.llm": (e) => {
     const id = "p:" + e.url; if (!N()[id]) return;
-    T.setState(id, "llm"); T.step(id, 1, "work"); T.setSub(id, "LLM が引用付きで事実を抜き出している");
-    now(`${host(e.url)} の本文から、LLM が引用付きで事実を抜き出している`);
+    T.setState(id, "llm"); T.step(id, 1, "work"); T.setSub(id, `${WORDS.askingModel}（引用付きで記述を抜き出す）`);
+    now(`${host(e.url)} の本文から記述を抜き出すよう、モデルに依頼している`);
   },
   "page.done": (e) => {
     const id = "p:" + e.url; if (!N()[id]) return;
     redirected(id, e);
-    if (e.error) { T.setState(id, "failed"); T.step(id, 1, "ng"); T.setSub(id, e.error); info()[id].kv.push(["結果", esc(e.error)]); return; }
+    const stage = S.summary.pages.get(e.url)?.stage || "";
+    if (e.error) { T.setState(id, "failed"); T.step(id, 1, "ng"); T.setSub(id, `${stage} · ${e.error}`);
+      info()[id].kv.push(["段階", esc(stage)], ["理由", esc(e.error)]); return; }
     T.setState(id, "done"); T.step(id, 1, "on"); T.step(id, 2, "on");
     const moved = e.tier !== e.base_tier ? ` · T${e.base_tier}→T${e.tier}` : "";
-    T.setSub(id, `事実 ${e.facts.length} 件 · 捨てた ${e.dropped.length} 件${moved}`);
+    T.setSub(id, `${WORDS.quoteFound(e.facts.length)}${e.dropped.length ? ` · ${WORDS.quoteDropped(e.dropped.length)}` : ""}${moved}`);
     if (moved) N()[id].el.querySelector(".tier").outerHTML = tier(e.tier);
     Object.assign(info()[id], { facts: e.facts, dropped: e.dropped });
     info()[id].kv.push(["Tier の調整", e.tier_reason ? esc(`T${e.base_tier}→T${e.tier}（${e.tier_reason}）`) : ""],
@@ -247,13 +261,13 @@ export const treeRenderers = {
         ["関係", e.related ? esc(`「${e.related}」（${e.relation}）の画像。対象そのものではない`) : ""]] }, "running");
     N()[id].license = e.license;
   },
-  "image.llm": (e) => { const id = "i:" + e.src; if (!N()[id]) return; T.setState(id, "llm"); T.step(id, 1, "work"); T.setSub(id, "VLM が対象かどうか確かめている"); },
+  "image.llm": (e) => { const id = "i:" + e.src; if (!N()[id]) return; T.setState(id, "llm"); T.step(id, 1, "work"); T.setSub(id, `${WORDS.askingModel}（対象の画像かの判定）`); },
   "image.done": (e) => {
     const id = "i:" + e.src; if (!N()[id]) return;
     const ng = e.level === "不採用";
     T.setState(id, ng ? "failed" : "done"); T.step(id, 1, ng ? "ng" : "on"); T.step(id, 2, ng ? "ng" : "on");
     if (ng) N()[id].el.classList.add("dropped");
-    T.setSub(id, `${e.level} · ${e.reason || ""}`);
+    T.setSub(id, `${imageWord(e.level)} · ${e.reason || ""}`);
     const license = e.license || N()[id].license || "";
     const th = N()[id].el.querySelector(".thumb");
     if (!ng && !NEEDS_PERMISSION.test(license)) {
@@ -262,30 +276,32 @@ export const treeRenderers = {
     } else if (ng && !NEEDS_PERMISSION.test(license)) {
       th.innerHTML = `<img src="${imageUrl(e.src)}" alt="" onerror="this.remove()"><span class="un">不採用</span>`;
     } else th.innerHTML = "許可が<br>必要";
-    info()[id].kv.push(["判定", esc(e.level)], ["理由", esc(e.reason)], ["写っているもの", esc(e.description)],
-      ["文脈 V-1 / 見た目 V-3", e.context ? esc(`${e.context} / ${e.visual}`) : ""], ["画像の中の文字", esc(e.visible_text)],
+    info()[id].kv.push(["判定", esc(imageWord(e.level))], ["理由", esc(e.reason)], ["写っているもの", esc(e.description)],
+      ["根拠: 掲載元・文脈・見た目", e.context ? esc(`掲載元 T${e.tier ?? "?"} · 文脈 ${e.context} · 見た目 ${e.visual}`) : ""],
+      ["画像の中の文字", esc(e.visible_text)],
       ["画像で確かめた特徴", esc((e.features_seen || []).join("、"))], ["ライセンス", esc(license)]);
   },
   "image.final": (e) => {
     const w = T.work;
     T.order.filter((k) => k.startsWith("i:") && N()[k].parent === w && N()[k].el.classList.contains("running")).forEach((k) => {
-      T.setState(k, "planned"); T.setSub(k, "未確認（確認済みがそろった、または確かめる数の上限）"); T.step(k, 1, "ng"); T.step(k, 2, "ng");
+      T.setState(k, "planned"); T.setSub(k, "画像モデルで判定していない（必要な枚数がそろった、または判定の上限）"); T.step(k, 1, "ng"); T.step(k, 2, "ng");
       const lic = N()[k].license || "", src = k.slice(2);
       N()[k].el.querySelector(".thumb").innerHTML = NEEDS_PERMISSION.test(lic) ? "未確認"
         : `<img src="${imageUrl(src)}" alt="" onerror="this.remove()"><span class="un">未確認</span>`;
     });
-    (e.withheld || []).forEach((x) => { const id = "i:" + x.src; if (!N()[id]) return; N()[id].el.classList.add("dropped"); T.setSub(id, "確認済み · 許可が必要なので載せない"); info()[id].kv.push(["報告", esc(x.why)]); });
-    if (N()[w]) T.setSub(w, `確かめた ${T.order.filter((k) => k.startsWith("i:") && N()[k].parent === w).length} · 載せる ${e.shown.length}`);
+    (e.withheld || []).forEach((x) => { const id = "i:" + x.src; if (!N()[id]) return; N()[id].el.classList.add("dropped"); T.setSub(id, `${imageWord("確認済み")} · 許可が必要なので載せない`); info()[id].kv.push(["報告", esc(x.why)]); });
+    if (N()[w]) T.setSub(w, S.summary.imageText());                // 流れの図と同じ集計
   },
   "conflicts": (e) => {
     const w = T.work; if (!N()[w]) return;
-    T.setSub(w, `比べた観点 ${e.aspects.length} · 食い違い ${e.conflicts.length} 件`);
+    T.setSub(w, `比べた観点 ${e.aspects.length} · ${WORDS.conflicts(e.conflicts.length)}`);
+    if (N().cov) T.setSub("cov", S.summary.coverageText());
     e.conflicts.forEach((c, i) => T.add(`${w}-c${i}`, w, 3, card("食い違い · " + c.aspect, c.topic, c.facts.map((f) => f.text).join(" / ")),
       { title: `食い違い: ${c.topic}`, list: c.facts.map((f) => `${esc(f.text)} — ${link(f.source)}`) }, "done"));
   },
   "report": (e) => {
     S.sources = e.sources || [];
     const w = T.work;
-    if (N()[w]) { T.setSub(w, `出典 ${S.sources.length} 件`); info()[w].list = S.sources.map((s, i) => `[${i + 1}] ${esc(s.title)} — ${link(s.url)} · T${s.tier}`); }
+    if (N()[w]) { T.setSub(w, `${WORDS.report} · 出典 ${S.sources.length} 件`); info()[w].list = S.sources.map((s, i) => `[${i + 1}] ${esc(s.title)} — ${link(s.url)} · T${s.tier}`); }
   },
 };

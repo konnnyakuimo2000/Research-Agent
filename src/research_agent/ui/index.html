@@ -60,15 +60,16 @@
     </div>
   </section>
 
-  <section class="tele" aria-label="作業の流れ">
+  <section class="tele" aria-label="調査の作業記録">
     <div class="flow" id="flow">
       <div class="canvas" id="canvas" hidden><svg class="edges" id="edges"></svg></div>
       <div class="canvas graph" id="graph"><svg class="edges" id="gedges"></svg></div>
-      <p class="flow-empty" id="flowEmpty">調査を始めると、エージェントの作業の流れが、ここにノードと線で現れます。<br>ホイールやピンチで拡大、ドラッグで移動できます。</p>
+      <p class="flow-empty" id="flowEmpty">調査の作業記録: 調査を始めると、エージェントが記録した作業と、集まった根拠が、ここにノードと線で現れます。<br>ホイールやピンチで拡大、ドラッグで移動できます。</p>
 
       <div class="hud hud-top" role="group" aria-label="表示">
-        <button type="button" data-view="flow" aria-pressed="true">流れ</button>
-        <button type="button" data-view="tree" aria-pressed="false">木</button>
+        <button type="button" data-view="flow" aria-pressed="true">工程別の流れ</button>
+        <button type="button" data-view="tree" aria-pressed="false">判断ごとの履歴</button>
+        <span class="mode" id="modeBadge" aria-live="polite"></span>
       </div>
       <div class="hud hud-right" role="group" aria-label="表示の大きさ">
         <button type="button" id="zoomOut" aria-label="縮小">−</button>

@@ -129,7 +129,7 @@ function modelSummary(models) {
 // 戻り値: 費用を出したか（値段のあるモデルを使った）
 export function modelMeta(models) {
   const text = modelSummary(models);
-  return text ? { text: `モデル: ${text}`, priced: Object.values(models).some((m) => Object.keys(modelOf(m)?.price || {}).length) } : null;
+  return text ? { text: `役割に割り当てたモデル: ${text}`, priced: Object.values(models).some((m) => Object.keys(modelOf(m)?.price || {}).length) } : null;
 }
 // 一覧に出す短いモデルの名前（窓口の役割の既定と違うときだけ）
 export function runModelTag(models) {

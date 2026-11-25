@@ -8,11 +8,11 @@ import { ctx, labelOf } from "../../core/ctx.js";
 import { FlowBase } from "../../views/flow.js";
 import { tree } from "../../views/tree.js";
 import { showDetails } from "../../panels/details.js";
-import { ACTION, SEARCH_KIND, NEEDS_PERMISSION, redirectHooks } from "./tree.js";
+import { ACTION, SEARCH_KIND, NEEDS_PERMISSION, S, redirectHooks } from "./tree.js";
+import { WORDS, decisionDiff } from "./summary.js";
 
 const STAGE = { check_feasibility: "feas", decide: "hub", search: "search", read_pages: "read", find_images: "images",
   check_conflicts: "conflicts", ask_user: "ask", respond: "respond", report_infeasible: "infeasible" };
-const LLM_STAGES = new Set(["feas", "hub", "conflicts", "respond", "infeasible"]);
 const KNOWN_ORDER = ["ask", "search", "read", "images", "conflicts", "respond"];
 const ROW_DATA = { read: ["pages", "cov"], images: ["imgs"], respond: ["end"] };   // 作業の行に並べる、集まったもののノード
 const COL = { start: 0, feas: 210, infeasible: 210, hub: 420, stage: 740, data1: 1050, data2: 1350 };
@@ -123,12 +123,13 @@ export class ResearchFlow extends FlowBase {
   goStage(to) {
     const from = this.cur;
     const back = to === "hub" && this.isStage(from) && from !== "respond";
-    this.go(to, { back, state: to === "ask" ? "waiting" : LLM_STAGES.has(to) ? "llm" : "running" });
+    // 工程の始まりだけが分かる段階は「処理中」。モデルへの依頼は page.llm・image.llm を受け取った区間だけ「モデルに依頼中」
+    // （前はノードの名前で決めていたので、定型文を作るだけの「調べられないことの報告」もモデルに依頼中に見えた）
+    this.go(to, { back, state: to === "ask" ? "waiting" : "running" });
   }
   updatePages() {
-    const chips = Object.values(this.pageChip);
-    const ok = chips.filter((c) => c.classList.contains("done")).length, ng = chips.filter((c) => c.classList.contains("failed")).length;
-    this.setText("pages", `${chips.length} ページ`, `読めた ${ok} · 読めなかった ${ng}`);
+    // 木・詳細と同じ集計（対象資料・本文取得・抽出・引用一致）
+    this.setText("pages", `${Object.keys(this.pageChip).length} 資料`, S.summary.pageText());
   }
   details(id) {
     const d = super.details(id);
@@ -137,7 +138,9 @@ export class ResearchFlow extends FlowBase {
       d.list = Object.entries(this.thumb).map(([u, th]) => `${esc(th.dataset.done || "未確認")} — ${link(u)}`);
       if (this.unchecked) d.kv.push(["未確認", `${this.unchecked} 枚。${esc(this.uncheckedWhy)}`]);
     }
-    if (id === "pages") d.note = "アイコンを押すと、そのページで確かめた事実と引用が出ます。";
+    if (id === "pages") d.note = "アイコンを押すと、その資料で原文に引用が見つかった記述と、その引用が出ます。";
+    if (id === "imgs") d.kv.push(["集計", esc(S.summary.imageText())]);
+    if (id === "cov") d.kv.push(["集計", esc(S.summary.coverageText())]);
     return d;
   }
   pageDetails(url) { const d = tree.info["p:" + url]; if (d) showDetails(d); }
@@ -156,8 +159,8 @@ export class ResearchFlow extends FlowBase {
         if (id === "ask" && f.cur === "ask") { f.setState("ask", "running"); break; }   // 答えで再開した
         f.goStage(id);
         if (id === "read") f.setText("read", "読む順番を決めている", "");
-        if (id === "respond") f.setText("respond", "確かめた事実だけで報告を書いている", "");
-        if (id === "conflicts") f.setText("conflicts", "別々のサイトの事実を比べている", "");
+        if (id === "respond") f.setText("respond", WORDS.report, WORDS.processing);
+        if (id === "conflicts") f.setText("conflicts", "別々のサイトの記述を比べている", WORDS.processing);
         break;
       }
       case "step.end": {
@@ -171,10 +174,11 @@ export class ResearchFlow extends FlowBase {
         f.setText("feas", v, e.reason); f.push("feas", v); break;
       }
       case "decision": {
-        const llm = ACTION[e.llm?.action] || e.llm?.action || "", act = ACTION[e.action] || e.action;
-        const changed = e.guard && e.llm?.action !== e.action;
-        f.setText("hub", act + (e.action === "search" && e.query ? `「${e.query}」` : ""), changed ? `LLM は「${llm}」→ プログラムが変更` : "LLM の選択どおり");
-        f.push("hub", changed ? `${llm} → ${act}（変更）` : act);
+        // 木と同じ差分（行動の変更と、検索語だけの補正を区別する）
+        const d = decisionDiff(e), llm = ACTION[e.llm?.action] || e.llm?.action || "";
+        const changed = d.kind === "action";
+        f.setText("hub", d.adopted, d.kind === "same" ? d.label : `${d.label}（提案: ${d.proposal}）`);
+        f.push("hub", d.kind === "same" ? d.adopted : `提案 ${d.proposal} → 採用 ${d.adopted}（${d.label}）`);
         if (changed) {
           f.ghosts.push({ to: e.llm?.action && stageOf(e.llm.action), label: llm, t0: performance.now() });
           const to = stageOf(e.action);
@@ -186,7 +190,7 @@ export class ResearchFlow extends FlowBase {
       case "search.done": {
         const rel = e.results.filter((r) => r.relevant).length;
         f.setText("search", undefined, e.failed || `結果 ${e.results.length} 件 · 対象を含む ${rel} 件`);
-        f.flow("search", "hub", Math.max(1, rel), null, "back");   // 検索結果が判断へ戻る
+        f.flow("search", "hub", rel, null, "back");   // 対象を含む検索結果が判断へ戻る（0 件なら粒も 0 個）
         break;
       }
       case "aspects": {
@@ -211,29 +215,40 @@ export class ResearchFlow extends FlowBase {
           pages.el.querySelector(".chipgrid").appendChild(chip); f.pageChip[e.url] = chip;
           f.updatePages(); f.layout();
         }
-        if (e.type === "page.start") { chip.className = "pchip running"; f.setText("read", e.host, e.db ? "データベースの記録を読んでいる" : "ページを取得している"); }
+        if (e.type === "page.start") { chip.className = "pchip running"; f.setText("read", e.host, e.db ? "DB記録を読込中" : "本文を取得中"); }
         break;
       }
-      case "page.fetched": { const c = f.pageChip[e.url]; if (c && !e.ok) { c.className = "pchip failed"; f.push("read", `${host(e.url)}: ${e.reason}`); f.updatePages(); } break; }
-      case "page.llm": { const c = f.pageChip[e.url]; if (c) c.className = "pchip llm"; f.setText("read", host(e.url), "LLM が引用付きで事実を抜き出している"); break; }
+      case "page.fetched": {
+        const c = f.pageChip[e.url];
+        if (c && !e.ok) {
+          c.className = "pchip failed"; f.push("read", `${host(e.url)}: 本文を取得できない · ${e.reason}`);
+          f.setText("read", host(e.url), `本文を取得できない · ${e.reason}`); f.updatePages();
+        } else if (e.ok) f.setText("read", host(e.url), S.summary.pages.get(e.url)?.db ? "DB記録を読込済み" : "本文取得済み");
+        break;
+      }
+      case "page.llm": {
+        const c = f.pageChip[e.url]; if (c) c.className = "pchip llm";
+        f.setState("read", "llm"); f.setText("read", host(e.url), `${WORDS.askingModel}（引用付きで記述を抜き出す）`); break;
+      }
       case "page.done": {
         const c = f.pageChip[e.url];
-        if (e.error) { if (c) c.className = "pchip failed"; f.push("read", `${host(e.url)}: ${e.error}`); f.updatePages(); break; }
+        if (f.cur === "read") f.setState("read", "running");
+        if (e.error) { if (c) c.className = "pchip failed"; f.push("read", `${host(e.url)}: ${S.summary.pages.get(e.url)?.stage || ""} · ${e.error}`); f.updatePages(); break; }
         f.flow("read", "pages", 1, () => {   // 読み終えたページが「読んだページ」へ
           if (c) { c.className = "pchip done"; if (e.facts.length) c.insertAdjacentHTML("beforeend", `<span class="n">${e.facts.length}</span>`); }
           f.updatePages();
-          // 照合できた事実が、1 件ずつ網羅表の観点へ流れ、届いたら観点の四角になる
+          // 原文に引用が見つかった記述が、1 件ずつ網羅表の観点へ流れ、届いたら観点の四角になる
           if (f.n.cov) f.flow("pages", "cov", e.facts.length, (i) => {
             const x = e.facts[i], row = x && f.covRow[x.aspect]; if (!row) return;
             const sq = document.createElement("i"); if (e.tier !== 1) sq.className = "t2"; sq.title = x.text; row.querySelector(".sq").appendChild(sq);
           });
         });
-        f.push("read", `${host(e.url)}: 事実 ${e.facts.length} 件`);
+        f.push("read", `${host(e.url)}: 引用一致 ${e.facts.length} 件`);
         break;
       }
       case "coverage":
         e.rows.forEach((r) => { const row = f.covRow[r.aspect]; if (row) row.className = "covrow " + (r.status === "確認済み" ? "ok" : r.status === "出典不足" ? "weak" : ""); });
-        f.setText("cov", undefined, `${e.rows.filter((r) => r.status === "確認済み").length} / ${e.rows.length} 観点を確認済み`);
+        f.setText("cov", undefined, S.summary.coverageText());
         break;
       case "image.candidates": f.setText("images", `${e.ranked} 候補`, `${e.fetching} 件を取得して確かめる`); break;
       case "image.fetched": {
@@ -249,10 +264,14 @@ export class ResearchFlow extends FlowBase {
         });
         break;
       }
-      case "image.llm": { const th = f.thumb[e.src]; if (th) th.classList.add("llm"); f.setText("images", undefined, "VLM が対象かどうか確かめている"); break; }
+      case "image.llm": {
+        const th = f.thumb[e.src]; if (th) th.classList.add("llm");
+        f.setState("images", "llm"); f.setText("images", undefined, `${WORDS.askingModel}（対象の画像かの判定）`); break;
+      }
       case "image.done": {
         const th = f.thumb[e.src]; if (!th) break;
         th.classList.remove("llm"); th.dataset.done = e.level;
+        if (f.cur === "images") f.setState("images", "running");
         const ok = e.level !== "不採用";
         // 判定が出たサムネイルは、一瞬縁取りが光る。不採用は点線の枠と「不採用」のラベル（画像は色付きのまま）
         th.classList.add(ok ? "ok" : "ng", "flash"); setTimeout(() => th.classList.remove("flash"), 900);
@@ -272,21 +291,24 @@ export class ResearchFlow extends FlowBase {
           if (!th.classList.contains("lock")) th.insertAdjacentHTML("beforeend", `<span class="un">未確認</span>`);
         });
         f.unchecked = ths.length - checked.length; f.uncheckedWhy = why;
-        f.setText("images", `載せる ${e.shown.length} 枚`, `確かめた ${checked.length} 枚`);
-        f.setText("imgs", `採用 ${e.shown.length} 枚`, `確かめた ${checked.length} · 未確認 ${f.unchecked}`);
+        // 木・詳細と同じ集計（画像 URL ごと: 取得成功・画像モデルで判定・参考画像・報告に掲載）
+        f.setText("images", `報告に掲載 ${S.summary.imageCounts().shown} 枚`, S.summary.imageText());
+        f.setText("imgs", `報告に掲載 ${S.summary.imageCounts().shown} 枚`, S.summary.imageText());
         break;
       }
       case "conflicts":
-        f.setText("conflicts", `食い違い ${e.conflicts.length} 件`, `比べた観点 ${e.aspects.length}`);
+        f.setText("conflicts", WORDS.conflicts(e.conflicts.length), `比べた観点 ${e.aspects.length}`);
+        if (f.n.cov) f.setText("cov", undefined, S.summary.coverageText());
         e.conflicts.forEach((c) => f.push("conflicts", c.topic));
         if (e.conflicts.length) f.flow("conflicts", "hub", e.conflicts.length, null, "back");
         break;
       case "question": f.setState("ask", "waiting"); f.setText("ask", e.question.split("\n")[0], "利用者の答えを待っている"); break;
       case "answer": f.setState("ask", "running"); f.push("ask", `答え: ${e.answer}`); f.setText("ask", undefined, `答え: ${e.answer}`); break;
-      case "report": f.setText("respond", `出典 ${(e.sources || []).length} 件`, "報告を書いた"); f.reportSources = (e.sources || []).length; break;
+      case "report": f.setText("respond", `出典 ${(e.sources || []).length} 件`, WORDS.report); f.reportSources = (e.sources || []).length; break;
       case "run.end":
-        f.goStage("end"); f.setState("end", "done"); f.setText("end", `${Math.round(e.t)} 秒`, "報告をチャットに出した");
-        if (f.n.respond) f.flow("respond", "end", Math.max(1, f.reportSources || 1), null, "");
+        f.goStage("end"); f.setState("end", "done");
+        f.setText("end", WORDS.elapsed(e.t), "回答待ちを含む · 報告をチャットに出した");
+        if (f.n.respond) f.flow("respond", "end", f.reportSources || 0, null, "");   // 出典の数だけ（0 なら 0 個）
         break;
       case "run.error": if (f.cur) { f.setState(f.cur, "failed"); f.setText(f.cur, undefined, e.error); } break;
       case "run.cancelled": if (f.cur) { f.setState(f.cur, "failed"); f.setText(f.cur, undefined, "止めた"); } break;

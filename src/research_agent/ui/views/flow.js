@@ -95,7 +95,7 @@ export class FlowBase {
   }
   count(id) {
     const n = this.n[id]; if (!n) return;
-    n.el.querySelector(".cnt").textContent = `×${this.visits[id]}${this.seconds[id] ? ` · ${Math.round(this.seconds[id])} 秒` : ""}`;
+    n.el.querySelector(".cnt").textContent = `×${this.visits[id]}${this.seconds[id] ? ` · 累計 ${Math.round(this.seconds[id])} 秒` : ""}`;
   }
   // 作業が移る: 線を（なければ）作り、尾を引く点を流して回数を数える
   go(to, { back = false, state = "running" } = {}) {
@@ -139,7 +139,7 @@ export class FlowBase {
   }
   details(id) {
     const n = this.n[id];
-    return { title: n.label, kv: [["通った回数", this.visits[id] ? `${this.visits[id]} 回` : ""], ["かかった時間", this.seconds[id] ? `${Math.round(this.seconds[id])} 秒` : ""]],
+    return { title: n.label, kv: [["通った回数", this.visits[id] ? `${this.visits[id]} 回` : ""], ["工程の累計", this.seconds[id] ? `${Math.round(this.seconds[id])} 秒` : ""]],
              list: n.hist.map((x) => esc(x)) };
   }
   // 毎フレーム: ノードを目標の位置へ近づけて膨らませ、線を伸ばし、点と粒を流す

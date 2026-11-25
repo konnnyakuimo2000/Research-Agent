@@ -22,7 +22,7 @@ def model_check(settings: Settings) -> tuple[str, dict]:
             m = h["models"][h["default"]]
             check = {"ok": bool(m.get("ok")), **({"seconds": m["seconds"]} if "seconds" in m else {}),
                      **({"error": m["error"]} if "error" in m else {})}
-            return m.get("model", ""), {"title": "LLM", "hint": "VPN を確認", **check}
+            return m.get("model", ""), {"title": "既定モデルの一覧 API", "hint": "VPN を確認", **check}
         except Exception as e:  # noqa: BLE001 - つながらない理由を画面に出す
             return "", {"title": "モデルの窓口", "hint": "モデルの窓口につながらない", "ok": False, "error": type(e).__name__}
     try:
@@ -30,4 +30,4 @@ def model_check(settings: Settings) -> tuple[str, dict]:
         check = {"ok": r.status_code == 200, "seconds": round(time.time() - started, 1)}
     except Exception as e:  # noqa: BLE001
         check = {"ok": False, "error": type(e).__name__}
-    return settings.llm_model, {"title": "LLM", "hint": "VPN を確認", **check}
+    return settings.llm_model, {"title": "既定モデルの一覧 API", "hint": "VPN を確認", **check}

@@ -159,7 +159,7 @@ def health(settings) -> dict:
     except Exception as e:  # noqa: BLE001 - つながらない理由を画面に出す
         search = {"ok": False, "error": type(e).__name__}
     model, llm = model_check(settings)
-    value = {"model": model, "checks": {"llm": llm, "search": {"title": "検索", "hint": "検索につながらない", **search}}}
+    value = {"model": model, "checks": {"llm": llm, "search": {"title": "検索（SearXNG の healthz）", "hint": "検索につながらない", **search}}}
     _status.update(at=time.time(), value=value)
     return value
 

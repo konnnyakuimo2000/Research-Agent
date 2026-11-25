@@ -16,25 +16,41 @@ import pytest
 
 UI = Path(__file__).resolve().parents[1] / "src" / "research_agent" / "ui"
 
-# どんな要素を求められても返す偽物（属性・メソッドの呼び出しを受け流す）
+# 画面のモジュールが使うだけのブラウザの部品の偽物。要素はクラスの付け外しと中身（innerHTML・textContent）を覚える。
+# 子の要素（querySelector）は、セレクターごとに同じ偽物を返す
 _FAKE_DOM = r"""
-const handler = {
-  get(t, p) {
-    if (p === Symbol.toPrimitive) return () => "";
-    if (p in t) return t[p];
-    if (p === "classList") return { add() {}, remove() {}, toggle() {}, contains() { return false; } };
-    if (p === "style") return t.style ||= {};
-    if (p === "dataset") return t.dataset ||= {};
-    if (["clientWidth", "clientHeight", "offsetWidth", "offsetHeight", "scrollHeight"].includes(p)) return 800;
-    if (["hidden"].includes(p)) return false;
-    if (p === "then") return undefined;
-    return (...a) => fake();
-  },
-  set(t, p, v) { t[p] = v; return true; },
+class FakeEl {
+  constructor() { this.className = ""; this.style = { setProperty() {} }; this.dataset = {}; this.children = [];
+    this._q = {}; this.innerHTML = ""; this.textContent = ""; this.hidden = false; this.disabled = false; this.title = ""; }
+  get classList() {
+    const el = this, list = () => el.className.split(/\s+/).filter(Boolean);
+    const set = (xs) => { el.className = [...new Set(xs)].join(" "); };
+    return {
+      add: (...c) => set([...list(), ...c]),
+      remove: (...c) => set(list().filter((x) => !c.includes(x))),
+      toggle: (c, on) => { const want = on === undefined ? !list().includes(c) : !!on;
+        set(want ? [...list(), c] : list().filter((x) => x !== c)); return want; },
+      contains: (c) => list().includes(c),
+    };
+  }
+  querySelector(sel) { return (this._q[sel] ||= new FakeEl()); }
+  querySelectorAll() { return []; }
+  addEventListener() {} removeEventListener() {} dispatchEvent() {}
+  appendChild(c) { this.children.push(c); return c; } prepend(c) { this.children.unshift(c); return c; } remove() {}
+  insertBefore(c) { this.children.push(c); return c; }
+  insertAdjacentHTML() {} setAttribute() {} getAttribute() { return null; } focus() {} closest() { return null; }
+  contains() { return false; } setPointerCapture() {} requestSubmit() {}
+  getBoundingClientRect() { return { top: 0, bottom: 600, left: 0, right: 800, width: 800, height: 600 }; }
+  get offsetWidth() { return 200; } get offsetHeight() { return 50; }
+  get clientWidth() { return 800; } get clientHeight() { return 600; } get scrollHeight() { return 0; }
+}
+const byId = {}, byQuery = {};
+globalThis.FakeEl = FakeEl;
+globalThis.document = {
+  getElementById: (id) => (byId[id] ||= new FakeEl()), createElement: () => new FakeEl(), createElementNS: () => new FakeEl(),
+  querySelector: (s) => (byQuery[s] ||= new FakeEl()), querySelectorAll: () => [], addEventListener() {},
 };
-function fake() { return new Proxy({}, handler); }
-globalThis.document = fake();
-globalThis.window = fake();
+globalThis.window = { addEventListener() {}, dispatchEvent() {}, matchMedia: () => ({ matches: false }), innerHeight: 900 };
 globalThis.location = { search: "" };
 globalThis.requestAnimationFrame = () => 0;
 globalThis.CSS = { escape: (s) => s };

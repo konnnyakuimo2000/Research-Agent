@@ -108,6 +108,7 @@ $("composer").addEventListener("submit", async (ev) => {
 });
 function newResearch() {
   openSeq++; closeSource(); ctx.runId = null; ctx.runAgent = ctx.agentId; reset(); setLayout(ctx.agentId); resetChat(); setEmpty(true);
+  ctx.replay = false; showMode();
   ctx.replay = false; liveState = ""; setComposer(false); highlightRun(); $("input").focus();
 }
 $("newBtn").addEventListener("click", () => { closeSide(); newResearch(); });
@@ -182,7 +183,11 @@ modelHooks.afterLoad = async () => {
 
 // 再生: 終わった調査は、記録の時刻どおりに（速さを掛けて）流す。動いている調査は届いたらすぐ描く
 let RUNS = {};   // 一覧の依頼（id → 要約。使ったモデル・設定を出すため）
-let queue = [], clock = 0, speed = 8, playing = true, lastTs = null, stopAt = Infinity, openSeq = 0;
+let queue = [], clock = 0, speed = 8, playing = true, lastTs = null, stopAt = Infinity, openSeq = 0, skipped = 0, lastSeen = 0;
+// ライブか履歴の再生か。再生は実際の速さと、飛ばした無イベントの時間も出す
+function showMode(text) { $("modeBadge").textContent = text ?? (ctx.replay
+  ? (speed === 0 ? "履歴（すぐに表示）" : `履歴を${speed}倍で再生`) + (skipped ? ` · 無イベントの ${Math.round(skipped)} 秒を省略` : "")
+  : ctx.runId ? "ライブ" : ""); }
 function closeSource() { if (source) { source.close(); source = null; } queue = []; }
 async function open(id, live, agent, models, settings) {
   const seq = ++openSeq;
@@ -192,10 +197,14 @@ async function open(id, live, agent, models, settings) {
   if (seq !== openSeq) return;                    // 待っている間に別の依頼を開いた
   ctx.runId = id; ctx.runAgent = agentId; reset(); setLayout(agentId); resetChat();
   showRunMeta(id, models || RUNS[id]?.models, settings || RUNS[id]?.settings);
-  ctx.replay = !live; clock = 0; playing = true; liveState = live ? "running" : "";
+  ctx.replay = !live; clock = 0; playing = true; liveState = live ? "running" : ""; skipped = 0; lastSeen = Date.now();
+  showMode();
   setComposer(false); highlightRun();
   source = new EventSource(withKey(`/api/runs/${encodeURIComponent(id)}/events`));
-  source.onmessage = (m) => { const e = norm(JSON.parse(m.data)); if (ctx.replay) queue.push(e); else handle(e); };
+  source.onmessage = (m) => { lastSeen = Date.now(); const e = norm(JSON.parse(m.data)); if (ctx.replay) queue.push(e); else handle(e); };
+  // 通信が切れて実行の状況を確かめられないときは、最後に受け取った時刻を出す（EventSource はつなぎ直す）
+  source.onerror = () => { if (!ctx.replay && source) showMode(`接続が切れた（最後に受け取った ${new Date(lastSeen).toLocaleTimeString("ja-JP")}）`); };
+  source.onopen = () => showMode();
   source.addEventListener("end", () => { if (source) { source.close(); source = null; } updateSend(); if ($("runMeta")?.dataset.priced) showRunCost(id); });
   source.addEventListener("missing", () => { if (source) { source.close(); source = null; } chatAgent("<p>この調査の記録が見つかりません。</p>"); });
 }
@@ -206,7 +215,7 @@ function frame(ts) {
     if (speed === 0) { ctx.instant = true; while (queue.length && queue[0].t <= stopAt) handle(queue.shift()); tree.layout(); ctx.flow.layout(); ctx.instant = false; }
     else {
       clock += dt * speed;
-      if (queue[0].t - clock > 20) clock = queue[0].t;   // 利用者の答えを待った時間などの長い空白は飛ばす
+      if (queue[0].t - clock > 20) { skipped += queue[0].t - clock; clock = queue[0].t; showMode(); }   // 利用者の答えを待った時間などの長い空白は飛ばす
       while (queue.length && queue[0].t <= clock) handle(queue.shift());
     }
     if (!queue.length && !source) updateSend();   // 再生し終えたら、送信ボタンに戻す

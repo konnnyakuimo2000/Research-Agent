@@ -54,6 +54,7 @@ export function norm(m) {
 // イベントを画面の各部分へ配る
 export function dispatch(e) {
   const exts = active();
+  exts.forEach((x) => x.observe?.(e));         // 拡張の集計を先に進める（流れの図・木・詳細が同じ数を読む）
   renderers.chat[e.type]?.(e);
   exts.forEach((x) => x.renderers.chat?.[e.type]?.(e));
   const own = exts.find((x) => x.renderers.tree?.[e.type]);

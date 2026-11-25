@@ -27,8 +27,13 @@ export function now(text) { const txt = statusEl && statusEl.querySelector(".txt
 // LLM が書いた質問の番号付きの項目（「1. 松田教授のお名前」）を押すと「1」とだけ答えてしまうため
 function showQuestion(q, choices = false) {
   const lines = q.split("\n"), opts = choices ? lines.filter((l) => /^\d+\.\s/.test(l)) : [];
+  // 履歴の再生では、質問と選択肢は読むだけ（押しても答えを送らない）。答えられるのはライブで答えを待っている依頼だけ
+  const readOnly = ctx.replay;
   const d = chatAgent(`<div class="question">${esc(q)}${opts.length ? `<div class="opts">${opts.map((o) => `<button type="button" data-a="${esc(o.match(/^(\d+)/)[1])}">${esc(o)}</button>`).join("")}</div>` : ""}</div>`);
-  d.querySelectorAll(".opts button").forEach((b) => b.addEventListener("click", () => hooks.sendAnswer(b.dataset.a)));
+  d.querySelectorAll(".opts button").forEach((b) => {
+    if (readOnly) { b.disabled = true; b.title = "履歴の再生中は答えられません"; return; }
+    b.addEventListener("click", () => hooks.sendAnswer(b.dataset.a));
+  });
   statusEl = null;
 }
 
@@ -90,13 +95,16 @@ registerRenderer("answer", (e) => {
   const key = "a:" + e.answer + e.question; if (!questions.has(key)) { questions.add(key); chatUser(e.answer); }
   hooks.setComposer(false); statusBubble();
 }, "chat");
-registerRenderer("run.waiting", (e) => { if (!questions.has(e.question)) { questions.add(e.question); showQuestion(e.question); } hooks.setComposer(true); }, "chat");
+registerRenderer("run.waiting", (e) => {
+  if (!questions.has(e.question)) { questions.add(e.question); showQuestion(e.question); }
+  if (!ctx.replay) hooks.setComposer(true);                  // 履歴の再生では、入力欄を答えの形にしない
+}, "chat");
 registerRenderer("run.end", (e) => {
   lastReport = e.report ?? e.answer ?? "";
   finish(renderReport(lastReport), lastReport); hooks.setComposer(false); hooks.loadRuns();
 }, "chat");
 registerRenderer("run.error", (e) => { chatAgent(`<p>エラーで続けられませんでした: ${esc(e.error)}</p>`); statusEl = null; hooks.setLive(""); hooks.updateSend(); }, "chat");
-registerRenderer("run.paused", () => { if (!ctx.replay) hooks.setLive("paused"); now("一時停止している（今の作業が終わったところで止まる）"); hooks.updateSend(); }, "chat");
+registerRenderer("run.paused", () => { if (!ctx.replay) hooks.setLive("paused"); now("一時停止を受け付けた（今の作業の区切りで止まる）"); hooks.updateSend(); }, "chat");
 registerRenderer("run.resumed", () => { if (!ctx.replay) hooks.setLive("running"); now("再開した"); hooks.updateSend(); }, "chat");
 registerRenderer("run.cancelled", () => {
   finish((streamText ? renderReport(streamText) : "") + `<p class="q">止めました。</p>`, streamText); hooks.setComposer(false); hooks.loadRuns();
