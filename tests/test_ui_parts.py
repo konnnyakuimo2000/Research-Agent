@@ -170,3 +170,8 @@ def test_built_assets_are_cached_and_the_page_is_rechecked(tmp_path, monkeypatch
     c = TestClient(app_mod.create_app(runs_dir=tmp_path, resume=False, catalog=False, api_key=""))
     assert c.get("/ui/").headers["cache-control"] == "no-cache"
     assert "immutable" in c.get("/ui/assets/index-abc.js").headers["cache-control"]
+    # PWA: アプリの情報は manifest の型で、Service Worker は毎回確かめさせる（新しい版に気づけるように）
+    (ui / "manifest.webmanifest").write_text("{}", encoding="utf-8")
+    (ui / "sw.js").write_text("", encoding="utf-8")
+    assert c.get("/ui/manifest.webmanifest").headers["content-type"].startswith("application/manifest+json")
+    assert c.get("/ui/sw.js").headers["cache-control"] == "no-cache"

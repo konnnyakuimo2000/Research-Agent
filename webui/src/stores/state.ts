@@ -41,6 +41,9 @@ export const setLive = (state: "" | "running" | "paused"): void => live.update((
 /** 入力欄を答えの形にする（開いている依頼の答えを待つ）・戻す */
 export const waitAnswer = (on: boolean): void => live.update((l) => ({ ...l, waitingRun: on ? ctx.runId : null }));
 
+/** 画面の新しい版が届いた（Service Worker）。apply で読み直す。勝手には読み直さない（調査の途中で画面が変わらないように） */
+export const update = writable<{ ready: boolean; apply: () => void }>({ ready: false, apply: () => {} });
+
 export async function refreshRuns(): Promise<void> {
   try {
     const { runs: list } = await api<{ runs: RunSummary[] }>("/api/runs");

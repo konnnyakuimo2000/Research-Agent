@@ -27,6 +27,7 @@ AGENT_API_KEY を設定すると、画面の API と OpenAI 互換の入口に�
 
 from __future__ import annotations
 
+import mimetypes
 import os
 import time
 from collections.abc import Iterator
@@ -46,6 +47,9 @@ from research_agent.gateway.settings import SettingsError
 from research_agent.gateway.store import RunStore
 
 HEARTBEAT_SECONDS = 15
+# PWA のアプリの情報。OS の MIME の表にないことがある（Docker の slim イメージなど）
+mimetypes.add_type("application/manifest+json", ".webmanifest")
+
 UI_DIR = Path(__file__).resolve().parents[1] / "ui"     # webui/ のビルド結果（npm run build。git の外）
 UI_MISSING = "画面がビルドされていません。webui/ で `npm ci` と `npm run build` を実行してください（docs/setup.md）。"
 

@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Research-Agent</title>
 <link rel="icon" href="/logo.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#171717" media="(prefers-color-scheme: dark)">
 </head>
 <body>
 <div class="app">
@@ -84,7 +87,8 @@
     </aside>
   </section>
 </div>
-<div id="settingsRoot"></div>   <!-- 設定のパネル（components/settings/SettingsPanel.svelte） -->
+<div id="settingsRoot"></div>
+<div id="updateRoot"></div>   <!-- 新しい版の知らせ（components/UpdateNotice.svelte） -->   <!-- 設定のパネル（components/settings/SettingsPanel.svelte） -->
 <script type="module" src="/src/app.ts"></script>
 </body>
 </html>

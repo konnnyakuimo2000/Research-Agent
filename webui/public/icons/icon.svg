@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- アプリのアイコン（ホーム画面・タスクバー）: logo.svg のマークを、暗い地に明るい線で。
+       マークは中央の 6 割に収める（Android が丸や角丸に切り抜いても欠けないように） -->
+  <rect width="32" height="32" fill="#171717"/>
+  <g transform="translate(6.4 6.4) scale(0.6)" fill="none">
+    <circle cx="12.5" cy="12.5" r="7.5" stroke="#ececec" stroke-width="3"/>
+    <path d="M18 18l4.5 4.5M22.5 22.5h5.5M22.5 22.5v5.5" stroke="#ececec" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="28" cy="22.5" r="2.2" fill="#ececec"/>
+    <circle cx="22.5" cy="28" r="2.2" fill="#ececec"/>
+  </g>
+</svg>

@@ -34,6 +34,9 @@ import RunList from "./components/history/RunList.svelte";
 import RunMenu from "./components/history/RunMenu.svelte";
 import Recent from "./components/history/Recent.svelte";
 import ChatLog from "./components/chat/ChatLog.svelte";
+import UpdateNotice from "./components/UpdateNotice.svelte";
+import { registerSW } from "virtual:pwa-register";
+import { update } from "./stores/state.ts";
 import type { AgentsReply, RunSummary, SettingsValues, UIEvent } from "./types/api.ts";
 
 /** チャットの上の行（panels/settings.ts の headState） */
@@ -285,6 +288,9 @@ runsById.subscribe((v) => { RUNS = v; });
 catalog.subscribe(() => { if (ctx.runId && RUNS[ctx.runId]) showRunMeta(ctx.runId, RUNS[ctx.runId].models, RUNS[ctx.runId].settings); });
 
 mount(SettingsPanel, { target: $("settingsRoot") });
+mount(UpdateNotice, { target: $("updateRoot") });
+// Service Worker（PWA）。HTTPS か localhost でないと登録できない（そのときは普通のページとして動く）
+const applyUpdate = registerSW({ onNeedRefresh: () => update.set({ ready: true, apply: () => applyUpdate(true) }) });
 mount(RunList, { target: $("runs"), props: { onOpen: (r) => { closeSide(); open(r.id, LIVE.includes(r.status), r.agent); } } });
 mount(RunMenu, { target: $("runMenuRoot"), props: {
   onDetail: (r, anchor) => { closeSide(); openPanel("run", anchor, r); },
