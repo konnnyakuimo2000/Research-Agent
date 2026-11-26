@@ -5,3 +5,5 @@
 runs
 **/__pycache__
 .pytest_cache
+webui/node_modules
+src/research_agent/ui

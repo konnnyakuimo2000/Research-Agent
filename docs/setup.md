@@ -135,6 +135,16 @@ curl -X POST http://localhost:8100/api/runs -H "Content-Type: application/json" 
 - `?run=<ID>&speed=0&at=110` のように開くと、その調査の 110 秒時点の状態をすぐに出す
 - `.env` に `AGENT_API_KEY` を設定している場合は、初回に `?key=<キー>` を付けて開く（ブラウザに保存される）
 
+画面のソースは `webui/`（Svelte 5 + Vite + TypeScript）。Docker のイメージでは自動でビルドされる。Docker を使わずにゲートウェイを動かすときと、画面を直すときは Node（22 以上）で次を実行する:
+
+```powershell
+cd webui
+npm ci
+npm run build    # src/research_agent/ui/ に出す（ゲートウェイが /ui で配る。git の外）
+npm run dev      # 開発用: http://localhost:5173/ui/ （/api は http://localhost:8100 のゲートウェイへ渡す）
+npm run check    # 型の検査
+```
+
 ### 安全のための制限（2026-11-21 から）
 
 - **公開ページ・画像の取得**: エージェントは、検索結果やページから得た URL を、インターネットの公開アドレスにあるものだけ取りに行く。研究室の内部のアドレス（10.x、192.168.x、127.0.0.1、169.254.x など）や、HTTP(S) 以外の URL は取りに行かない。転送（リダイレクト）の先も、つなぐ瞬間の IP アドレスも確かめる。設定は要らない。設定した LLM サーバーと SearXNG には、これまでどおりつながる

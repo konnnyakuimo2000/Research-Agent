@@ -190,6 +190,6 @@ def test_the_screen_no_longer_uses_the_old_words():
         text = p.read_text(encoding="utf-8")
         for word in old:
             assert word not in text, (p.name, word)
-    html = (UI / "index.html").read_text(encoding="utf-8")
+    html = (UI.parent / "index.html").read_text(encoding="utf-8")
     assert "工程別の流れ" in html and "判断ごとの履歴" in html and "調査の作業記録" in html   # 説明（title）として残す
     assert ">Flow</button>" in html and ">Tree</button>" in html                               # 切り替えの文字は英語

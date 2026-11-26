@@ -181,3 +181,6 @@ cython_debug/
 .cursorindexingignore
 # エージェントの実行記録
 runs/
+# 画面のビルド結果（webui/ から npm run build で作る）と、その道具
+src/research_agent/ui/
+webui/node_modules/

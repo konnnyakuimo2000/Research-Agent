@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-UI = Path(__file__).resolve().parents[1] / "src" / "research_agent" / "ui"
+UI = Path(__file__).resolve().parents[1] / "webui" / "src"   # 画面のソース（ビルド前。index.html は 1 つ上）
 
 # 画面のモジュールが使うだけのブラウザの部品の偽物。要素はクラスの付け外しと中身（innerHTML・textContent）を覚える。
 # 子の要素（querySelector）は、セレクターごとに同じ偽物を返す

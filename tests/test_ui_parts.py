@@ -22,7 +22,7 @@ from research_agent.agents import research
 from research_agent.gateway.settings import SettingsError, check_settings
 from test_gateway import Stack, _envs, wait_for
 
-UI = Path(__file__).resolve().parents[1] / "src" / "research_agent" / "ui"
+UI = Path(__file__).resolve().parents[1] / "webui" / "src"   # 画面のソース（ビルド前。index.html は 1 つ上）
 SCHEMA = {"type": "object", "properties": SETTINGS}
 
 
@@ -142,4 +142,30 @@ def test_modules_import_only_files_that_exist():
     for p in UI.rglob("*.js"):
         for target in re.findall(r'from\s+"(\.[^"]+)"', p.read_text(encoding="utf-8")):
             assert (p.parent / target).resolve().exists(), (p, target)
-    assert '<script type="module" src="app.js">' in (UI / "index.html").read_text(encoding="utf-8")
+    assert '<script type="module" src="/src/app.js">' in (UI.parent / "index.html").read_text(encoding="utf-8")
+
+
+def test_the_gateway_says_when_the_screen_is_not_built(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from research_agent.gateway import app as app_mod
+
+    monkeypatch.setattr(app_mod, "UI_DIR", tmp_path / "none")
+    c = TestClient(app_mod.create_app(runs_dir=tmp_path, resume=False, catalog=False, api_key=""))
+    r = c.get("/ui/")
+    assert r.status_code == 503 and "npm run build" in r.text
+
+
+def test_built_assets_are_cached_and_the_page_is_rechecked(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from research_agent.gateway import app as app_mod
+
+    ui = tmp_path / "ui"
+    (ui / "assets").mkdir(parents=True)
+    (ui / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    (ui / "assets" / "index-abc.js").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(app_mod, "UI_DIR", ui)
+    c = TestClient(app_mod.create_app(runs_dir=tmp_path, resume=False, catalog=False, api_key=""))
+    assert c.get("/ui/").headers["cache-control"] == "no-cache"
+    assert "immutable" in c.get("/ui/assets/index-abc.js").headers["cache-control"]

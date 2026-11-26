@@ -46,15 +46,18 @@ from research_agent.gateway.settings import SettingsError
 from research_agent.gateway.store import RunStore
 
 HEARTBEAT_SECONDS = 15
-UI_DIR = Path(__file__).resolve().parents[1] / "ui"
+UI_DIR = Path(__file__).resolve().parents[1] / "ui"     # webui/ のビルド結果（npm run build。git の外）
+UI_MISSING = "画面がビルドされていません。webui/ で `npm ci` と `npm run build` を実行してください（docs/setup.md）。"
 
 
 class UIFiles(StaticFiles):
-    """画面のファイル。ブラウザに毎回確かめさせる（更新した画面が、古い版のまま使われないように）。"""
+    """画面のファイル。index.html はブラウザに毎回確かめさせる（更新した画面が、古い版のまま使われないように）。
+    assets/ の中は名前に中身のハッシュが入っているので、長く覚えさせてよい。"""
 
-    def file_response(self, *args, **kwargs):
-        response = super().file_response(*args, **kwargs)
-        response.headers["Cache-Control"] = "no-cache"
+    def file_response(self, full_path, *args, **kwargs):
+        response = super().file_response(full_path, *args, **kwargs)
+        immutable = Path(full_path).parent.name == "assets"
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable" if immutable else "no-cache"
         return response
 
 
@@ -276,7 +279,12 @@ def create_app(registry: Registry | None = None, runs_dir: Path | None = None, a
     def root() -> RedirectResponse:
         return RedirectResponse("/ui/")
 
-    app.mount("/ui", UIFiles(directory=UI_DIR, html=True), name="ui")
+    if (UI_DIR / "index.html").exists():
+        app.mount("/ui", UIFiles(directory=UI_DIR, html=True), name="ui")
+    else:
+        @app.get("/ui/{path:path}")
+        def ui_missing(path: str) -> Response:
+            return Response(UI_MISSING, status_code=503, media_type="text/plain; charset=utf-8")
     if resume:
         gw.resume_live()
         gw.watch()          # 止まった中継をつなぎ直す見張り
