@@ -124,7 +124,7 @@ def test_every_extension_an_agent_names_has_screen_parts():
     for m in (research.MANIFEST,):
         for name in m["extensions"]:
             slug = re.sub(r"[^A-Za-z0-9]+", "-", name)
-            index = UI / "extensions" / slug / "index.js"
+            index = UI / "extensions" / slug / "index.ts"
             assert index.exists(), index
             assert f'registerExtension("{name}"' in index.read_text(encoding="utf-8")
 

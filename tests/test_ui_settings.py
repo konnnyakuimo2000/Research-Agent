@@ -138,7 +138,7 @@ def test_connection_cases_are_told_apart():
 
 def test_pane_widths_fit_the_window():
     out = run_js("""
-      import { fitWidths } from 'UI/panels/layout.js';
+      import { fitWidths } from 'UI/panels/layout.ts';
       out({ wide: fitWidths({ side: 300, chat: 600 }, 1600), narrow: fitWidths({ side: 300, chat: 900 }, 1300),
             tiny: fitWidths({ side: 50, chat: 100 }, 1300), none: fitWidths({ side: null, chat: null }, 1300) });
     """)

@@ -7,11 +7,12 @@ import { ctx } from "../../core/ctx.ts";
 import { sameUrl } from "../../core/util.ts";
 import { registerExtension } from "../../core/events.ts";
 import { jumpTo } from "../../core/camera.ts";
-import { tree } from "../../views/tree.js";
+import { tree } from "../../views/tree.ts";
 import { now } from "../../panels/chat.ts";
-import { showDetails } from "../../panels/details.js";
-import { S, pageIdFor, resetTree, treeRenderers } from "./tree.js";
-import { ResearchFlow, linkRedirects } from "./flow.js";
+import { showDetails } from "../../panels/details.ts";
+import { S, pageIdFor, resetTree, treeRenderers } from "./tree.ts";
+import { ResearchFlow, linkRedirects } from "./flow.ts";
+import type { UIEvent } from "../../types/api.ts";
 
 linkRedirects(() => ctx.flow);
 
@@ -21,13 +22,13 @@ registerExtension("research/v1", {
     chat: { "run.start": () => now("調査を始めた") },
   },
   layouts: { flow: ResearchFlow },
-  observe: (e) => S.summary.on(e),
+  observe: (e: UIEvent) => S.summary.on(e),
   reset: resetTree,
-  cite(n) {
+  cite(n: number) {
     const s = S.sources[n - 1]; if (!s) return;
-    const id = pageIdFor(s.url) || (tree.N.sum && sameUrl(tree.N.sum.url, s.url) ? "sum" : null);
+    const id = pageIdFor(s.url) || (tree.N.sum?.url && sameUrl(tree.N.sum.url, s.url) ? "sum" : null);
     if (!id) return;
     tree.reveal(id); tree.select(id);
-    if (ctx.view === "flow") showDetails(tree.info[id]); else jumpTo(tree.box(id));
+    if (ctx.view === "flow") showDetails(tree.info[id]); else { const b = tree.box(id); if (b) jumpTo(b); }
   },
 });

@@ -20,10 +20,10 @@ SETTINGS = Settings(llm_base_url="http://unused/v1", llm_model="m", llm_api_key=
 SETUP = """
   import { ctx } from 'UI/core/ctx.ts';
   import { dispatch, norm } from 'UI/core/events.ts';
-  import { tree } from 'UI/views/tree.js';
-  await import('UI/extensions/research-v1/index.js');
-  const { ResearchFlow } = await import('UI/extensions/research-v1/flow.js');
-  const { S } = await import('UI/extensions/research-v1/tree.js');
+  import { tree } from 'UI/views/tree.ts';
+  await import('UI/extensions/research-v1/index.ts');
+  const { ResearchFlow } = await import('UI/extensions/research-v1/flow.ts');
+  const { S } = await import('UI/extensions/research-v1/tree.ts');
   ctx.AGENTS = { research: { ok: true, levels: [0, 1], extensions: ["research/v1"] } }; ctx.runAgent = "research";
   ctx.instant = true; ctx.runId = "r1";
   // 文字を読めるように、木と流れの図の setText・setSub を記録する
@@ -56,7 +56,7 @@ def test_a_matching_quote_is_shown_as_a_quote_match_not_a_checked_number():
         facts = Nodes(SETTINGS, LLM())._read_one(state, page.url)[1]
     assert [f["text"] for f in facts] == ["高さは九十九メートル"]          # 今の抽出処理は採用する（引用は本文にある）
     out = run(f"""
-      import {{ showDetails }} from 'UI/panels/details.js';
+      import {{ showDetails }} from 'UI/panels/details.ts';
       send("run.start", {{ request: "建物" }});
       send("step.start", {{ node: "read_pages", step: 1 }});
       send("research/v1:page.planned", {{ url: "https://ex.org/b", host: "ex.org", tier: 4 }});
@@ -190,7 +190,7 @@ def test_replay_speed_does_not_change_counts_and_history_is_read_only():
 
 def test_the_screen_no_longer_uses_the_old_words():
     old = ("照合できた事実", "観点を確認済み", "LLM の選択どおり", "確かめた事実だけで報告", "捨てた事実")
-    for p in [*UI.glob("extensions/research-v1/*.js"), UI / "panels" / "details.js", UI / "views" / "flow.js"]:
+    for p in [*UI.glob("extensions/research-v1/*.ts"), UI / "panels" / "details.ts", UI / "views" / "flow.ts"]:
         text = p.read_text(encoding="utf-8")
         for word in old:
             assert word not in text, (p.name, word)

@@ -9,44 +9,47 @@
 // - モデルの提案と、プログラムが採用した行動を分けて出す（検索語だけを補正したものは「検索語を補正」）
 // - 画像は、同じ画像 URL を単位に「取得成功」「画像モデルで判定完了」「参考画像」「報告に掲載」を数える
 
+import type { UIEvent } from "../../types/api.ts";
+
 export const WORDS = {
-  quoteFound: (n) => `原文に引用が見つかった記述 ${n} 件`,
-  quoteDropped: (n) => `引用が見つからず除いた記述 ${n} 件`,
-  coverage: (ok, total) => `出典条件を満たした観点 ${ok}/${total}`,
-  conflicts: (n) => `食い違い候補 ${n} 件`,
+  quoteFound: (n: number) => `原文に引用が見つかった記述 ${n} 件`,
+  quoteDropped: (n: number) => `引用が見つからず除いた記述 ${n} 件`,
+  coverage: (ok: number, total: number) => `出典条件を満たした観点 ${ok}/${total}`,
+  conflicts: (n: number) => `食い違い候補 ${n} 件`,
   report: "集めた記述と出典から報告を作成",
   processing: "処理中",
   askingModel: "モデルに依頼中",
-  elapsed: (s) => s == null ? "開始からの経過: 未計測" : `開始からの経過 ${Math.round(s)} 秒`,
-  stageTotal: (s) => s == null ? "工程の累計: 未計測" : `工程の累計 ${Math.round(s)} 秒`,
-  retryWait: (s) => `うち再試行関連 ${Math.round(s)} 秒`,
+  elapsed: (s: number | null | undefined) => s == null ? "開始からの経過: 未計測" : `開始からの経過 ${Math.round(s)} 秒`,
+  stageTotal: (s: number | null | undefined) => s == null ? "工程の累計: 未計測" : `工程の累計 ${Math.round(s)} 秒`,
+  retryWait: (s: number) => `うち再試行関連 ${Math.round(s)} 秒`,
 };
 
 // 網羅表の観点の状態（エージェントの判定の名前 → 画面の言葉）
-export const COVERAGE = {
+export const COVERAGE: Record<string, string> = {
   "確認済み": "出典条件を満たす",
   "出典不足": "出典条件に届かない",
   "未発見": "今回の取得範囲に採用記述なし",
 };
-export const coverageWord = (status) => COVERAGE[status] || status;
+export const coverageWord = (status: string): string => COVERAGE[status] || status;
 
 // 画像の判定（エージェントの採用区分 → 画面の言葉）
-export const IMAGE = {
+export const IMAGE: Record<string, string> = {
   "確認済み": "対象画像の採用条件を満たす",
   "おそらく正しい": "採用条件の一部を満たす",
   "不採用": "不採用",
   "参考画像": "参考画像（対象そのものではない）",
 };
-export const imageWord = (level) => IMAGE[level] || level;
+export const imageWord = (level: string): string => IMAGE[level] || level;
 
-const ACTION = { search: "検索", read_pages: "ページを読む", find_images: "画像を探す", check_conflicts: "食い違いを調べる",
+const ACTION: Record<string, string> = { search: "検索", read_pages: "ページを読む", find_images: "画像を探す", check_conflicts: "食い違いを調べる",
   respond: "報告", ask_user: "聞き返す" };
-const actionText = (a, q) => (ACTION[a] || a || "") + (a === "search" && q ? `「${q}」` : "");
+const actionText = (a: string, q: string) => (ACTION[a] || a || "") + (a === "search" && q ? `「${q}」` : "");
 
 // 判断: モデルの提案と、採用した行動。両方の画面で同じ差分を使う
-export function decisionDiff(e) {
+export interface Decision { kind: "same" | "action" | "query" | "note"; label: string; proposal: string; adopted: string; reason: string; why: string }
+export function decisionDiff(e: UIEvent): Decision {
   const pa = e.llm?.action || "", pq = e.llm?.query || "", aa = e.action || "", aq = e.query || "";
-  let kind = "same";
+  let kind: Decision["kind"] = "same";
   if (e.guard && pa !== aa) kind = "action";
   else if (e.guard && aa === "search" && pq !== aq) kind = "query";
   else if (e.guard) kind = "note";
@@ -55,7 +58,20 @@ export function decisionDiff(e) {
 }
 
 // 1 件の依頼の集計。イベントを順に受け取る（流れの図・木・詳細が同じものを読む）
+export interface PageState { db: string; stage: string; quoteFound: number; dropped: number; reason: string }
+export interface ImageState { fetched: boolean; asked: boolean; judged: boolean; reference: boolean; level: string; shown: boolean }
+export interface CoverageRow { aspect: string; status: string; [key: string]: any }
+export interface Conflict { aspect: string; [key: string]: any }
+
 export class RunSummary {
+  pages: Map<string, PageState>;
+  images: Map<string, ImageState>;
+  decisions: Decision[];
+  coverage: CoverageRow[];
+  conflicts: Conflict[];
+  stageSeconds: Record<string, number | null>;
+  retrySeconds: number;
+  elapsed: number | null;
   constructor() {
     this.pages = new Map();       // URL → { db, stage, quoteFound, dropped, reason }
     this.images = new Map();      // 画像 URL → { fetched, asked, judged, reference, level, shown }
@@ -66,9 +82,9 @@ export class RunSummary {
     this.retrySeconds = 0;
     this.elapsed = null;
   }
-  on(e) {
-    const page = (u) => (this.pages.has(u) || this.pages.set(u, { db: "", stage: "予定", quoteFound: 0, dropped: 0, reason: "" }), this.pages.get(u));
-    const image = (u) => (this.images.has(u) || this.images.set(u, { fetched: false, asked: false, judged: false, reference: false, level: "", shown: false }), this.images.get(u));
+  on(e: UIEvent): void {
+    const page = (u: string): PageState => (this.pages.has(u) || this.pages.set(u, { db: "", stage: "予定", quoteFound: 0, dropped: 0, reason: "" }), this.pages.get(u)!);
+    const image = (u: string): ImageState => (this.images.has(u) || this.images.set(u, { fetched: false, asked: false, judged: false, reference: false, level: "", shown: false }), this.images.get(u)!);
     switch (e.type) {
       case "page.planned": page(e.url).db = e.db || ""; break;
       case "page.start": Object.assign(page(e.url), { db: e.db || "", stage: e.db ? "DB記録を読込中" : "本文を取得中" }); break;
@@ -93,7 +109,7 @@ export class RunSummary {
         else if (i.asked) i.judged = true;          // 画像モデルの判定は、開始（image.llm）と結果の組で数える
         break;
       }
-      case "image.final": (e.shown || []).forEach((s) => { image(s).shown = true; }); break;
+      case "image.final": (e.shown || []).forEach((s: string) => { image(s).shown = true; }); break;
       case "decision": this.decisions.push(decisionDiff(e)); break;
       case "coverage": this.coverage = e.rows || []; break;
       case "conflicts": this.conflicts = e.conflicts || []; break;

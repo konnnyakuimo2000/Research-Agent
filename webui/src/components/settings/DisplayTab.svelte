@@ -1,7 +1,7 @@
 <!-- 設定のパネルの「表示」: ペインの幅を既定に戻す -->
 <script lang="ts">
   import { panel, setNotice } from "../../panels/settings.ts";
-  import { resetWidths, widthsText } from "../../panels/layout.js";
+  import { resetWidths, widthsText } from "../../panels/layout.ts";
 
   let text = $state(widthsText());
   function reset() { resetWidths(); text = widthsText(); setNotice("幅を既定に戻した"); }

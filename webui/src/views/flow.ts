@@ -7,16 +7,56 @@
 //   ノードの種類は step・data・terminal だけを知っている。エージェントがノードを足しても、画面を直さずに出る
 // - 拡張の並べ方（例: extensions/research-v1/flow.js の、判断を中心に作業が並ぶ図）
 import { $, esc, clamp, bezierTo, bezierPoint, easeOut, easeInOut, grownScale, fmtPt, STEM, RIPEN, ARRIVE } from "../core/util.ts";
+import type { Box, Curve, Point } from "../core/util.ts";
 import { ctx, labelOf, manifest } from "../core/ctx.ts";
 import { nodeKind, registerNodeKind } from "../core/events.ts";
-import { showDetails } from "../panels/details.js";
+import { showDetails } from "../panels/details.ts";
+import type { Details } from "../panels/details.ts";
+import type { GraphNode, UIEvent } from "../types/api.ts";
+
+/** ノードの見た目（並べ方の def() が決める） */
+export interface NodeDef { w: number; label: string; cls?: string; kind?: string; [key: string]: any }
+export interface FlowNode extends NodeDef {
+  id: string;
+  el: HTMLElement;
+  hist: string[];        // 最近の出来事（新しいものが先）
+  cur: Point;
+  tgt: Point;
+  born: number;
+  delay?: number;        // 線が届くまで現れるのを待つ秒数
+}
+export interface FlowEdge {
+  a: string; b: string; kind: string;
+  path: SVGPathElement; label: SVGTextElement | null;
+  count: number;         // 通った回数
+  over: number;          // うち、プログラムが行動を変えた回数
+  born: number;
+  pts?: Curve;           // 今のフレームの線の形
+}
+interface Token { e: FlowEdge; t0: number }
+interface Particle { e: FlowEdge; t0: number; dur: number; done: boolean; onArrive: ((i: number) => void) | null; i: number }
 
 const graphEl = $("graph"), gsvg = $("gedges");
 const SVGNS = "http://www.w3.org/2000/svg";
 
+// フィールドは declare（初期化の式を持たない）。reset() が土台のコンストラクターの中で値を入れ、
+// 拡張の並べ方も reset() を足すので、フィールドの初期化で上書きしないようにする
 export class FlowBase {
-  constructor() { this.name = "flow"; this.el = graphEl; this.margin = 56; this.reset(); }
-  reset() {
+  declare name: string;
+  declare el: HTMLElement;
+  declare margin: number;
+  declare fx: SVGGElement;
+  declare n: Record<string, FlowNode>;
+  declare e: Record<string, FlowEdge>;
+  declare tokens: Token[];
+  declare particles: Particle[];
+  declare ghosts?: unknown[];
+  declare cur: string | null;
+  declare lastFrom: string | null;
+  declare visits: Record<string, number>;
+  declare seconds: Record<string, number>;
+  constructor(..._args: unknown[]) { this.name = "flow"; this.el = graphEl; this.margin = 56; this.reset(); }
+  reset(): void {
     graphEl.querySelectorAll(".fnode").forEach((e) => e.remove());
     gsvg.innerHTML = "";
     this.fx = document.createElementNS(SVGNS, "g"); gsvg.appendChild(this.fx);   // 点と粒（毎フレーム描き直す）
@@ -24,28 +64,28 @@ export class FlowBase {
     this.visits = {}; this.seconds = {};
   }
   // ---- 差し替えるところ ----
-  def(id) { return { w: 220, label: id, cls: "" }; }     // ノードの幅・名前・class
-  body(id) { return `<ul class="hist"></ul>`; }          // ノードの中身（題・一行の下）
-  layout() {}
-  geometry(e) {
+  def(id: string): NodeDef { return { w: 220, label: id, cls: "" }; }     // ノードの幅・名前・class
+  body(_id: string, _d?: NodeDef): string { return `<ul class="hist"></ul>`; }          // ノードの中身（題・一行の下）
+  layout(): void {}
+  geometry(e: FlowEdge): Curve {
     const a = this.boxOf(e.a), b = this.boxOf(e.b);
-    const anchor = (n) => n.y + Math.min(24, n.h / 2);
+    const anchor = (n: Box) => n.y + Math.min(24, n.h / 2);
     const p0 = { x: a.x + a.w, y: anchor(a) }, p3 = { x: b.x, y: anchor(b) };
     const mx = (p0.x + p3.x) / 2;
     return [p0, { x: mx, y: p0.y }, { x: mx, y: p3.y }, p3];
   }
-  labelled(a, b, kind) { return kind !== "back" && kind !== "data"; }   // 通った回数を書く線か
-  isHot(e) {
+  labelled(_a: string, _b: string, kind: string): boolean { return kind !== "back" && kind !== "data"; }   // 通った回数を書く線か
+  isHot(e: FlowEdge): boolean {
     const target = this.n[e.b];
     return this.cur === e.b && this.lastFrom === e.a && ["running", "llm", "waiting"].some((c) => target.el.classList.contains(c));
   }
-  beforeDraw() {}
-  extraFx() { return ""; }
-  on() {}
+  beforeDraw(): void {}
+  extraFx(_t: number): string { return ""; }
+  on(_e: UIEvent): void {}
   // ---- 土台 ----
-  boxOf(id) { const n = this.n[id]; return { x: n.cur.x, y: n.cur.y, w: n.el.offsetWidth, h: n.el.offsetHeight }; }
+  boxOf(id: string): Box { const n = this.n[id]; return { x: n.cur.x, y: n.cur.y, w: n.el.offsetWidth, h: n.el.offsetHeight }; }
   // ノードを（なければ）作る。生まれたノードは、その場所で実るように膨らむ
-  node(id) {
+  node(id: string): FlowNode {
     if (this.n[id]) return this.n[id];
     const d = this.def(id);
     const el = document.createElement("div");
@@ -53,10 +93,10 @@ export class FlowBase {
     el.innerHTML = `<div class="k"><span>${esc(d.label)}</span><span class="row"><span class="cnt"></span><span class="st"></span></span></div>
       <div class="t"></div><div class="s"></div>${this.body(id, d)}`;
     el.tabIndex = 0; el.setAttribute("role", "button");
-    el.addEventListener("click", (ev) => { if (!ev.target.closest(".pchip")) this.select(id); });
+    el.addEventListener("click", (ev) => { if (!(ev.target as Element).closest(".pchip")) this.select(id); });
     el.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); this.select(id); } });
     graphEl.appendChild(el);
-    const n = this.n[id] = { id, el, ...d, hist: [], cur: { x: 0, y: 0 }, tgt: { x: 0, y: 0 }, born: ctx.instant ? -1e9 : performance.now() };
+    const n: FlowNode = this.n[id] = { id, el, ...d, hist: [], cur: { x: 0, y: 0 }, tgt: { x: 0, y: 0 }, born: ctx.instant ? -1e9 : performance.now() };
     this.visits[id] = 0; this.seconds[id] = 0;
     this.layout();
     n.cur = { ...n.tgt };
@@ -65,40 +105,40 @@ export class FlowBase {
     return n;
   }
   // 線を（なければ）作る。生まれた線は、元のノードから伸びていく
-  edge(a, b, kind = "") {
+  edge(a: string, b: string, kind = ""): FlowEdge {
     const key = `${a}>${b}`;
     if (this.e[key]) return this.e[key];
     this.node(a); this.node(b);
-    const path = document.createElementNS(SVGNS, "path");
+    const path = document.createElementNS(SVGNS, "path") as SVGPathElement;
     gsvg.insertBefore(path, this.fx);
-    let label = null;
+    let label: SVGTextElement | null = null;
     if (this.labelled(a, b, kind)) {
-      label = document.createElementNS(SVGNS, "text"); label.setAttribute("class", "glabel"); label.setAttribute("text-anchor", "middle");
+      label = document.createElementNS(SVGNS, "text") as SVGTextElement; label.setAttribute("class", "glabel"); label.setAttribute("text-anchor", "middle");
       gsvg.insertBefore(label, this.fx);
     }
     const target = this.n[b];
     if (performance.now() - target.born < 150) target.delay = ARRIVE;   // 線が届いてから現れる
     return (this.e[key] = { a, b, kind, path, label, count: 0, over: 0, born: ctx.instant ? -1e9 : performance.now() });
   }
-  removeEdge(key) { const e = this.e[key]; if (!e) return; e.path.remove(); e.label?.remove(); delete this.e[key]; }
-  setText(id, t, s) { const n = this.n[id]; if (!n) return; if (t !== undefined) n.el.querySelector(".t").textContent = t; if (s !== undefined) n.el.querySelector(".s").textContent = s; }
-  setState(id, st) {
+  removeEdge(key: string): void { const e = this.e[key]; if (!e) return; e.path.remove(); e.label?.remove(); delete this.e[key]; }
+  setText(id: string, t?: string, s?: string): void { const n = this.n[id]; if (!n) return; if (t !== undefined) n.el.querySelector(".t")!.textContent = t; if (s !== undefined) n.el.querySelector(".s")!.textContent = s; }
+  setState(id: string, st: string): void {
     const n = this.n[id]; if (!n) return;
     n.el.classList.remove("running", "llm", "waiting", "done", "failed");
     n.el.classList.add(st);
   }
-  push(id, line) {   // ノードの中の最近の出来事（新しいものを上に、3 つまで）。すべては詳細に残す
+  push(id: string, line: string): void {   // ノードの中の最近の出来事（新しいものを上に、3 つまで）。すべては詳細に残す
     const n = this.n[id]; if (!n) return;
     n.hist.unshift(line);
     const ul = n.el.querySelector(".hist"); if (ul) ul.innerHTML = n.hist.slice(0, 3).map((x) => `<li>${esc(x)}</li>`).join("");
     this.layout();
   }
-  count(id) {
+  count(id: string): void {
     const n = this.n[id]; if (!n) return;
-    n.el.querySelector(".cnt").textContent = `×${this.visits[id]}${this.seconds[id] ? ` · 累計 ${Math.round(this.seconds[id])} 秒` : ""}`;
+    n.el.querySelector(".cnt")!.textContent = `×${this.visits[id]}${this.seconds[id] ? ` · 累計 ${Math.round(this.seconds[id])} 秒` : ""}`;
   }
   // 作業が移る: 線を（なければ）作り、尾を引く点を流して回数を数える
-  go(to, { back = false, state = "running" } = {}) {
+  go(to: string, { back = false, state = "running" }: { back?: boolean; state?: string } = {}): void {
     const from = this.cur;
     this.node(to);
     if (from && from !== to) {
@@ -112,7 +152,7 @@ export class FlowBase {
     this.setState(to, state);
   }
   // 情報の流れ: 線の上に粒を n 個、少しずつずらして流す。届いたら onArrive を呼ぶ
-  flow(a, b, n = 1, onArrive = null, kind = "data") {
+  flow(a: string, b: string, n = 1, onArrive: ((i: number) => void) | null = null, kind = "data"): void {
     if (!this.n[a] || !this.n[b]) return;
     const e = this.edge(a, b, kind);
     const start = performance.now() + Math.max(0, e.born + STEM * 1000 - performance.now());
@@ -120,30 +160,30 @@ export class FlowBase {
       if (ctx.instant) { onArrive?.(i); continue; }
       this.particles.push({ e, t0: start + i * 140, dur: 900, done: false, onArrive: i < n ? onArrive : null, i });
     }
-    if (n > 12 && onArrive) for (let i = 12; i < n; i++) setTimeout(() => onArrive(i), ctx.instant ? 0 : 900 + 12 * 140);
+    if (n > 12 && onArrive) for (let i = 12; i < n; i++) setTimeout(() => onArrive!(i), ctx.instant ? 0 : 900 + 12 * 140);
   }
-  snap() { this.layout(); Object.values(this.n).forEach((n) => { n.cur = { ...n.tgt }; }); }
-  isEmpty() { return Object.keys(this.n).length === 0; }
+  snap(): void { this.layout(); Object.values(this.n).forEach((n) => { n.cur = { ...n.tgt }; }); }
+  isEmpty(): boolean { return Object.keys(this.n).length === 0; }
   // 点・粒などの動きが残っているか（残っている間は描き続ける）
-  busy() { return this.tokens.length > 0 || this.particles.length > 0 || (this.ghosts?.length || 0) > 0; }
-  bounds() {
+  busy(): boolean { return this.tokens.length > 0 || this.particles.length > 0 || (this.ghosts?.length || 0) > 0; }
+  bounds(): { x0: number; y0: number; x1: number; y1: number } {
     const ns = Object.values(this.n);
     if (!ns.length) return { x0: 0, y0: 0, x1: 400, y1: 300 };
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const n of ns) { x0 = Math.min(x0, n.tgt.x); y0 = Math.min(y0, n.tgt.y); x1 = Math.max(x1, n.tgt.x + n.el.offsetWidth); y1 = Math.max(y1, n.tgt.y + n.el.offsetHeight); }
     return { x0, y0, x1, y1 };
   }
-  select(id) {
+  select(id: string): void {
     document.querySelectorAll(".fnode.sel").forEach((x) => x.classList.remove("sel")); this.n[id].el.classList.add("sel");
     showDetails(this.details(id));
   }
-  details(id) {
+  details(id: string): Details {
     const n = this.n[id];
     return { title: n.label, kv: [["通った回数", this.visits[id] ? `${this.visits[id]} 回` : ""], ["工程の累計", this.seconds[id] ? `${Math.round(this.seconds[id])} 秒` : ""]],
              list: n.hist.map((x) => esc(x)) };
   }
   // 毎フレーム: ノードを目標の位置へ近づけて膨らませ、線を伸ばし、点と粒を流す
-  draw(dt) {
+  draw(dt: number): void {
     const t = performance.now();
     const k = ctx.instant ? 1 : 1 - Math.pow(0.0008, dt);
     for (const n of Object.values(this.n)) {
@@ -153,7 +193,7 @@ export class FlowBase {
       n.el.style.opacity = easeOut(g).toFixed(3);
     }
     this.beforeDraw();
-    const pens = [];
+    const pens: Point[] = [];
     for (const e of Object.values(this.e)) {
       const full = e.pts = this.geometry(e);
       const grow = clamp((t - e.born) / 1000 / STEM);
@@ -162,10 +202,10 @@ export class FlowBase {
       if (grow < 1) pens.push(p3);   // 描いている途中の線の先に、鉛筆の先を出す
       const busyData = e.kind === "data" && this.particles.some((q) => q.e === e);
       e.path.setAttribute("class", `gedge ${e.kind} ${e.count || busyData ? "used" : ""} ${this.isHot(e) ? "hot" : ""} ${grow < 1 ? "growing" : ""}`);
-      e.path.style.strokeWidth = e.count && e.kind !== "data" ? Math.min(4, 1.4 + e.count * 0.4) : "";
+      e.path.style.strokeWidth = e.count && e.kind !== "data" ? String(Math.min(4, 1.4 + e.count * 0.4)) : "";
       if (e.label) {
         const lp = bezierPoint(...full, 0.8);
-        e.label.setAttribute("x", lp.x); e.label.setAttribute("y", lp.y - 7);
+        e.label.setAttribute("x", String(lp.x)); e.label.setAttribute("y", String(lp.y - 7));
         e.label.textContent = e.count ? `×${e.count}${e.over ? ` · 変更 ${e.over}` : ""}` : "";
         e.label.setAttribute("class", `glabel ${e.over ? "over" : ""}`);
       }
@@ -201,7 +241,13 @@ const COL_W = 290, ROW_GAP = 30;
 
 // 名乗りの graph から作る一般的な流れの図。層（左から右）は、始まりのノードからの近さで決める
 export class GraphFlow extends FlowBase {
-  constructor(agentId = ctx.runAgent) {
+  declare agentId: string;
+  declare nodes: Record<string, GraphNode & { i: number }>;
+  declare edges: [string, string][];
+  declare startId: string | null;
+  declare endId: string | null;
+  declare layer: Record<string, number>;
+  constructor(agentId: string = ctx.runAgent) {
     super();
     const g = manifest(agentId).graph || { nodes: [], edges: [] };
     this.agentId = agentId;
@@ -214,31 +260,31 @@ export class GraphFlow extends FlowBase {
     // 層: 始まり（なければ、入ってくる線のないノード）からの最短の段数
     this.layer = {};
     const roots = this.startId ? [this.startId] : Object.keys(this.nodes).filter((id) => !into.has(id));
-    const queue = roots.map((id) => [id, 0]);
+    const queue: [string, number][] = roots.map((id) => [id, 0]);
     while (queue.length) {
-      const [id, d] = queue.shift();
+      const [id, d] = queue.shift()!;
       if (id in this.layer) continue;
       this.layer[id] = d;
       this.edges.filter((e) => e[0] === id).forEach((e) => queue.push([e[1], d + 1]));
     }
   }
-  layerOf(id) {
+  layerOf(id: string): number {
     if (id in this.layer) return this.layer[id];
     // 名乗りにないノード（新しい版のエージェントなど）: 直前のノードの次の層に置く
     this.layer[id] = this.cur ? this.layerOf(this.cur) + 1 : 1;
     return this.layer[id];
   }
-  def(id) {
+  def(id: string): NodeDef {
     const m = this.nodes[id] || { id, label: labelOf(id, this.agentId), kind: "step" };
-    const k = nodeKind(m.kind);
+    const k = nodeKind(m.kind || "step");
     return { w: k.w, label: m.label || id, cls: `${k.cls}${id === this.startId ? " start" : ""}`, kind: m.kind };
   }
   layout() {
     if (graphEl.hidden) return;   // 非表示の間は高さが測れない。表示を切り替えたときに並べ直す
-    const cols = {};
+    const cols: Record<string, string[]> = {};
     for (const id of Object.keys(this.n)) (cols[this.layerOf(id)] ||= []).push(id);
-    const order = (id) => this.nodes[id]?.i ?? 1e6 + Object.keys(this.n).indexOf(id);
-    const heights = {};
+    const order = (id: string) => this.nodes[id]?.i ?? 1e6 + Object.keys(this.n).indexOf(id);
+    const heights: Record<string, number> = {};
     let tallest = 0;
     for (const [c, ids] of Object.entries(cols)) {
       ids.sort((a, b) => order(a) - order(b));
@@ -252,7 +298,7 @@ export class GraphFlow extends FlowBase {
     if (ctx.instant) Object.values(this.n).forEach((n) => { n.cur = { ...n.tgt }; });
   }
   // 同じ層のノードどうしは縦にまっすぐ、戻る線（右から左）はノードの下を回る
-  geometry(e) {
+  geometry(e: FlowEdge): Curve {
     const la = this.layerOf(e.a), lb = this.layerOf(e.b);
     if (lb > la) return super.geometry(e);
     const a = this.boxOf(e.a), b = this.boxOf(e.b);
@@ -266,15 +312,15 @@ export class GraphFlow extends FlowBase {
     const dip = Math.max(p0.y, p3.y) + 46;
     return [p0, { x: p0.x, y: dip }, { x: p3.x, y: dip }, p3];
   }
-  labelled(a, b, kind) { return kind !== "data"; }
-  on(e) {
+  labelled(_a: string, _b: string, kind: string): boolean { return kind !== "data"; }
+  on(e: UIEvent): void {
     switch (e.type) {
       case "run.start":
-        if (this.startId) { this.node(this.startId); this.setState(this.startId, "done"); this.setText(this.startId, e.request, ctx.runId); this.cur = this.startId; }
+        if (this.startId) { this.node(this.startId); this.setState(this.startId, "done"); this.setText(this.startId, e.request, ctx.runId ?? ""); this.cur = this.startId; }
         break;
       case "step.start":
         if (this.cur === e.node && this.n[e.node]?.el.classList.contains("waiting")) { this.setState(e.node, "running"); break; }   // 答えで再開した
-        this.go(e.node, { back: this.cur && this.layerOf(e.node) <= this.layerOf(this.cur) });
+        this.go(e.node, { back: !!this.cur && this.layerOf(e.node) <= this.layerOf(this.cur) });
         this.setText(e.node, "", "");
         break;
       case "step.end":
@@ -286,7 +332,7 @@ export class GraphFlow extends FlowBase {
       case "question": if (this.cur) { this.setState(this.cur, "waiting"); this.setText(this.cur, e.question.split("\n")[0], "利用者の答えを待っている"); } break;
       case "answer": if (this.cur) this.push(this.cur, `答え: ${e.answer}`); break;
       case "run.end":
-        if (this.endId) { this.go(this.endId); this.setState(this.endId, "done"); this.setText(this.endId, `${Math.round(e.t)} 秒`, "終わった"); }
+        if (this.endId) { this.go(this.endId); this.setState(this.endId, "done"); this.setText(this.endId, `${Math.round(e.t ?? 0)} 秒`, "終わった"); }
         else if (this.cur) this.setState(this.cur, "done");
         break;
       case "run.error": if (this.cur) { this.setState(this.cur, "failed"); this.setText(this.cur, undefined, e.error); } break;

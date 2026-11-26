@@ -1,17 +1,65 @@
 // 木（1 段）: 作業の流れを、左から右へ伸びる木として描く。
 // - ノードは、親から枝が伸びた先に、実がなるように膨らんで現れる
 // - 共通の描き手は、依頼 → 作業（step）を並べる。拡張（research/v1 など）は自分のイベントの描き手で、ノードを足す
-import { $, esc, card, clamp, bezierTo, easeOut, easeInOut, grownScale, fmtPt, toggleBtn, STEM, RIPEN, ARRIVE } from "../core/util.ts";
+import { $, esc, card, clamp, bezierTo, easeOut, easeInOut, grownScale, fmtPt, STEM, RIPEN, ARRIVE } from "../core/util.ts";
+import type { Box, Point } from "../core/util.ts";
 import { ctx, labelOf } from "../core/ctx.ts";
 import { registerRenderer } from "../core/events.ts";
-import { showDetails, onDetailsClose } from "../panels/details.js";
+import { showDetails, onDetailsClose } from "../panels/details.ts";
+import type { Details } from "../panels/details.ts";
+import type { UIEvent } from "../types/api.ts";
 
 const canvas = $("canvas"), svg = $("edges");
 const COLW = [170, 250, 236, 236, 236];   // 深さごとの列の幅（依頼・判断・作業・ページ・データベースの記録）
 const GAPX = 44, GAPY = 12, PAD = 24;
 
+export interface TreeNode {
+  id: string;
+  parent: string | null;
+  depth: number;
+  el: HTMLElement;
+  kids: string[];
+  cur: Point;            // 今の位置（毎フレーム tgt へ近づく）
+  tgt: Point;            // 並べた位置
+  collapsed: boolean;
+  hidden: boolean;
+  extra: string[];       // ノードどうしの別の結び付き（転載など。点線で結ぶ）
+  born: number;          // 生まれた時刻（performance.now()。すぐ描くときは過去）
+  // 拡張が覚えさせる値（research/v1: 概要の URL・転送先・画像のライセンス）
+  url?: string;
+  final?: string;
+  license?: string;
+}
+export interface Tree {
+  name: "tree";
+  el: HTMLElement;
+  margin: number;
+  N: Record<string, TreeNode>;
+  order: string[];
+  info: Record<string, Details>;
+  selected: string | null;
+  aim: string | null;      // いちばん新しいノード（カメラが追う）
+  work: string | null;     // 今の作業のノード
+  reset(): void;
+  add(id: string, parent: string | null, depth: number, html: string, details?: Details, cls?: string, first?: boolean): HTMLElement;
+  layout(): void;
+  snap(): void;
+  setState(id: string, st?: string): void;
+  setSub(id: string, text: string): void;
+  setTitle(id: string, text: string): void;
+  step(id: string, i: number, cls: string): void;
+  collapse(id: string, yes: boolean): void;
+  reveal(id: string): void;
+  select(id: string): void;
+  box(id: string): Box | null;
+  bounds(): { x0: number; y0: number; x1: number; y1: number } | null;
+  aimBox(): Box | null;
+  isEmpty(): boolean;
+  draw(dt: number): void;
+}
+
 // 木の状態。拡張の描き手も、これを通してノードを足す
-export const tree = {
+export const tree: Tree = {
   name: "tree", el: canvas, margin: 36,
   N: {}, order: [], info: {}, selected: null, aim: null, work: null,
   reset() {
@@ -27,14 +75,17 @@ export const tree = {
     const el = document.createElement("div");
     el.className = `node ${cls}`; el.style.setProperty("--w", COLW[Math.min(depth, COLW.length - 1)] + "px"); el.innerHTML = html;
     el.tabIndex = 0; el.setAttribute("role", "button");
-    el.addEventListener("click", (e) => { if (!e.target.closest(".toggle")) this.select(id); });
+    el.addEventListener("click", (e) => { if (!(e.target as Element).closest(".toggle")) this.select(id); });
     el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this.select(id); } });
     const tg = el.querySelector(".toggle"); if (tg) tg.addEventListener("click", () => this.collapse(id, !N[id].collapsed));
     canvas.appendChild(el);
-    const p = N[parent];
+    const p = parent ? N[parent] : undefined;
     N[id] = { id, parent, depth, el, kids: [], cur: { x: 0, y: 0 }, tgt: { x: 0, y: 0 }, collapsed: false, hidden: false, extra: [],
               born: ctx.instant ? -1e9 : performance.now() };
-    if (p) { first ? p.kids.unshift(id) : p.kids.push(id); const t = p.el.querySelector(".toggle"); if (t) t.hidden = false; }
+    if (p) {
+      if (first) p.kids.unshift(id); else p.kids.push(id);
+      const t = p.el.querySelector<HTMLElement>(".toggle"); if (t) t.hidden = false;
+    }
     this.order.push(id); this.info[id] = details || { title: id };
     this.layout();
     N[id].cur = { ...N[id].tgt };   // 生まれるノードは、その場所で大きくなる（動いてくるのではない）
@@ -44,13 +95,13 @@ export const tree = {
   },
   layout() {
     const N = this.N, root = N.req; if (!root || canvas.hidden) return;   // 非表示の間は高さが測れない
-    const colX = []; let x = PAD; COLW.forEach((w, i) => { colX[i] = x; x += w + GAPX; });
-    const col = (d) => colX[Math.min(d, colX.length - 1)];
+    const colX: number[] = []; let x = PAD; COLW.forEach((w, i) => { colX[i] = x; x += w + GAPX; });
+    const col = (d: number) => colX[Math.min(d, colX.length - 1)];
     let y = PAD;
-    function place(id, hide) {
+    function place(id: string, hide: boolean): void {
       const n = N[id]; n.hidden = hide; n.el.classList.toggle("gone", hide);
       const h = n.el.offsetHeight || 50;
-      if (hide) { const p = N[n.parent]; n.tgt = { x: p.tgt.x + 30, y: p.tgt.y }; n.kids.forEach((k) => place(k, true)); return; }
+      if (hide) { const p = N[n.parent!]; n.tgt = { x: p.tgt.x + 30, y: p.tgt.y }; n.kids.forEach((k) => place(k, true)); return; }
       const kids = n.collapsed ? [] : n.kids;
       if (!kids.length) { n.tgt = { x: col(n.depth), y }; y += h + GAPY; n.kids.forEach((k) => place(k, true)); return; }
       const top = y;
@@ -84,7 +135,7 @@ export const tree = {
     this.selected = id; this.N[id].el.classList.add("sel");
     showDetails(this.info[id] || { title: id });
   },
-  box(id) { const n = this.N[id]; return n && { x: n.tgt.x, y: n.tgt.y, w: n.el.offsetWidth, h: n.el.offsetHeight }; },
+  box(id) { const n = this.N[id]; return n ? { x: n.tgt.x, y: n.tgt.y, w: n.el.offsetWidth, h: n.el.offsetHeight } : null; },
   bounds() {
     const vis = this.order.filter((id) => !this.N[id].hidden);
     if (!vis.length) return null;
@@ -96,7 +147,10 @@ export const tree = {
     }
     return { x0, y0, x1, y1 };
   },
-  aimBox() { const n = this.N[this.aim]; return n && { x: n.tgt.x, y: n.tgt.y, w: COLW[Math.min(n.depth, COLW.length - 1)] }; },
+  aimBox() {
+    const n = this.aim ? this.N[this.aim] : undefined;
+    return n ? { x: n.tgt.x, y: n.tgt.y, w: COLW[Math.min(n.depth, COLW.length - 1)], h: n.el.offsetHeight } : null;
+  },
   isEmpty() { return this.order.length === 0; },
   // 毎フレーム: ノードを目標の位置へ近づけ、生まれたばかりのノードは枝を伸ばしてから膨らませ、線を描く
   draw(dt) {
@@ -108,10 +162,10 @@ export const tree = {
       const age = (t - n.born) / 1000;
       const g = n.parent ? clamp((age - ARRIVE) / RIPEN) : clamp(age / RIPEN);
       n.el.style.transform = `translate(${n.cur.x.toFixed(1)}px, ${n.cur.y.toFixed(1)}px) scale(${grownScale(g).toFixed(3)})`;
-      n.el.style.opacity = n.hidden ? 0 : easeOut(g).toFixed(3);
+      n.el.style.opacity = n.hidden ? "0" : easeOut(g).toFixed(3);
     }
-    let d = ""; const live = [], growing = [], buds = [], rep = [];
-    const anchorY = (n) => n.cur.y + Math.min(22, n.el.offsetHeight / 2);
+    let d = ""; const live: string[] = [], growing: string[] = [], buds: Point[] = [], rep: string[] = [];
+    const anchorY = (n: TreeNode) => n.cur.y + Math.min(22, n.el.offsetHeight / 2);
     for (const id of this.order) {
       const n = N[id]; if (!n.parent || n.hidden) continue;
       const p = N[n.parent];
@@ -137,7 +191,9 @@ export const tree = {
 onDetailsClose(() => { if (tree.selected && tree.N[tree.selected]) tree.N[tree.selected].el.classList.remove("sel"); tree.selected = null; });
 
 // ---- 共通の描き手（0・1 段のイベント） ----
-const stepId = (e) => "w" + e.step;
+const stepId = (e: UIEvent) => "w" + e.step;
+/** 今の作業のノード（まだなければ null） */
+const work = (): string | null => (tree.work && tree.N[tree.work] ? tree.work : null);
 registerRenderer("run.start", (e) => {
   tree.add("req", null, 0, `<div class="k"><span>依頼</span><span class="st"></span></div><div class="t">${esc(e.request)}</div><div class="s">${esc(ctx.runId)}</div>`,
     { title: "依頼", kv: [["依頼文", esc(e.request)], ["実行の ID", `<span class="mono">${esc(ctx.runId)}</span>`]] }, "root");
@@ -155,17 +211,17 @@ registerRenderer("step.end", (e) => {
   else if (!tree.N[id]?.el.classList.contains("failed")) { tree.setState(id, "done"); tree.setSub(id, "終わった"); }
   if (tree.info[id]) tree.info[id].kv = [...(tree.info[id].kv || []), ["所要時間", `${e.seconds} 秒${e.llm_wait ? `（うち LLM サーバーの待ち ${e.llm_wait} 秒）` : ""}`]];
 });
-registerRenderer("status", (e) => { if (tree.N[tree.work]) { tree.setSub(tree.work, e.text); (tree.info[tree.work].list ||= []).push(esc(e.text)); } });
+registerRenderer("status", (e) => { const w = work(); if (w) { tree.setSub(w, e.text); (tree.info[w].list ||= []).push(esc(e.text)); } });
 registerRenderer("question", (e) => {
-  if (tree.N[tree.work]) { tree.setState(tree.work, "waiting"); tree.setTitle(tree.work, "利用者の答えを待っている"); tree.setSub(tree.work, e.question.split("\n")[0]); }
+  const w = work(); if (w) { tree.setState(w, "waiting"); tree.setTitle(w, "利用者の答えを待っている"); tree.setSub(w, e.question.split("\n")[0]); }
 });
 registerRenderer("run.end", () => tree.setState("req", "done"));
-registerRenderer("run.error", (e) => { if (tree.N[tree.work]) { tree.setState(tree.work, "failed"); tree.setSub(tree.work, e.error); } });
-registerRenderer("run.cancelled", () => { if (tree.N[tree.work]) { tree.setState(tree.work, "failed"); tree.setSub(tree.work, "止めた"); } });
+registerRenderer("run.error", (e) => { const w = work(); if (w) { tree.setState(w, "failed"); tree.setSub(w, e.error); } });
+registerRenderer("run.cancelled", () => { const w = work(); if (w) { tree.setState(w, "failed"); tree.setSub(w, "止めた"); } });
 // 0 段だけのイベント（文の続き・答えなど）は、木には描かない
 ["message.delta", "answer", "run.waiting", "run.paused", "run.resumed", "report"].forEach((t) => registerRenderer(t, () => {}));
 // 描き手のないイベント（知らない拡張・新しい版）: そのときの作業の詳細に中身を残す（画面は止まらない）
 registerRenderer("*", (e) => {
-  const id = tree.N[tree.work] ? tree.work : tree.N.req ? "req" : null;
+  const id = work() || (tree.N.req ? "req" : null);
   if (id) (tree.info[id].events ||= []).push(e);
 });

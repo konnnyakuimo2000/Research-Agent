@@ -5,18 +5,22 @@
 // 情報の流れ（検索結果・ページ・事実・画像・出典）は、線を流れる粒で描く。
 import { $, esc, host, icon, link, fmtPt, imageUrl } from "../../core/util.ts";
 import { ctx, labelOf } from "../../core/ctx.ts";
-import { FlowBase } from "../../views/flow.js";
-import { tree } from "../../views/tree.js";
-import { showDetails } from "../../panels/details.js";
-import { ACTION, SEARCH_KIND, NEEDS_PERMISSION, S, redirectHooks } from "./tree.js";
-import { WORDS, decisionDiff } from "./summary.js";
+import { FlowBase } from "../../views/flow.ts";
+import type { FlowEdge, NodeDef } from "../../views/flow.ts";
+import type { Box, Curve, Point } from "../../core/util.ts";
+import type { Details } from "../../panels/details.ts";
+import type { UIEvent } from "../../types/api.ts";
+import { tree } from "../../views/tree.ts";
+import { showDetails } from "../../panels/details.ts";
+import { ACTION, SEARCH_KIND, NEEDS_PERMISSION, S, redirectHooks } from "./tree.ts";
+import { WORDS, decisionDiff } from "./summary.ts";
 
-const STAGE = { check_feasibility: "feas", decide: "hub", search: "search", read_pages: "read", find_images: "images",
+const STAGE: Record<string, string> = { check_feasibility: "feas", decide: "hub", search: "search", read_pages: "read", find_images: "images",
   check_conflicts: "conflicts", ask_user: "ask", respond: "respond", report_infeasible: "infeasible" };
 const KNOWN_ORDER = ["ask", "search", "read", "images", "conflicts", "respond"];
-const ROW_DATA = { read: ["pages", "cov"], images: ["imgs"], respond: ["end"] };   // 作業の行に並べる、集まったもののノード
-const COL = { start: 0, feas: 210, infeasible: 210, hub: 420, stage: 740, data1: 1050, data2: 1350 };
-const FLOW_DEF = {
+const ROW_DATA: Record<string, string[]> = { read: ["pages", "cov"], images: ["imgs"], respond: ["end"] };   // 作業の行に並べる、集まったもののノード
+const COL: Record<string, number> = { start: 0, feas: 210, infeasible: 210, hub: 420, stage: 740, data1: 1050, data2: 1350 };
+const FLOW_DEF: Record<string, NodeDef & { col: string }> = {
   start:      { col: "start", w: 180, label: "依頼", cls: "start terminal" },
   feas:       { col: "feas", w: 170, label: "判定" },
   hub:        { col: "hub", w: 230, label: "判断", cls: "hub" },
@@ -32,33 +36,46 @@ const FLOW_DEF = {
   cov:        { col: "data2", w: 250, label: "網羅表", cls: "data" },
   imgs:       { col: "data1", w: 250, label: "画像の候補", cls: "data" },
 };
-const stageOf = (node) => STAGE[node] || node;
+const stageOf = (node: string): string => STAGE[node] || node;
+
+interface Ghost { to: string; label: string; t0: number }
 
 export class ResearchFlow extends FlowBase {
-  reset() {
+  declare ghosts: Ghost[];                         // LLM が選んだが、プログラムが変えた行き先（消えていく）
+  declare pageChip: Record<string, HTMLElement>;   // ページの URL → 「読んだページ」のアイコン
+  declare covRow: Record<string, HTMLElement>;     // 観点 → 網羅表の行
+  declare thumb: Record<string, HTMLElement>;      // 画像の URL → サムネイル
+  declare extraStages: string[];                   // 名乗りで足された作業
+  declare unchecked: number;
+  declare uncheckedWhy: string;
+  declare reportSources: number;
+  declare labels: Record<string, string>;
+  declare imgsBusy: boolean;
+  declare pagesBusy: boolean;
+  reset(): void {
     super.reset();
     this.ghosts = []; this.pageChip = {}; this.covRow = {}; this.thumb = {}; this.extraStages = [];
     this.unchecked = 0; this.uncheckedWhy = ""; this.reportSources = 0;
     this.labels = {};
   }
   // 作業の行の順: 決まった順の後に、名乗りで足された作業を出てきた順に
-  get stageOrder() { return [...KNOWN_ORDER, ...this.extraStages]; }
-  isStage(id) { return this.stageOrder.includes(id); }
-  def(id) {
+  get stageOrder(): string[] { return [...KNOWN_ORDER, ...this.extraStages]; }
+  isStage(id: string | null): boolean { return !!id && this.stageOrder.includes(id); }
+  def(id: string): NodeDef {
     if (FLOW_DEF[id]) return FLOW_DEF[id];
     if (!this.extraStages.includes(id)) this.extraStages.push(id);
     return { col: "stage", w: 240, label: this.labels[id] || labelOf(id) };
   }
-  body(id, d) {
+  body(id: string, _d?: NodeDef): string {
     if (id === "pages") return `<div class="chipgrid"></div>`;
     if (id === "cov") return `<div class="covrows"></div>`;
     if (id === "imgs") return `<div class="thumbs"></div>`;
     return `<ul class="hist"></ul>`;
   }
-  labelled(a, b, kind) { return a === "hub" && kind !== "back"; }
-  layout() {
+  labelled(a: string, _b: string, kind: string): boolean { return a === "hub" && kind !== "back"; }
+  layout(): void {
     if ($("graph").hidden) return;   // 非表示の間は高さが測れない。表示を切り替えたときに並べ直す
-    const h = (id) => this.n[id]?.el.offsetHeight || 0;
+    const h = (id: string) => this.n[id]?.el.offsetHeight || 0;
     const rows = this.stageOrder.filter((s) => this.n[s]);
     let y = 0;
     for (const s of rows) {
@@ -78,15 +95,15 @@ export class ResearchFlow extends FlowBase {
     if (ctx.instant) Object.values(this.n).forEach((n) => { n.cur = { ...n.tgt }; });
   }
   // 線の形。判断と作業の間は、判断の右端に作業ごとの出口を扇形に分け、行きと帰りを平行な 2 本にする
-  geometry(e) {
+  geometry(e: FlowEdge): Curve {
     const a = this.boxOf(e.a), b = this.boxOf(e.b);
     const rows = this.stageOrder.filter((s) => this.n[s]);
-    const hubY = (stage) => {
+    const hubY = (stage: string) => {
       const hub = this.boxOf("hub"), i = rows.indexOf(stage), k = rows.length;
       return hub.y + 16 + (k <= 1 ? 0.5 : i / (k - 1)) * (hub.h - 32);
     };
-    const anchor = (n) => n.y + Math.min(24, n.h / 2);
-    let p0, p3;
+    const anchor = (n: Box) => n.y + Math.min(24, n.h / 2);
+    let p0: Point, p3: Point;
     if (e.a === "hub" && this.isStage(e.b)) { p0 = { x: a.x + a.w, y: hubY(e.b) - 5 }; p3 = { x: b.x, y: anchor(b) - 5 }; }
     else if (e.b === "hub" && this.isStage(e.a)) { p0 = { x: a.x, y: anchor(a) + 5 }; p3 = { x: b.x + b.w, y: hubY(e.a) + 5 }; }
     else if (e.a === "feas" && e.b === "infeasible") {
@@ -97,21 +114,21 @@ export class ResearchFlow extends FlowBase {
     return [p0, { x: mx, y: p0.y }, { x: mx, y: p3.y }, p3];
   }
   // 集まったもののノードが忙しい間（ページを読んでいる、画像を確かめている）は、そこへの線とノードを光らせる
-  beforeDraw() {
+  beforeDraw(): void {
     this.imgsBusy = Object.values(this.thumb).some((th) => th.classList.contains("llm")) || this.particles.some((q) => q.e.b === "imgs");
     this.pagesBusy = Object.values(this.pageChip).some((c) => c.classList.contains("running") || c.classList.contains("llm"));
     this.n.imgs?.el.classList.toggle("busy", this.imgsBusy); this.n.pages?.el.classList.toggle("busy", this.pagesBusy);
   }
-  isHot(e) { return super.isHot(e) || (e.b === "imgs" && this.imgsBusy) || (e.b === "pages" && this.pagesBusy); }
+  isHot(e: FlowEdge): boolean { return super.isHot(e) || (e.b === "imgs" && this.imgsBusy) || (e.b === "pages" && this.pagesBusy); }
   // LLM が選んだが、プログラムが変えた行き先: 点線（その作業がまだなければ文字）を 2.5 秒かけて消す
-  extraFx(t) {
+  extraFx(t: number): string {
     let fx = "";
     this.ghosts = this.ghosts.filter((g) => {
       const u = (t - g.t0) / 2500; if (u >= 1 || !this.n.hub) return false;
       const op = (1 - u).toFixed(2), hub = this.n.hub;
-      const e = g.to && this.e[`hub>${g.to}`];
+      const e = g.to ? this.e[`hub>${g.to}`] : undefined;
       if (e?.pts) {
-        const [p0, p1, p2, p3] = e.pts.map((p) => ({ x: p.x, y: p.y - 9 }));
+        const [p0, p1, p2, p3] = e.pts.map((p: Point) => ({ x: p.x, y: p.y - 9 }));
         fx += `<path class="gedge ghost" opacity="${op}" d="M${fmtPt(p0)} C${fmtPt(p1)} ${fmtPt(p2)} ${fmtPt(p3)}"/>`;
       } else {
         fx += `<text class="glabel over" opacity="${op}" x="${(hub.cur.x + hub.el.offsetWidth + 16).toFixed(1)}" y="${(hub.cur.y - 10 - u * 14).toFixed(1)}">LLM の選択: ${esc(g.label)} ✕</text>`;
@@ -120,39 +137,39 @@ export class ResearchFlow extends FlowBase {
     });
     return fx;
   }
-  goStage(to) {
+  goStage(to: string): void {
     const from = this.cur;
     const back = to === "hub" && this.isStage(from) && from !== "respond";
     // 工程の始まりだけが分かる段階は「処理中」。モデルへの依頼は page.llm・image.llm を受け取った区間だけ「モデルに依頼中」
     // （前はノードの名前で決めていたので、定型文を作るだけの「調べられないことの報告」もモデルに依頼中に見えた）
     this.go(to, { back, state: to === "ask" ? "waiting" : "running" });
   }
-  updatePages() {
+  updatePages(): void {
     // 木・詳細と同じ集計（対象資料・本文取得・抽出・引用一致）
     this.setText("pages", `${Object.keys(this.pageChip).length} 資料`, S.summary.pageText());
   }
-  details(id) {
+  details(id: string): Details {
     const d = super.details(id);
     if (id === "pages") d.list = Object.keys(this.pageChip).map((u) => { const f = tree.N["p:" + u]?.final || u; return `${esc(host(f))} — ${link(f)}`; });
     if (id === "imgs") {
       d.list = Object.entries(this.thumb).map(([u, th]) => `${esc(th.dataset.done || "未確認")} — ${link(u)}`);
-      if (this.unchecked) d.kv.push(["未確認", `${this.unchecked} 枚。${esc(this.uncheckedWhy)}`]);
+      if (this.unchecked) d.kv!.push(["未確認", `${this.unchecked} 枚。${esc(this.uncheckedWhy)}`]);
     }
     if (id === "pages") d.note = "アイコンを押すと、記述と引用が出ます。";
-    if (id === "imgs") d.kv.push(["集計", esc(S.summary.imageText())]);
-    if (id === "cov") d.kv.push(["集計", esc(S.summary.coverageText())]);
+    if (id === "imgs") d.kv!.push(["集計", esc(S.summary.imageText())]);
+    if (id === "cov") d.kv!.push(["集計", esc(S.summary.coverageText())]);
     return d;
   }
-  pageDetails(url) { const d = tree.info["p:" + url]; if (d) showDetails(d); }
-  redirected(url, final) {
+  pageDetails(url: string): void { const d = tree.info["p:" + url]; if (d) showDetails(d); }
+  redirected(url: string, final: string): void {
     const chip = this.pageChip[url]; if (!chip) return;
     const h = host(final);
     chip.title = `${h}（${host(url)} から転送）`; const ci = chip.querySelector(".ico"); if (ci) ci.outerHTML = icon(h);
   }
-  on(e) {
+  on(e: UIEvent): void {
     const f = this;
     switch (e.type) {
-      case "run.start": f.node("start"); f.setState("start", "done"); f.setText("start", e.request, ctx.runId); f.cur = "start"; break;
+      case "run.start": f.node("start"); f.setState("start", "done"); f.setText("start", e.request, ctx.runId ?? ""); f.cur = "start"; break;
       case "step.start": {
         const id = stageOf(e.node);
         f.labels[id] = labelOf(e.node);
@@ -170,7 +187,7 @@ export class ResearchFlow extends FlowBase {
         break;
       }
       case "feasibility": {
-        const v = { yes: "調べられる", partial: "一部は調べられない", no: "調べられない", unsure: "調べてみる" }[e.verdict] || e.verdict;
+        const v = ({ yes: "調べられる", partial: "一部は調べられない", no: "調べられない", unsure: "調べてみる" } as Record<string, string>)[e.verdict] || e.verdict;
         f.setText("feas", v, e.reason); f.push("feas", v); break;
       }
       case "decision": {
@@ -180,7 +197,7 @@ export class ResearchFlow extends FlowBase {
         f.setText("hub", d.adopted, d.kind === "same" ? d.label : `${d.label}（提案: ${d.proposal}）`);
         f.push("hub", d.kind === "same" ? d.adopted : `提案 ${d.proposal} → 採用 ${d.adopted}（${d.label}）`);
         if (changed) {
-          f.ghosts.push({ to: e.llm?.action && stageOf(e.llm.action), label: llm, t0: performance.now() });
+          f.ghosts.push({ to: e.llm?.action ? stageOf(e.llm.action) : "", label: llm, t0: performance.now() });
           const to = stageOf(e.action);
           if (to && to !== "hub") f.edge("hub", to).over++;
         }
@@ -188,16 +205,16 @@ export class ResearchFlow extends FlowBase {
       }
       case "search.start": f.setText("search", e.query, SEARCH_KIND[e.kind] || e.kind); f.push("search", e.query); break;
       case "search.done": {
-        const rel = e.results.filter((r) => r.relevant).length;
+        const rel = e.results.filter((r: { relevant: boolean }) => r.relevant).length;
         f.setText("search", undefined, e.failed || `結果 ${e.results.length} 件 · 対象を含む ${rel} 件`);
         f.flow("search", "hub", rel, null, "back");   // 対象を含む検索結果が判断へ戻る（0 件なら粒も 0 個）
         break;
       }
       case "aspects": {
         const cov = f.node("cov");
-        cov.el.querySelector(".covrows").innerHTML = e.aspects.map((a) =>
+        cov.el.querySelector(".covrows")!.innerHTML = e.aspects.map((a: string) =>
           `<div class="covrow" data-a="${esc(a)}"><span class="m"></span><span class="nm">${esc(a)}</span><span class="sq"></span></div>`).join("");
-        e.aspects.forEach((a) => { f.covRow[a] = cov.el.querySelector(`.covrow[data-a="${CSS.escape(a)}"]`); });
+        e.aspects.forEach((a: string) => { f.covRow[a] = cov.el.querySelector<HTMLElement>(`.covrow[data-a="${CSS.escape(a)}"]`)!; });
         f.setState("cov", "done"); f.setText("cov", `観点 ${e.aspects.length} つ`, `${e.subject_type} · ${e.origin}が作成`);
         f.setText("read", `対象の種類: ${e.subject_type}`, "観点を作った");
         f.edge(f.n.pages ? "pages" : "read", "cov", "data");
@@ -212,7 +229,7 @@ export class ResearchFlow extends FlowBase {
           if (f.e["read>cov"] && !f.e["pages>cov"]) { f.removeEdge("read>cov"); f.edge("pages", "cov", "data"); }
           chip = document.createElement("div"); chip.className = "pchip planned"; chip.title = e.host;
           chip.innerHTML = icon(e.host); chip.addEventListener("click", () => f.pageDetails(e.url));
-          pages.el.querySelector(".chipgrid").appendChild(chip); f.pageChip[e.url] = chip;
+          pages.el.querySelector(".chipgrid")!.appendChild(chip); f.pageChip[e.url] = chip;
           f.updatePages(); f.layout();
         }
         if (e.type === "page.start") { chip.className = "pchip running"; f.setText("read", e.host, e.db ? "DB記録を読込中" : "本文を取得中"); }
@@ -238,16 +255,16 @@ export class ResearchFlow extends FlowBase {
           if (c) { c.className = "pchip done"; if (e.facts.length) c.insertAdjacentHTML("beforeend", `<span class="n">${e.facts.length}</span>`); }
           f.updatePages();
           // 原文に引用が見つかった記述が、1 件ずつ網羅表の観点へ流れ、届いたら観点の四角になる
-          if (f.n.cov) f.flow("pages", "cov", e.facts.length, (i) => {
+          if (f.n.cov) f.flow("pages", "cov", e.facts.length, (i: number) => {
             const x = e.facts[i], row = x && f.covRow[x.aspect]; if (!row) return;
-            const sq = document.createElement("i"); if (e.tier !== 1) sq.className = "t2"; sq.title = x.text; row.querySelector(".sq").appendChild(sq);
+            const sq = document.createElement("i"); if (e.tier !== 1) sq.className = "t2"; sq.title = x.text; row.querySelector(".sq")!.appendChild(sq);
           });
         });
         f.push("read", `${host(e.url)}: 引用一致 ${e.facts.length} 件`);
         break;
       }
       case "coverage":
-        e.rows.forEach((r) => { const row = f.covRow[r.aspect]; if (row) row.className = "covrow " + (r.status === "確認済み" ? "ok" : r.status === "出典不足" ? "weak" : ""); });
+        e.rows.forEach((r: { aspect: string; status: string }) => { const row = f.covRow[r.aspect]; if (row) row.className = "covrow " + (r.status === "確認済み" ? "ok" : r.status === "出典不足" ? "weak" : ""); });
         f.setText("cov", undefined, S.summary.coverageText());
         break;
       case "image.candidates": f.setText("images", `${e.ranked} 候補`, `${e.fetching} 件を取得して確かめる`); break;
@@ -260,7 +277,7 @@ export class ResearchFlow extends FlowBase {
         f.flow("images", "imgs", 1, () => {
           th.innerHTML = NEEDS_PERMISSION.test(e.license || "") ? "許可が<br>必要" : `<img src="${imageUrl(e.src)}" alt="" onerror="this.remove()">`;
           if (NEEDS_PERMISSION.test(e.license || "")) th.classList.add("lock");
-          f.n.imgs.el.querySelector(".thumbs").appendChild(th); f.layout();
+          f.n.imgs.el.querySelector(".thumbs")!.appendChild(th); f.layout();
         });
         break;
       }
@@ -299,7 +316,7 @@ export class ResearchFlow extends FlowBase {
       case "conflicts":
         f.setText("conflicts", WORDS.conflicts(e.conflicts.length), `比べた観点 ${e.aspects.length}`);
         if (f.n.cov) f.setText("cov", undefined, S.summary.coverageText());
-        e.conflicts.forEach((c) => f.push("conflicts", c.topic));
+        e.conflicts.forEach((c: { topic: string }) => f.push("conflicts", c.topic));
         if (e.conflicts.length) f.flow("conflicts", "hub", e.conflicts.length, null, "back");
         break;
       case "question": f.setState("ask", "waiting"); f.setText("ask", e.question.split("\n")[0], "利用者の答えを待っている"); break;
@@ -317,4 +334,4 @@ export class ResearchFlow extends FlowBase {
 }
 
 // 木の側で転送が分かったら、流れの図のアイコンも切り替える（流れの図があるときだけ）
-export function linkRedirects(getFlow) { redirectHooks.push((url, final) => getFlow()?.redirected?.(url, final)); }
+export function linkRedirects(getFlow: () => { redirected?: (url: string, final: string) => void } | null | undefined): void { redirectHooks.push((url, final) => getFlow()?.redirected?.(url, final)); }

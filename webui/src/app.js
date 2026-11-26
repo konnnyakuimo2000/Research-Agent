@@ -19,14 +19,14 @@ import { api, withKey } from "./core/api.ts";
 import { ctx, hasFlow, caps, wake } from "./core/ctx.ts";
 import { dispatch, layoutFor, loadExtensions, norm, rememberExtensions, resetExtensions, runExtensions } from "./core/events.ts";
 import { fitMode, fitTarget, resetCamera, stepCamera, useView } from "./core/camera.ts";
-import { tree } from "./views/tree.js";
-import { GraphFlow } from "./views/flow.js";
+import { tree } from "./views/tree.ts";
+import { GraphFlow } from "./views/flow.ts";
 import { chatAgent, resetChat, runMeta, setEmpty, now } from "./panels/chat.ts";
-import { closeDetails } from "./panels/details.js";
+import { closeDetails } from "./panels/details.ts";
 import { answeredMeta, fmtUsd, loadModels, modelMeta } from "./panels/models.ts";
 import { consumeOneTime, headState, hooks as setHooks, initSettings, loadAgentStatus, openPanel,
   panelOpen, requestBody, settingsMeta } from "./panels/settings.ts";
-import { initLayout, showPane } from "./panels/layout.js";
+import { initLayout, showPane } from "./panels/layout.ts";
 import { agents, catalog, live as liveStore, nextAgent, openRunId, refreshRuns, runMenu, runsById, sendAnswer, setLive, waitAnswer } from "./stores/state.ts";
 import { mount } from "svelte";
 import SettingsPanel from "./components/settings/SettingsPanel.svelte";

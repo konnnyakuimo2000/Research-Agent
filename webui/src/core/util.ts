@@ -4,6 +4,8 @@ import { ctx } from "./ctx.ts";
 
 export interface Point { x: number; y: number }
 export interface Box { x: number; y: number; w: number; h: number }
+/** 3 次ベジェ曲線の 4 点（始点・制御点 2 つ・終点） */
+export type Curve = [Point, Point, Point, Point];
 
 /** id で要素を取る。画面の骨組み（index.html）にある要素だけに使う */
 export const $ = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -41,7 +43,7 @@ export const toggleBtn = `<button type="button" class="toggle" hidden>畳む ▾
 // 動き: 線を鉛筆で描く秒数、ノードが大きくなる秒数。線がノードの位置に届くころに、ノードが現れ始める
 export const STEM = 1.1, RIPEN = 0.9, ARRIVE = STEM * 0.92;
 // 3 次ベジェ曲線を途中（t）までで切る（枝が伸びていく途中を描く）
-export function bezierTo(p0: Point, p1: Point, p2: Point, p3: Point, t: number): Point[] {
+export function bezierTo(p0: Point, p1: Point, p2: Point, p3: Point, t: number): Curve {
   const L = (a: Point, b: Point): Point => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
   const a = L(p0, p1), b = L(p1, p2), c = L(p2, p3), d = L(a, b), e = L(b, c), f = L(d, e);
   return [p0, a, d, f];

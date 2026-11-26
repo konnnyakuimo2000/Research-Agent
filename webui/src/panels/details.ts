@@ -1,10 +1,18 @@
 // 詳細の欄（ノードを押すと右から出る）。d = { title, photo, alt, kv: [[名前, HTML]], facts, dropped, list: [HTML], note, events }
 import { $, esc } from "../core/util.ts";
 
-const closers = [];
-export const onDetailsClose = (fn) => closers.push(fn);
+interface Fact { text: string; aspect?: string; quote?: string; why?: string }
+/** 詳細の欄の中身。kv の値・list・note は呼ぶ側が esc した HTML */
+export interface Details {
+  title?: string; photo?: string; alt?: string;
+  kv?: [string, string | number | null | undefined][];
+  facts?: Fact[]; dropped?: Fact[]; list?: string[]; note?: string; events?: unknown[];
+}
 
-export function showDetails(d) {
+const closers: (() => void)[] = [];
+export const onDetailsClose = (fn: () => void): number => closers.push(fn);
+
+export function showDetails(d: Details): void {
   $("dTitle").textContent = d.title || "";
   let h = "";
   if (d.photo) h += `<img class="big" src="${d.photo}" alt="${esc(d.alt || "")}">`;

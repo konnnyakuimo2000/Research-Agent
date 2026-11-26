@@ -51,7 +51,7 @@ export const actionsFor = (where: string): Action[] => [...(actions[where] || []
 // 拡張の名前（research/v1）→ 置き場（extensions/research-v1/）
 export const slug = (name: string): string => name.replace(/[^A-Za-z0-9]+/g, "-");
 export function loadExtensions(names: string[]): Promise<boolean[]> {
-  return Promise.all(names.map((n) => (loading[n] ||= import(`../extensions/${slug(n)}/index.js`)
+  return Promise.all(names.map((n) => (loading[n] ||= import(`../extensions/${slug(n)}/index.ts`)
     .then(() => !!extensions[n])
     .catch((err) => { console.warn(`拡張 ${n} の部品を読み込めません`, err); return false; }))));
 }

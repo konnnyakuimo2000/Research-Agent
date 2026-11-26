@@ -41,9 +41,9 @@ def test_citation_two_opens_the_second_page():
     picked = run_js(f"""
       import {{ ctx }} from 'UI/core/ctx.ts';
       import {{ active }} from 'UI/core/events.ts';
-      import {{ tree }} from 'UI/views/tree.js';
-      import {{ treeRenderers }} from 'UI/extensions/research-v1/tree.js';
-      await import('UI/extensions/research-v1/index.js');
+      import {{ tree }} from 'UI/views/tree.ts';
+      import {{ treeRenderers }} from 'UI/extensions/research-v1/tree.ts';
+      await import('UI/extensions/research-v1/index.ts');
       ctx.AGENTS = {{ research: {{ ok: true, extensions: ["research/v1"] }} }}; ctx.runAgent = "research"; ctx.view = "flow";
       const node = (id) => ({{ id, el: document.createElement("div"), kids: [], tgt: {{ x: 0, y: 0 }}, extra: [] }});
       for (const u of ["{P1}", "{P2}"]) {{ tree.N["p:" + u] = node("p:" + u); tree.order.push("p:" + u); tree.info["p:" + u] = {{ title: u }}; }}
