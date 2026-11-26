@@ -1,0 +1,23 @@
+[package]
+name = "research-agent-desktop"
+version = "0.1.0"
+description = "Research-Agent のデスクトップアプリ（画面だけ。ゲートウェイにつなぐ）"
+edition = "2024"
+rust-version = "1.90"
+publish = false
+
+[lib]
+name = "research_agent_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.6", features = [] }
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tauri = { version = "2.12.7", features = ["tray-icon"] }
+tauri-plugin-notification = "2"
+tauri-plugin-single-instance = "2"
+# ゲートウェイの鍵を Windows の資格情報マネージャーに置く
+keyring = { version = "3", features = ["windows-native"] }

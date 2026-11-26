@@ -187,3 +187,13 @@ webui/node_modules/
 # 画面の確認の結果（Playwright）
 webui/test-results/
 webui/playwright-report/
+webui/dist-desktop/
+webui/src-tauri/target/
+webui/src-tauri/gen/
+# tauri icon が作る、Windows のアプリでは使わないアイコン
+webui/src-tauri/icons/android/
+webui/src-tauri/icons/ios/
+webui/src-tauri/icons/Square*
+webui/src-tauri/icons/StoreLogo.png
+webui/src-tauri/icons/64x64.png
+webui/src-tauri/icons/icon.icns

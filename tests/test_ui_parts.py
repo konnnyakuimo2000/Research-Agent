@@ -193,3 +193,26 @@ def test_the_lab_entrance_needs_the_gateway_key(tmp_path):
     keyed = TestClient(app_mod.create_app(runs_dir=tmp_path, resume=False, catalog=False, api_key="k"))
     assert keyed.get("/api/runs", headers=proxied).status_code == 401
     assert keyed.get("/api/runs", headers={**proxied, "Authorization": "Bearer k"}).status_code == 200
+
+
+def test_the_desktop_app_may_call_the_api(tmp_path, monkeypatch):
+    """デスクトップアプリ（Tauri）の出どころには API を開く（CORS）。鍵の確かめはそのまま。ほかの出どころには開かない。"""
+    from fastapi.testclient import TestClient
+
+    from research_agent.gateway import app as app_mod
+
+    monkeypatch.setenv("AGENT_UI_ORIGINS", "https://example.lab")
+    c = TestClient(app_mod.create_app(runs_dir=tmp_path, resume=False, catalog=False, api_key="k"))
+    pre = {"Access-Control-Request-Method": "GET", "Access-Control-Request-Headers": "authorization"}
+    for origin in ("http://tauri.localhost", "https://example.lab"):
+        r = c.options("/api/runs", headers={"Origin": origin, **pre})
+        assert r.status_code == 200 and r.headers["access-control-allow-origin"] == origin
+    assert "access-control-allow-origin" not in c.options("/api/runs", headers={"Origin": "https://evil.test", **pre}).headers
+    r = c.get("/api/runs", headers={"Origin": "http://tauri.localhost"})
+    assert r.status_code == 401 and r.headers["access-control-allow-origin"] == "http://tauri.localhost"   # 鍵は要る
+    ok = c.get("/api/runs", headers={"Origin": "http://tauri.localhost", "Authorization": "Bearer k"})
+    assert ok.status_code == 200
+    # 研究室の入口を通った事前の問い合わせ（鍵なし）にも答える（鍵を求めるのは、その後の本当の依頼）
+    open_app = TestClient(app_mod.create_app(runs_dir=tmp_path, resume=False, catalog=False, api_key=""))
+    r = open_app.options("/api/runs", headers={"Origin": "http://tauri.localhost", "X-Forwarded-For": "10.0.0.5", **pre})
+    assert r.status_code == 200

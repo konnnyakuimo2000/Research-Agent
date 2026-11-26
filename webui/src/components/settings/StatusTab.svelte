@@ -1,7 +1,8 @@
 <!-- 設定のパネルの「接続と使用量」: エージェント（とそれが使うモデル・検索）、モデルの窓口、開いている調査の費用 -->
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api } from "../../core/api.ts";
+  import { api, gatewayBase, needConnect } from "../../core/api.ts";
+  import { DESKTOP } from "../../core/desktop.ts";
   import { ctx } from "../../core/ctx.ts";
   import { agentStatus, agents, catalog, modelStatus } from "../../stores/state.ts";
   import { refreshStatus } from "../../panels/settings.ts";
@@ -33,6 +34,11 @@
   onMount(() => { refreshStatus(); loadCost(); });
 </script>
 
+{#if DESKTOP}
+  <h4>つなぐ先</h4>
+  <p class="spend mono">{gatewayBase() || "まだ決めていない"}</p>
+  <div class="fbtns"><button type="button" id="changeGateway" onclick={() => needConnect.set(true)}>つなぐ先を変える</button></div>
+{/if}
 <h4>エージェント</h4>
 {#if !st}
   <p class="note">まだ確かめていません。</p>

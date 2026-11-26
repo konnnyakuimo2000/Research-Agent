@@ -35,6 +35,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from research_agent import assets
@@ -51,6 +52,7 @@ HEARTBEAT_SECONDS = 15
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 UI_DIR = Path(__file__).resolve().parents[1] / "ui"     # webui/ のビルド結果（npm run build。git の外）
+DESKTOP_ORIGINS = ("http://tauri.localhost", "https://tauri.localhost", "tauri://localhost")   # Windows・macOS/Linux の Tauri
 KEY_REQUIRED = ("研究室の入口（HTTPS）から使うには、ゲートウェイの鍵が要ります。.env の AGENT_API_KEY に"
                 "長いランダムな文字列を入れて、ゲートウェイを起動し直してください（docs/setup.md「研究室で共有する」）。")
 UI_MISSING = "画面がビルドされていません。webui/ で `npm ci` と `npm run build` を実行してください（docs/setup.md）。"
@@ -90,6 +92,13 @@ def create_app(registry: Registry | None = None, runs_dir: Path | None = None, a
         if not api_key and "x-forwarded-for" in request.headers and (path.startswith("/api/") or path.startswith("/v1/")):
             return PlainTextResponse(KEY_REQUIRED, status_code=403)
         return await call_next(request)
+
+    # デスクトップアプリ（webui/src-tauri。画面の出どころは http(s)://tauri.localhost）から API を呼べるようにする。
+    # 足すときは AGENT_UI_ORIGINS（カンマ区切り）。鍵（AGENT_API_KEY）の確かめはそのまま効く。
+    # 一番外側に置く（鍵を求める前に、ブラウザの事前の問い合わせ OPTIONS に答えるため）
+    origins = [*DESKTOP_ORIGINS, *(o.strip() for o in os.getenv("AGENT_UI_ORIGINS", "").split(",") if o.strip())]
+    app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST", "DELETE"],
+                       allow_headers=["Authorization", "Content-Type"], max_age=600)
 
     def check_key(authorization: str | None, key: str | None = None) -> None:
         # EventSource はヘッダーを付けられないので、?key= でも受ける

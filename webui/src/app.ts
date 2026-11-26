@@ -36,6 +36,9 @@ import Recent from "./components/history/Recent.svelte";
 import ChatLog from "./components/chat/ChatLog.svelte";
 import UpdateNotice from "./components/UpdateNotice.svelte";
 import KeyDialog from "./components/KeyDialog.svelte";
+import ConnectDialog from "./components/ConnectDialog.svelte";
+import { initApi } from "./core/api.ts";
+import { DESKTOP } from "./core/desktop.ts";
 import { registerSW } from "virtual:pwa-register";
 import { update } from "./stores/state.ts";
 import { notifyFor } from "./panels/notify.ts";
@@ -44,6 +47,10 @@ import type { AgentsReply, RunSummary, SettingsValues, UIEvent } from "./types/a
 /** チャットの上の行（panels/settings.ts の headState） */
 type Head = { agent: string; preset: string; models: string; oneTime: string; external: boolean; warnings: string[] } | null;
 const appEl = () => document.querySelector<HTMLElement>(".app")!;
+
+
+// デスクトップアプリ: つなぐ先と鍵を読んでから、API を呼び始める（ブラウザでは何もしない）
+await initApi();
 
 // ---- エージェント（ゲートウェイがつないでいるもの） ----
 function setLayout(id: string): void {
@@ -295,9 +302,11 @@ catalog.subscribe(() => { if (ctx.runId && RUNS[ctx.runId]) showRunMeta(ctx.runI
 
 mount(SettingsPanel, { target: $("settingsRoot") });
 mount(UpdateNotice, { target: $("updateRoot") });
-mount(KeyDialog, { target: $("updateRoot") });   // ゲートウェイが鍵を求めたら出す
-// Service Worker（PWA）。HTTPS か localhost でないと登録できない（そのときは普通のページとして動く）
-const applyUpdate = registerSW({ onNeedRefresh: () => update.set({ ready: true, apply: () => applyUpdate(true) }) });
+mount(KeyDialog, { target: $("updateRoot") });
+mount(ConnectDialog, { target: $("updateRoot") });   // デスクトップアプリのつなぐ先   // ゲートウェイが鍵を求めたら出す
+// Service Worker（PWA）。HTTPS か localhost でないと登録できない（そのときは普通のページとして動く）。
+// デスクトップアプリは画面をアプリの中に持つので、Service Worker を使わない
+if (!DESKTOP) { const applyUpdate = registerSW({ onNeedRefresh: () => update.set({ ready: true, apply: () => applyUpdate(true) }) }); }
 mount(RunList, { target: $("runs"), props: { onOpen: (r) => { closeSide(); open(r.id, LIVE.includes(r.status), r.agent); } } });
 mount(RunMenu, { target: $("runMenuRoot"), props: {
   onDetail: (r, anchor) => { closeSide(); openPanel("run", anchor, r); },

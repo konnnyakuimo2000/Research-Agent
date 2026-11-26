@@ -165,6 +165,25 @@ npm run e2e      # 画面を通しで動かす（Playwright。この PC の Chro
 - 設定 › 表示 の「調査の知らせ」を入れると、画面が後ろにあるときに、開いている調査が答えを待つ・終わる・止まると OS の通知で知らせる
 - アプリと通知は HTTPS か `localhost` でしか使えない。この PC の http://localhost:8100/ui/ ではそのまま使える。研究室のほかの PC からは、次の HTTPS の入口を通す
 
+### デスクトップアプリ（Windows）
+
+画面だけのアプリ（Tauri。`webui/src-tauri/`）。調査はゲートウェイ（この PC の Docker か、研究室の HTTPS の入口）がする。
+
+- 入れる: `Research-Agent_<版>_x64_ja-JP.msi` を開く（作り方は下）。スタートメニューに「Research-Agent」が入る
+- 初めて開くと「つなぐ先」が出る。ゲートウェイの住所（この PC なら `http://localhost:8100`、研究室なら `https://<LAB_HOST>`）と鍵（`AGENT_API_KEY`）を入れ、「確かめてつなぐ」。後から変えるときは 設定 › 接続と使用量 ›「つなぐ先を変える」
+- 鍵は Windows の資格情報マネージャーに、つなぐ先ごとに置く（「Research-Agent」の項目。アプリを消しても残るので、要らなければ資格情報マネージャーから消す）
+- 窓を閉じてもトレイに残り、開いている調査の知らせを続ける。終わるときはトレイのアイコンの右クリック →「終了」。もう一度起動すると、開いている窓が前に出る
+- 研究室の入口につなぐときは、その PC に研究室の証明書を入れておく（ブラウザと同じ。下の「研究室で共有する」の 5）
+- ゲートウェイは、アプリの出どころ（`http://tauri.localhost`）からの API を受け付ける（CORS）。ほかの出どころを足すときは `.env` の `AGENT_UI_ORIGINS`（カンマ区切り）
+
+作り方（初回だけ Rust が要る: `winget install Rustlang.Rustup`。Visual Studio の C++ のビルドツールも要る）:
+
+```powershell
+cd webui
+npm run desktop:build   # src-tauri/target/release/bundle/msi/ に .msi ができる（初回は 10 分ほど）
+npm run desktop         # 開発用: 画面を直すとすぐ反映される窓で開く
+```
+
 ### 研究室で共有する（HTTPS の入口）
 
 Caddy（`docker-compose.yml` の `caddy`。既定では起動しない）が、この PC の 443 番で HTTPS を受けてゲートウェイへ渡す。証明書は Caddy の中の認証局が作る。

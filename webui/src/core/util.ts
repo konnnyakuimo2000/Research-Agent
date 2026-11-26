@@ -1,5 +1,5 @@
 // 画面のどこでも使う小さな道具（文字の安全な埋め込み・URL・ノードの見た目の部品・線の曲線と動き）
-import { withKey } from "./api.ts";
+import { apiUrl, withKey } from "./api.ts";
 import { ctx } from "./ctx.ts";
 
 export interface Point { x: number; y: number }
@@ -31,7 +31,7 @@ export const sameUrl = (a: string, b: string): boolean => canonicalUrl(a) === ca
 // サイトのアイコン（取れなければ頭文字）
 export function icon(h: string): string {
   const letter = esc((h || "?").replace(/^www\./, "")[0]?.toUpperCase() || "?");
-  return `<img class="ico" src="/api/favicon?host=${encodeURIComponent(h)}" alt="" onerror="this.outerHTML='<span class=&quot;ico letter&quot;>${letter}</span>'">`;
+  return `<img class="ico" src="${apiUrl(`/api/favicon?host=${encodeURIComponent(h)}`)}" alt="" onerror="this.outerHTML='<span class=&quot;ico letter&quot;>${letter}</span>'">`;
 }
 // ゲートウェイが配る、その依頼の画像
 export const imageUrl = (src: string): string => withKey(`/api/image?run=${encodeURIComponent(ctx.runId ?? "")}&src=${encodeURIComponent(src)}`);

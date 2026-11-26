@@ -43,6 +43,7 @@ services:
       VL_BASE_URL: ${VL_BASE_URL:?.env に VL_BASE_URL を設定してください}   # 設定の読み込みに要る（ゲートウェイは LLM を呼ばない）
       AGENT_API_KEY: ${AGENT_API_KEY:-}
       AGENT_SERVICE_KEY: ${AGENT_SERVICE_KEY:-}
+      AGENT_UI_ORIGINS: ${AGENT_UI_ORIGINS:-}   # 画面を置くほかの出どころ（デスクトップアプリは足さなくてよい）
       AGENT_RESEARCH_URL: http://agent-research:8000
       AGENT_CHAT_URL: http://agent-chat:8000
       # モデルの一覧を読み、依頼ごとのモデルの選び直しを確かめる（役割に要る能力があるか）

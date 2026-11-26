@@ -4,16 +4,19 @@
 // - 通知は Service Worker から出す（Android の Chrome は、ページから new Notification() を出せない）。押すと画面に戻る
 //   （public/sw-notify.js）。Service Worker がないとき（開発中など）はページから出す
 // - 通知は HTTPS か localhost でしか使えない
+// - デスクトップアプリでは、Tauri の通知（@tauri-apps/plugin-notification）で出す
 import { writable } from "svelte/store";
 import { store } from "../core/api.ts";
+import { DESKTOP } from "../core/desktop.ts";
 import type { UIEvent } from "../types/api.ts";
 
 const KEY = "notify";
 const ICON = "/ui/icons/icon-192.png";
 export type NotifyState = "on" | "off" | "denied" | "unsupported";
 
-export const supported = (): boolean => typeof window !== "undefined" && "Notification" in window && window.isSecureContext !== false;
+export const supported = (): boolean => DESKTOP || typeof window !== "undefined" && "Notification" in window && window.isSecureContext !== false;
 function initial(): NotifyState {
+  if (DESKTOP) return store.get<boolean>(KEY, false) ? "on" : "off";      // 許可は入れるときに確かめる
   if (!supported()) return "unsupported";
   if (Notification.permission === "denied") return "denied";
   return store.get<boolean>(KEY, false) && Notification.permission === "granted" ? "on" : "off";
@@ -23,7 +26,13 @@ export const notifyState = writable<NotifyState>(initial());
 /** 知らせを入れる・切る。入れるときは許可を求める（断られたら denied） */
 export async function setNotify(on: boolean): Promise<NotifyState> {
   let next: NotifyState = "off";
-  if (!supported()) next = "unsupported";
+  if (DESKTOP) {
+    if (on) {
+      const n = await import("@tauri-apps/plugin-notification");
+      const ok = (await n.isPermissionGranted()) || (await n.requestPermission()) === "granted";
+      next = ok ? "on" : "denied";
+    }
+  } else if (!supported()) next = "unsupported";
   else if (on) {
     const p = Notification.permission === "default" ? await Notification.requestPermission() : Notification.permission;
     next = p === "granted" ? "on" : p === "denied" ? "denied" : "off";
@@ -53,6 +62,11 @@ export async function notifyFor(e: UIEvent, runId: string | null, request: strin
   if (!document.hidden && document.hasFocus()) return false;           // 見えているので出さない
   const m = messageFor(e, request);
   if (!m) return false;
+  if (DESKTOP) {
+    const n = await import("@tauri-apps/plugin-notification");
+    n.sendNotification({ title: m.title, body: m.body });
+    return true;
+  }
   const options: NotificationOptions = { body: m.body, tag: `run-${runId}`, icon: ICON, data: { url: `/ui/?run=${encodeURIComponent(runId)}` } };
   const reg = await navigator.serviceWorker?.getRegistration?.("/ui/");
   if (reg) await reg.showNotification(m.title, options);

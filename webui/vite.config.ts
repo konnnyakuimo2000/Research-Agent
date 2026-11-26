@@ -7,17 +7,21 @@
 //   （古い調査の状態を出さないため）
 // - 新しい版が届いても勝手に読み直さない（調査の途中で画面が変わらないように）。画面に「再読み込み」を出す（components/UpdateNotice）
 // - Service Worker は HTTPS か localhost でしか動かない（研究室の LAN からは Caddy の HTTPS の入口を通す。docs/setup.md）
+//
+// デスクトップアプリ（--mode desktop。webui/src-tauri が使う）: 画面をアプリの中の / に置き（dist-desktop/）、
+// Service Worker は作らない（アプリが画面を持つため）。API はつなぐ先（core/api.ts）へ
 import { defineConfig } from "vitest/config";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { VitePWA } from "vite-plugin-pwa";
 
 const THEME = "#171717";
 
-export default defineConfig({
-  base: "/ui/",
+export default defineConfig(({ mode }) => ({
+  base: mode === "desktop" ? "/" : "/ui/",
   plugins: [
     svelte(),
     VitePWA({
+      disable: mode === "desktop",          // 作らない（app.ts の registerSW は何もしない形のまま使える）
       registerType: "prompt",
       injectRegister: false,              // 登録は app.ts（新しい版の知らせを画面に出すため）
       includeAssets: ["logo.svg", "icons/apple-touch-icon.png", "sw-notify.js"],
@@ -49,7 +53,7 @@ export default defineConfig({
   ],
   // テストでは Svelte のブラウザ用（mount できる方）を使う
   resolve: process.env.VITEST ? { conditions: ["browser"] } : undefined,
-  build: { outDir: "../src/research_agent/ui", emptyOutDir: true, target: "es2022" },
+  build: { outDir: mode === "desktop" ? "dist-desktop" : "../src/research_agent/ui", emptyOutDir: true, target: "es2022" },
   server: { proxy: { "/api": { target: process.env.GATEWAY_URL || "http://localhost:8100", changeOrigin: true } } },
   test: { environment: "jsdom", include: ["src/**/*.test.ts"] },
-});
+}));
