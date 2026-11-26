@@ -37,6 +37,7 @@ import ChatLog from "./components/chat/ChatLog.svelte";
 import UpdateNotice from "./components/UpdateNotice.svelte";
 import { registerSW } from "virtual:pwa-register";
 import { update } from "./stores/state.ts";
+import { notifyFor } from "./panels/notify.ts";
 import type { AgentsReply, RunSummary, SettingsValues, UIEvent } from "./types/api.ts";
 
 /** チャットの上の行（panels/settings.ts の headState） */
@@ -109,7 +110,11 @@ function setView(v: "flow" | "tree"): void {
   wake();
 }
 document.querySelectorAll<HTMLElement>("[data-view]").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view as "flow" | "tree")));
-function handle(e: UIEvent): void { dispatch(e); ctx.flow.on(e); wake(); }
+function handle(e: UIEvent): void {
+  dispatch(e); ctx.flow.on(e); wake();
+  // ライブの調査が答えを待つ・終わる・止まったら、画面が後ろにあれば OS の通知で知らせる（設定の「表示」で入れたとき）
+  if (!ctx.replay) notifyFor(e, ctx.runId, (ctx.runId && RUNS[ctx.runId]?.request) || "");
+}
 
 // ---- 調査の開始・答え・一覧 ----
 // liveState（動いている調査の状態: running / paused / ""）と waitingRun（答えを待っている依頼）は、ストアの写し

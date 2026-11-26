@@ -20,7 +20,7 @@ export default defineConfig({
     VitePWA({
       registerType: "prompt",
       injectRegister: false,              // 登録は app.ts（新しい版の知らせを画面に出すため）
-      includeAssets: ["logo.svg", "icons/apple-touch-icon.png"],
+      includeAssets: ["logo.svg", "icons/apple-touch-icon.png", "sw-notify.js"],
       manifest: {
         name: "Research-Agent",
         short_name: "Research-Agent",
@@ -43,6 +43,7 @@ export default defineConfig({
         navigateFallback: "/ui/index.html",
         navigateFallbackDenylist: [/^\/api\//],
         cleanupOutdatedCaches: true,
+        importScripts: ["sw-notify.js"],     // 調査の知らせを押したら画面に戻る（panels/notify.ts）
       },
     }),
   ],
