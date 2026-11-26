@@ -4,8 +4,6 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "allowJs": true,
-    "checkJs": false,
     "strict": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
@@ -13,5 +11,5 @@
     "verbatimModuleSyntax": true,
     "types": ["vite/client"]
   },
-  "include": ["src/**/*.ts", "src/**/*.js", "src/**/*.svelte", "e2e/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.svelte", "e2e/**/*.ts"]
 }
