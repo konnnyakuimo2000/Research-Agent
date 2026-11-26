@@ -132,7 +132,7 @@ def test_every_extension_an_agent_names_has_screen_parts():
 def test_common_screen_parts_do_not_know_the_research_extension():
     """共通の部品（core・views・panels）は 0・1 段だけを知る。調査の言葉（網羅表・ページ・画像）は拡張の中だけ。"""
     common = [p for d in ("core", "views", "panels", "components", "stores") for ext in ("js", "ts", "svelte")
-              for p in (UI / d).rglob(f"*.{ext}") if not p.name.endswith(".test.ts")] + [UI / "app.js"]
+              for p in (UI / d).rglob(f"*.{ext}") if not p.name.endswith(".test.ts")] + [UI / "app.ts"]
     for p in common:
         text = re.sub(r"(^|\s)//.*", "", p.read_text(encoding="utf-8"))   # コメントの例示は除く
         for word in ("research/v1", "research-v1", "page.done", "coverage", "網羅表", "aspects"):
@@ -143,7 +143,7 @@ def test_modules_import_only_files_that_exist():
     for p in [*UI.rglob("*.js"), *UI.rglob("*.ts"), *UI.rglob("*.svelte")]:
         for target in re.findall(r'from\s+"(\.[^"]+)"', p.read_text(encoding="utf-8")):
             assert (p.parent / target).resolve().exists(), (p, target)
-    assert '<script type="module" src="/src/app.js">' in (UI.parent / "index.html").read_text(encoding="utf-8")
+    assert '<script type="module" src="/src/app.ts">' in (UI.parent / "index.html").read_text(encoding="utf-8")
 
 
 def test_the_gateway_says_when_the_screen_is_not_built(tmp_path, monkeypatch):

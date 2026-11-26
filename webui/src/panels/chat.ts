@@ -8,7 +8,7 @@ import { refreshRuns, sendAnswer, setLive, waitAnswer } from "../stores/state.ts
 import type { UIEvent } from "../types/api.ts";
 
 // 動き（running / paused）・答え待ち・一覧の読み直しはストア（stores/state.ts）に出す。
-// app.js がそれを読んで、ボタンと入力欄を変える。番号の答えのボタンは hooks.sendAnswer を呼ぶ（テストで差し替える）
+// app.ts がそれを読んで、ボタンと入力欄を変える。番号の答えのボタンは hooks.sendAnswer を呼ぶ（テストで差し替える）
 export const hooks = {
   sendAnswer: (text: string): Promise<void> | void =>
     sendAnswer(text).catch((err) => { chatAgent(`<p>答えを送れませんでした: ${esc(err.message)}</p>`); }),

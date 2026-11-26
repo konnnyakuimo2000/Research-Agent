@@ -34,19 +34,24 @@ import RunList from "./components/history/RunList.svelte";
 import RunMenu from "./components/history/RunMenu.svelte";
 import Recent from "./components/history/Recent.svelte";
 import ChatLog from "./components/chat/ChatLog.svelte";
+import type { AgentsReply, RunSummary, SettingsValues, UIEvent } from "./types/api.ts";
+
+/** チャットの上の行（panels/settings.ts の headState） */
+type Head = { agent: string; preset: string; models: string; oneTime: string; external: boolean; warnings: string[] } | null;
+const appEl = () => document.querySelector<HTMLElement>(".app")!;
 
 // ---- エージェント（ゲートウェイがつないでいるもの） ----
-function setLayout(id) {
-  const app = document.querySelector(".app"), only = !hasFlow(id);
-  app.classList.toggle("chatonly", only);
+function setLayout(id: string): void {
+  const only = !hasFlow(id);
+  appEl().classList.toggle("chatonly", only);
   if (only) showPane("chat");
   // 一時停止・再開のボタンは作業記録の上に置く。作業記録のないエージェントでは、チャットの上に置く
-  (only ? $("headCtl") : document.querySelector(".hud-top")).appendChild($("runCtl"));
+  (only ? $("headCtl") : document.querySelector(".hud-top")!).appendChild($("runCtl"));
 }
 let defaultAgent = "research";
 async function loadAgents() {
   try {
-    const { agents: list, default: def } = await api("/api/agents");
+    const { agents: list, default: def } = await api<AgentsReply>("/api/agents");
     defaultAgent = def;
     rememberExtensions(list);
     await loadExtensions([...new Set(list.flatMap((a) => a.extensions || []))]);
@@ -67,7 +72,7 @@ setHooks.startNew = () => newResearch();
 
 // チャットの上: 次の依頼に効くエージェント・プリセット・モデルと、送信に響く異常（外部モデル・接続・使えなくなったモデル）
 headState.subscribe(renderHead);
-function renderHead(s) {
+function renderHead(s: Head): void {
   const btn = $("headSummary");
   if (!s) { btn.textContent = ""; $("headWarn").hidden = true; return; }
   const parts = [s.agent, s.preset, s.models].filter(Boolean);
@@ -78,8 +83,8 @@ function renderHead(s) {
   $("headWarn").hidden = !s.warnings.length;
   $("headWarn").innerHTML = s.warnings.map(esc).join("<br>");
 }
-$("headSummary").addEventListener("click", (ev) => openPanel("research", ev.currentTarget));
-$("settingsBtn").addEventListener("click", (ev) => { closeSide(); openPanel("research", narrow() ? $("runsBtn") : ev.currentTarget); });
+$("headSummary").addEventListener("click", (ev) => openPanel("research", ev.currentTarget as HTMLElement));
+$("settingsBtn").addEventListener("click", (ev) => { closeSide(); openPanel("research", narrow() ? $("runsBtn") : ev.currentTarget as HTMLElement); });
 
 // ---- 図（流れの図 / 木）とカメラ ----
 // 流れの図は、依頼のエージェントの拡張に並べ方があればそれを、なければ名乗りの graph の一般的な並べ方を使う
@@ -91,24 +96,24 @@ function reset() {
   closeDetails(); $("flowEmpty").hidden = false;
   resetCamera(); useView(activeView()); wake(1);
 }
-function setView(v) {
+function setView(v: "flow" | "tree"): void {
   ctx.view = v;
   $("graph").hidden = v !== "flow"; tree.el.hidden = v !== "tree";
   activeView().snap();
   $("flowEmpty").hidden = !activeView().isEmpty();
-  document.querySelectorAll("[data-view]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === v)));
+  document.querySelectorAll<HTMLElement>("[data-view]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === v)));
   useView(activeView()); fitMode(true); fitTarget(true);   // 切り替えたら、カメラもすぐ全体に合わせる
   wake();
 }
-document.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
-function handle(e) { dispatch(e); ctx.flow.on(e); wake(); }
+document.querySelectorAll<HTMLElement>("[data-view]").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view as "flow" | "tree")));
+function handle(e: UIEvent): void { dispatch(e); ctx.flow.on(e); wake(); }
 
 // ---- 調査の開始・答え・一覧 ----
 // liveState（動いている調査の状態: running / paused / ""）と waitingRun（答えを待っている依頼）は、ストアの写し
-let source = null, waitingRun = null, liveState = "";
+let source: EventSource | null = null, waitingRun: string | null = null, liveState = "";
 function showComposer() {
   $("composer").classList.toggle("answer", !!waitingRun);
-  $("input").placeholder = waitingRun ? "答えを入力（番号でも可）" : "調べたいことを入力";
+  $<HTMLTextAreaElement>("input").placeholder = waitingRun ? "答えを入力（番号でも可）" : "調べたいことを入力";
 }
 // 調査が動いている間（再生中も）は、作業記録の上のボタンで一時停止・再開（止めるだけのエージェントは「止める」）
 function busy() { return !waitingRun && (ctx.replay ? queue.length > 0 || !!source : liveState !== ""); }
@@ -120,7 +125,7 @@ function updateSend() {
   ctl.textContent = !canPause ? "止める" : p ? (ctx.replay ? "再生を続ける" : "再開") : (ctx.replay ? "再生を止める" : "一時停止");
   ctl.classList.toggle("on", stop && p);
   // ライブの調査が動いている間は、新しい依頼を送らない（答え待ちのときは答えを送る）
-  const b = $("sendBtn"), liveBusy = stop && !ctx.replay;
+  const b = $<HTMLButtonElement>("sendBtn"), liveBusy = stop && !ctx.replay;
   b.disabled = liveBusy;
   b.title = liveBusy ? "調査中" : waitingRun ? "答えを送る" : "送る";
   b.setAttribute("aria-label", b.title);
@@ -129,7 +134,7 @@ async function togglePause() {
   if (ctx.replay) { playing = !playing; updateSend(); now(playing ? "再生している" : "一時停止している"); return; }
   const action = !caps(ctx.runAgent).includes("pause") ? "cancel" : liveState === "paused" ? "resume" : "pause";
   try { await api(`/api/runs/${ctx.runId}/${action}`, {}); }
-  catch (err) { chatAgent(`<p>${action === "resume" ? "再開できませんでした" : "止められませんでした"}: ${esc(err.message)}</p>`); }
+  catch (err) { chatAgent(`<p>${action === "resume" ? "再開できませんでした" : "止められませんでした"}: ${esc((err as Error).message)}</p>`); }
 }
 $("runCtl").addEventListener("click", togglePause);
 $("composer").addEventListener("submit", async (ev) => {
@@ -138,7 +143,7 @@ $("composer").addEventListener("submit", async (ev) => {
   const text = input.value.trim(); if (!text) return;
   if (waitingRun) {
     input.value = ""; growInput();
-    sendAnswer(text).catch((err) => chatAgent(`<p>答えを送れませんでした: ${esc(err.message)}</p>`));
+    sendAnswer(text).catch((err) => chatAgent(`<p>答えを送れませんでした: ${esc((err as Error).message)}</p>`));
     return;
   }
   const body = requestBody();
@@ -147,7 +152,7 @@ $("composer").addEventListener("submit", async (ev) => {
     input.value = ""; growInput();
     consumeOneTime();                                  // 「この依頼だけ」は次の依頼に持ち越さない
     open(r.id, true, r.agent, r.models, r.settings || body.settings); refreshRuns();
-  } catch (err) { chatAgent(`<p>始められませんでした: ${esc(err.message)}</p>`); }   // 送れなければ、入力した文は残す
+  } catch (err) { chatAgent(`<p>始められませんでした: ${esc((err as Error).message)}</p>`); }   // 送れなければ、入力した文は残す
 });
 function newResearch() {
   openSeq++; closeSource(); ctx.runId = null; ctx.runAgent = ctx.agentId; reset(); setLayout(ctx.agentId); resetChat(); setEmpty(true);
@@ -156,9 +161,9 @@ function newResearch() {
 $("newBtn").addEventListener("click", () => { closeSide(); newResearch(); });
 // 履歴: 広い画面では列を出す・隠す。狭い画面（列にしない幅）では、チャットの上に重ねて開く
 const narrow = () => window.matchMedia("(max-width: 1180px)").matches;
-const closeSide = () => document.querySelector(".app").classList.remove("sideopen");
+const closeSide = () => appEl().classList.remove("sideopen");
 $("runsBtn").addEventListener("click", () => {
-  const app = document.querySelector(".app");
+  const app = appEl();
   if (narrow()) app.classList.toggle("sideopen");
   else { app.classList.toggle("noside"); setTimeout(() => { fitMode(true); relayout(); }, 50); }
 });
@@ -166,11 +171,11 @@ $("scrim").addEventListener("click", closeSide);
 document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && !panelOpen()) { closeSide(); runMenu.set(null); } });
 
 // 入力欄: Enter で送る（Shift+Enter は改行。日本語の変換を確定する Enter では送らない）。行が増えたら高さを伸ばす
-const input = $("input");
+const input = $<HTMLTextAreaElement>("input");
 function growInput() { input.style.height = "auto"; input.style.height = Math.min(180, input.scrollHeight) + "px"; }
 input.addEventListener("input", growInput);
 input.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); $("composer").requestSubmit(); }
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); $<HTMLFormElement>("composer").requestSubmit(); }
 });
 
 setInterval(() => loadAgentStatus(), 30000);
@@ -178,7 +183,7 @@ setInterval(loadModels, 60000);
 
 // 依頼で使ったモデル・設定・費用を、チャットの頭に小さく出す（押すと履歴の詳細。描くのは ChatLog）
 let meta = { assigned: "", priced: false };
-function showRunMeta(id, models, settings) {
+function showRunMeta(id: string, models?: Record<string, string>, settings?: SettingsValues): void {
   const m = modelMeta(models), s = settingsMeta(ctx.runAgent, settings);
   meta = { assigned: m?.text || "", priced: !!m?.priced };
   runMeta.set({ models: m?.text || "", modelsTitle: "", settings: s, cost: "" });   // モデルの一覧が後から届いたら、作り直す
@@ -186,7 +191,7 @@ function showRunMeta(id, models, settings) {
 }
 // 窓口が数えた、この調査の費用と応答したモデル。応答したモデルが分かれば、割り当ての表示をそれに置き換える
 // （割り当ては title に残す）。分からない（窓口を通していない古い記録など）ときは、割り当てのまま
-async function showRunCost(id) {
+async function showRunCost(id: string): Promise<void> {
   try {
     const u = await api(`/api/runs/${encodeURIComponent(id)}/usage`);
     if (id !== ctx.runId) return;
@@ -200,14 +205,14 @@ async function showRunCost(id) {
 }
 
 // 再生: 終わった調査は、記録の時刻どおりに（速さを掛けて）流す。動いている調査は届いたらすぐ描く
-let RUNS = {};   // 一覧の依頼（id → 要約。使ったモデル・設定を出すため）
-let queue = [], clock = 0, speed = 8, playing = true, lastTs = null, stopAt = Infinity, openSeq = 0, skipped = 0, lastSeen = 0;
+let RUNS: Record<string, RunSummary> = {};   // 一覧の依頼（id → 要約。使ったモデル・設定を出すため）
+let queue: UIEvent[] = [], clock = 0, speed = 8, playing = true, lastTs: number | null = null, stopAt = Infinity, openSeq = 0, skipped = 0, lastSeen = 0;
 // ライブか履歴の再生か。再生は実際の速さと、飛ばした無イベントの時間も出す
-function showMode(text) { $("modeBadge").textContent = text ?? (ctx.replay
+function showMode(text?: string): void { $("modeBadge").textContent = text ?? (ctx.replay
   ? (speed === 0 ? "履歴（すぐに表示）" : `履歴を${speed}倍で再生`) + (skipped ? ` · 無イベントの ${Math.round(skipped)} 秒を省略` : "")
   : ctx.runId ? "ライブ" : ""); }
 function closeSource() { if (source) { source.close(); source = null; } queue = []; }
-async function open(id, live, agent, models, settings) {
+async function open(id: string, live: boolean, agent?: string, models?: Record<string, string>, settings?: SettingsValues): Promise<void> {
   const seq = ++openSeq;
   closeSource();
   const agentId = agent || RUNS[id]?.agent || defaultAgent;
@@ -226,15 +231,17 @@ async function open(id, live, agent, models, settings) {
   source.addEventListener("end", () => { if (source) { source.close(); source = null; } updateSend(); if (ctx.runId === id) showRunCost(id); });   // 終わったら、応答したモデルと費用を読み直す
   source.addEventListener("missing", () => { if (source) { source.close(); source = null; } chatAgent("<p>この調査の記録が見つかりません。</p>"); });
 }
-function frame(ts) {
+// イベントの時刻（依頼の開始からの秒。届いた封筒には必ずある）
+const at = (e: UIEvent): number => e.t ?? 0;
+function frame(ts: number): void {
   if (lastTs === null) lastTs = ts;
   const dt = Math.min(0.1, (ts - lastTs) / 1000); lastTs = ts;
   if (ctx.replay && playing && queue.length) {
-    if (speed === 0) { ctx.instant = true; while (queue.length && queue[0].t <= stopAt) handle(queue.shift()); tree.layout(); ctx.flow.layout(); ctx.instant = false; }
+    if (speed === 0) { ctx.instant = true; while (queue.length && at(queue[0]) <= stopAt) handle(queue.shift()!); tree.layout(); ctx.flow.layout(); ctx.instant = false; }
     else {
       clock += dt * speed;
-      if (queue[0].t - clock > 20) { skipped += queue[0].t - clock; clock = queue[0].t; showMode(); }   // 利用者の答えを待った時間などの長い空白は飛ばす
-      while (queue.length && queue[0].t <= clock) handle(queue.shift());
+      if (at(queue[0]) - clock > 20) { skipped += at(queue[0]) - clock; clock = at(queue[0]); showMode(); }   // 利用者の答えを待った時間などの長い空白は飛ばす
+      while (queue.length && at(queue[0]) <= clock) handle(queue.shift()!);
     }
     if (!queue.length && !source) updateSend();   // 再生し終えたら、送信ボタンに戻す
   }
@@ -249,7 +256,7 @@ function frame(ts) {
 
 // ---- 履歴の一覧（components/history/。各行の「…」: 詳細・削除） ----
 const LIVE = ["running", "waiting", "paused"];
-async function deleteRun(r, btn) {
+async function deleteRun(r: RunSummary, btn: HTMLElement): Promise<void> {
   const ok = window.confirm(`「${r.request || r.id}」を削除しますか？\n`
     + "履歴・報告・作業記録を消します（Open WebUI の会話は残ります）。元に戻せません。");
   if (!ok) { btn.focus(); return; }
@@ -257,7 +264,7 @@ async function deleteRun(r, btn) {
     await api(`/api/runs/${encodeURIComponent(r.id)}`, undefined, "DELETE");
     if (ctx.runId === r.id) newResearch();        // 開いていた履歴なら、購読と再生を閉じて新しい調査に戻る
     await refreshRuns();
-  } catch (err) { window.alert(`削除できませんでした: ${err.message}`); }
+  } catch (err) { window.alert(`削除できませんでした: ${(err as Error).message}`); }
 }
 
 // ---- ペインの幅（ドラッグ・矢印キー）と狭い画面の切り替え ----
@@ -269,7 +276,7 @@ function relayout(snap = false) {
 initLayout((snap) => relayout(snap));
 
 window.addEventListener("resize", () => relayout());
-window.researchAgentFrames = ctx.frames;   // 描いた・休んだフレームの数（ブラウザで確かめるため）
+(window as any).researchAgentFrames = ctx.frames;   // 描いた・休んだフレームの数（ブラウザで確かめるため）
 
 // ストアを読む（ここで購読するのは、上の変数がすべて用意できてから呼ばれるようにするため）
 liveStore.subscribe((l) => { liveState = l.state; waitingRun = l.waitingRun; showComposer(); updateSend(); });
@@ -284,15 +291,16 @@ mount(RunMenu, { target: $("runMenuRoot"), props: {
   onDelete: (r, anchor) => deleteRun(r, anchor),
 } });
 mount(Recent, { target: $("examples"), props: { onPick: (q) => { input.value = q; growInput(); input.focus(); } } });
-mount(ChatLog, { target: $("chat"), props: { onMeta: (btn) => { const r = RUNS[ctx.runId]; if (r) openPanel("run", btn, r); } } });
+mount(ChatLog, { target: $("chat"), props: { onMeta: (btn) => { const r = ctx.runId ? RUNS[ctx.runId] : undefined; if (r) openPanel("run", btn, r); } } });
 reset(); requestAnimationFrame(frame);
 const params = new URLSearchParams(location.search);
-if (params.has("speed")) speed = +params.get("speed") || 0;   // 再生の速さ（0 = すぐ全部を出す。確認用）
-if (params.has("at")) stopAt = +params.get("at");   // この時刻（秒）の状態で止める
+if (params.has("speed")) speed = +(params.get("speed") || 0);   // 再生の速さ（0 = すぐ全部を出す。確認用）
+if (params.has("at")) stopAt = +(params.get("at") || 0);   // この時刻（秒）の状態で止める
 const ready = Promise.all([loadAgents(), refreshRuns()]);
 const first = params.get("run");
 ready.then(() => {
-  if (["research", "models", "status", "display"].includes(params.get("panel"))) openPanel(params.get("panel"));   // 確認用: 開いた状態で出す
+  const panelTab = params.get("panel") as "research" | "models" | "status" | "display" | null;
+  if (panelTab && ["research", "models", "status", "display"].includes(panelTab)) openPanel(panelTab);   // 確認用: 開いた状態で出す
   if (!first) return;
   const r = RUNS[first];
   open(first, !!r && LIVE.includes(r.status), r?.agent, r?.models, r?.settings);

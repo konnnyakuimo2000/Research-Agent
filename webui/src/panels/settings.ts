@@ -14,7 +14,7 @@ import { choiceLabel, emptyChoice, invalidChoices, loadModelStatus, resolveModel
 import { agentStatus, agents, catalog, prefs } from "../stores/state.ts";
 import type { AgentStatus, Preset, RequestPrefs, RunSummary, SchemaProp, SettingsSchema, SettingsValues } from "../types/api.ts";
 
-// 「この設定を使う」で新しい調査の画面にする（app.js が入れる）
+// 「この設定を使う」で新しい調査の画面にする（app.ts が入れる）
 export const hooks = { startNew() {} };
 
 export type Tab = "research" | "models" | "keys" | "status" | "display" | "run";
