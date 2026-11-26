@@ -84,7 +84,7 @@ def test_the_agent_names_its_role():
 def test_the_screen_shows_the_answering_models():
     out = run_js("""
       import { ctx } from 'UI/core/ctx.ts';
-      import { answeredMeta } from 'UI/panels/models.js';
+      import { answeredMeta } from 'UI/panels/models.ts';
       ctx.AGENTS = { research: { model_roles: [{ role: "extract", title: "抽出" }, { role: "report", title: "報告" },
                                                { role: "decide", title: "判断" }] } };
       const a = answeredMeta([

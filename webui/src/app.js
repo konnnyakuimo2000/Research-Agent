@@ -23,12 +23,14 @@ import { tree } from "./views/tree.js";
 import { GraphFlow } from "./views/flow.js";
 import { chatAgent, resetChat, setEmpty, now } from "./panels/chat.js";
 import { closeDetails } from "./panels/details.js";
-import { answeredMeta, fmtUsd, loadModels, modelMeta, runModelTag } from "./panels/models.js";
+import { answeredMeta, fmtUsd, loadModels, modelMeta, runModelTag } from "./panels/models.ts";
 import { consumeOneTime, headState, hooks as setHooks, initSettings, loadAgentStatus, openPanel,
-  panelOpen, requestBody, settingsMeta, statusLabel } from "./panels/settings.js";
+  panelOpen, requestBody, settingsMeta, statusLabel } from "./panels/settings.ts";
 import { initLayout, showPane } from "./panels/layout.js";
 import { agents, catalog, live as liveStore, nextAgent, refreshRuns, runs, sendAnswer, setLive, waitAnswer } from "./stores/state.ts";
 import { derived } from "svelte/store";
+import { mount } from "svelte";
+import SettingsPanel from "./components/settings/SettingsPanel.svelte";
 
 // ---- エージェント（ゲートウェイがつないでいるもの） ----
 function setLayout(id) {
@@ -324,6 +326,7 @@ derived([runs, agents, catalog], ([r]) => r).subscribe(renderRuns);
 // モデルの一覧が後から届いたら、開いている調査の頭（使ったモデル・費用）を作り直す
 catalog.subscribe(() => { if (ctx.runId && RUNS[ctx.runId]) showRunMeta(ctx.runId, RUNS[ctx.runId].models, RUNS[ctx.runId].settings); });
 
+mount(SettingsPanel, { target: $("settingsRoot") });
 reset(); requestAnimationFrame(frame);
 const params = new URLSearchParams(location.search);
 if (params.has("speed")) speed = +params.get("speed") || 0;   // 再生の速さ（0 = すぐ全部を出す。確認用）

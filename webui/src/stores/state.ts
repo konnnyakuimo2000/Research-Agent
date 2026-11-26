@@ -19,6 +19,8 @@ agents.subscribe((v) => { ctx.AGENTS = v; });
 
 export const catalog = writable<Catalog | null>(null);
 export const agentStatus = writable<{ data: AgentStatus | null; at: number }>({ data: null, at: 0 });
+/** モデルの窓口の状態と使用量（/api/models/status。data = null: つながらない・使っていない） */
+export const modelStatus = writable<{ data: any; at: number }>({ data: null, at: 0 });
 
 export const prefs = writable<{ saved: RequestPrefs | null; oneTime: RequestPrefs | null }>({ saved: null, oneTime: null });
 export const next = derived(prefs, (p) => p.oneTime || p.saved);

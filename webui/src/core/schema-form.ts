@@ -1,7 +1,7 @@
-// JSON Schema（エージェントの名乗りの settings_schema）から設定の欄を作る（docs/telemetry_enhancement_plan.md D-1）。
+// JSON Schema（エージェントの名乗りの settings_schema）から設定の欄の形を作る（docs/telemetry_enhancement_plan.md D-1）。
+// 描くのは components/settings/SchemaFields.svelte。
 // 扱う形: boolean（チェック）・integer / number（数。minimum・maximum）・string（enum なら選択）・enum の配列（複数のチェック）。
 // それ以外の形は欄を作らない（ゲートウェイも受け付けない）
-import { esc } from "./util.ts";
 import type { SchemaProp, SettingsSchema, SettingsValues } from "../types/api.ts";
 
 type Kind = "bool" | "num" | "select" | "text" | "multi" | "";
@@ -41,34 +41,33 @@ export function changed(schema: SettingsSchema, values: SettingsValues | null | 
   return Object.fromEntries(Object.entries(values || {}).filter(([k, v]) => k in d && !same(coerce(schema, k, v), d[k])).map(([k, v]) => [k, coerce(schema, k, v)]));
 }
 
-export function fieldsHtml(schema: SettingsSchema, values: SettingsValues | null | undefined): string {
+/** 設定の欄 1 つ（components/settings/SchemaFields.svelte が描く） */
+export interface Field {
+  name: string;
+  kind: Exclude<Kind, "">;
+  id: string;
+  title: string;
+  value: any;
+  def: any;                // 既定
+  isDefault: boolean;
+  hint: string;            // 説明 · 既定 · 範囲
+  min?: number;
+  max?: number;
+  step: string;
+  options: string[];       // 選択・複数のチェックの候補
+}
+export function fieldList(schema: SettingsSchema, values: SettingsValues | null | undefined): Field[] {
   const d = defaults(schema);
   return props(schema).filter(([, s]) => kindOf(s)).map(([name, s]) => {
-    const v = name in (values || {}) ? coerce(schema, name, values![name]) : d[name];
-    const title = esc(s.title || name), id = `set-${esc(name)}`;
+    const value = name in (values || {}) ? coerce(schema, name, values![name]) : d[name];
     const range = s.minimum != null || s.maximum != null ? `${s.minimum ?? ""}〜${s.maximum ?? ""}` : "";
     const shown = (x: any) => (s.type === "boolean" ? (x ? "はい" : "いいえ") : Array.isArray(x) ? x.join("・") || "なし" : x);
-    const hint = [s.description, `既定 ${shown(d[name])}`, range && `範囲 ${range}`].filter(Boolean).map(esc).join(" · ");
-    let input: string;
-    switch (kindOf(s)) {
-      case "bool": input = `<input type="checkbox" id="${id}" data-name="${esc(name)}"${v ? " checked" : ""}>`; break;
-      case "num": input = `<input type="number" id="${id}" data-name="${esc(name)}" value="${esc(v)}"${s.minimum != null ? ` min="${s.minimum}"` : ""}${s.maximum != null ? ` max="${s.maximum}"` : ""} step="${s.type === "integer" ? 1 : "any"}">`; break;
-      case "select": input = `<select id="${id}" data-name="${esc(name)}">${s.enum!.map((o) => `<option${o === v ? " selected" : ""}>${esc(o)}</option>`).join("")}</select>`; break;
-      case "multi": input = `<span class="multi" data-name="${esc(name)}">${s.items!.enum!.map((o) => `<label><input type="checkbox" value="${esc(o)}"${v.includes(o) ? " checked" : ""}>${esc(o)}</label>`).join("")}</span>`; break;
-      default: input = `<input type="text" id="${id}" data-name="${esc(name)}" value="${esc(v)}">`;
-    }
-    const isDefault = same(v, d[name]);
-    return `<div class="frow${kindOf(s) === "bool" ? " bool" : ""}"><label for="${id}">${title}${isDefault ? "" : `<i class="chg" title="既定（${esc(JSON.stringify(d[name]))}）から変えた"></i>`}</label>${input}${hint ? `<small>${hint}</small>` : ""}</div>`;
-  }).join("");
-}
-// 欄から値を読む
-export function readFields(root: ParentNode, schema: SettingsSchema): SettingsValues {
-  const out: SettingsValues = {};
-  root.querySelectorAll<HTMLInputElement>("[data-name]").forEach((el) => {
-    const name = el.dataset.name!;
-    if (el.classList.contains("multi")) out[name] = [...el.querySelectorAll<HTMLInputElement>("input:checked")].map((i) => i.value);
-    else if (el.type === "checkbox") out[name] = el.checked;
-    else out[name] = coerce(schema, name, el.value);
+    return {
+      name, kind: kindOf(s) as Exclude<Kind, "">, id: `set-${name}`, title: s.title || name, value, def: d[name],
+      isDefault: same(value, d[name]),
+      hint: [s.description, `既定 ${shown(d[name])}`, range && `範囲 ${range}`].filter(Boolean).join(" · "),
+      min: s.minimum, max: s.maximum, step: s.type === "integer" ? "1" : "any",
+      options: s.enum || s.items?.enum || [],
+    };
   });
-  return out;
 }

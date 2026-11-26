@@ -1,4 +1,5 @@
 """設定画面（.claude/ui-gateway-settings-plan.md）の画面側。本物のモジュールを Node で動かす（tests/ui_harness.py）。
+パネルの描き方（Svelte の部品）は webui/src/components/settings/settings.test.ts（Vitest。tests/test_webui_vitest.py が呼ぶ）。
 
 - 値の優先順位: この依頼だけ → ブラウザの既定値 → 名乗りの既定。「この依頼だけ」は送ったら消え、次に持ち越さない
 - プリセットの名前（標準・すばやく・カスタム）と、送る設定（既定と違うものだけ）
@@ -13,8 +14,8 @@ from tests.ui_harness import run_js
 
 SETUP = """
   import { ctx } from 'UI/core/ctx.ts';
-  import * as S from 'UI/panels/settings.js';
-  import * as M from 'UI/panels/models.js';
+  import * as S from 'UI/panels/settings.ts';
+  import * as M from 'UI/panels/models.ts';
   ctx.AGENTS = { research: { id: "research", name: "調査", ok: true, default: true,
     settings_schema: { type: "object", properties: {
       max_seconds: { type: "integer", title: "時間の上限（秒）", default: 900, minimum: 420, maximum: 3600 },
@@ -93,30 +94,24 @@ def test_models_that_disappeared_or_are_external_are_explained():
     out = run_js(SETUP + """
       out({ gone: M.invalidChoices({ all: "old-model", roles: {} }, "research"),
             ext: M.usesExternal({ all: "claude", roles: {} }, "research"),
-            label: M.choiceLabel({ all: "", roles: { extract: "text" } }, "research"),
-            html: M.modelTabHtml({ all: "claude", roles: {} }, "research") });
+            label: M.choiceLabel({ all: "", roles: { extract: "text" } }, "research") });
     """)
     assert out["gone"] == ["読み取り: old-model は使えない（一覧にない）→ LAB を使う",
                            "画像: old-model は使えない（一覧にない）→ LAB を使う"]
     assert out["ext"] is True and out["label"] == "役割ごとのモデル"
-    assert "最終的な割り当て" in out["html"] and "依頼文と読んだページを送ります" in out["html"]
-    assert "入力 $3・出力 $15" in out["html"]
 
 
 def test_run_details_show_what_applied_at_the_start():
     out = run_js(SETUP + """
-      S.openPanel("run", null, { id: "r1", agent: "research", status: "done", request: "東京タワー", created: 0,
-        settings: { images: false }, effective_settings: { max_seconds: 900, max_pages: 12, images: false }, models: { extract: "gone" } });
-      const now = document.getElementById("setBody").innerHTML;
-      S.closePanel();
-      S.openPanel("run", null, { id: "r0", agent: "research", status: "done", request: "古い", created: 0,
-        settings: { max_pages: 6 }, effective_settings: null, models: {} });
-      out({ now, old: document.getElementById("setBody").innerHTML });
+      const now = S.runSettingRows({ id: "r1", agent: "research", settings: { images: false },
+        effective_settings: { max_seconds: 900, max_pages: 12, images: false } });
+      const old = S.runSettingRows({ id: "r0", agent: "research", settings: { max_pages: 6 }, effective_settings: null });
+      out({ now, old });
     """)
-    now, old = out["now"], out["old"]
-    assert "開始時に適用した調査の設定" in now and "いいえ" in now and "900" in now and "既定" in now
-    assert "gone（今は一覧にない）" in now
-    assert "開始時の既定値は記録なし" in old and "記録なし" in old and "6" in old
+    now = {r["title"]: (r["value"], r["mark"]) for r in out["now"]}
+    old = {r["title"]: (r["value"], r["mark"]) for r in out["old"]}
+    assert now == {"時間の上限（秒）": ("900", "既定"), "読むページの数": ("12", "既定"), "画像も探す": ("いいえ", "変更")}
+    assert old == {"時間の上限（秒）": ("記録なし", ""), "読むページの数": ("6", "変更"), "画像も探す": ("記録なし", "")}
 
 
 def test_connection_cases_are_told_apart():
@@ -128,27 +123,17 @@ def test_connection_cases_are_told_apart():
         search: { title: "検索（SearXNG の healthz）", ok: false, error: "ConnectError", hint: "検索につながらない" } } });
       await S.loadAgentStatus("research");
       const searchOnly = S.connectionProblem();
-      S.openPanel("status"); const searchHtml = document.getElementById("setBody").innerHTML; S.closePanel();
       // エージェントにつながらない
       globalThis.fetch = async () => ({ ok: false, status: 503, json: async () => ({ detail: "応答なし" }) });
       await S.loadAgentStatus("research");
       const agentDown = S.connectionProblem();
       // モデルの窓口だけが不調（状態を読めない）
-      await M.loadModelStatus();
-      const gatewayDown = M.gatewayStatusHtml();
-      // 費用が一部未計測
-      reply({ available: true, models: { claude: { ok: true, seconds: 0.4, calls: 3, unmeasured: 1, cost_usd: 0.02 } },
-              spend: { day: "2026-11-25", today_usd: 0.02, unmeasured_today: 1, limits: { daily_usd: 5, run_usd: 1 } } });
-      await M.loadModelStatus();
-      out({ searchOnly, searchHtml, agentDown, gatewayDown, partial: M.gatewayStatusHtml() });
+      const gatewayDown = await M.loadModelStatus();
+      out({ searchOnly, agentDown, gatewayDown });
     """)
     assert out["searchOnly"] == "検索につながらない"
-    assert "検索（SearXNG の healthz）" in out["searchHtml"] and "ConnectError" in out["searchHtml"]
-    assert "0.2 秒で応答" in out["searchHtml"]                          # モデルの確認は成功のまま
     assert out["agentDown"] == "エージェントにつながらない"
-    assert "モデルの窓口につながらない" in out["gatewayDown"]
-    assert "未計測 1 件（費用に含まない）" in out["partial"]
-    assert "上限到達後に有料呼び出しを停止" in out["partial"] and "1 日 $5.00" in out["partial"]
+    assert out["gatewayDown"] is None
 
 
 def test_pane_widths_fit_the_window():
