@@ -26,11 +26,12 @@ from research_agent.config import USER_AGENT, load_settings
 from research_agent.llm import LLM
 
 CONTAINERS = ("open-webui", "searxng")
+PROJECT = "research-agent"   # docker compose -p research-agent で動かしている（フォルダー名とは違う）
 
 
 def check_docker() -> str:
     try:
-        out = subprocess.run(["docker", "compose", "ps", "--format", "json"], capture_output=True, text=True,
+        out = subprocess.run(["docker", "compose", "-p", PROJECT, "ps", "--format", "json"], capture_output=True, text=True,
                              timeout=30)
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
         raise RuntimeError(f"docker コマンドを実行できない（{type(e).__name__}）") from e
