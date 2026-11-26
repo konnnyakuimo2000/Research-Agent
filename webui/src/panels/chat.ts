@@ -120,6 +120,8 @@ registerRenderer("run.held", () => { if (!ctx.replay) setLive("paused"); now("�
 registerRenderer("run.saved", () => {
   const last = [...list].reverse().find((m) => m.who === "a");
   if (last && !last.saved) { patch(last.id, { saved: true }); commit(false); }
+  // 一覧は run.end の時点では「報告を保存中」。保存が済んだら読み直して「完了」にする
+  if (!ctx.replay) refreshRuns();
 }, "chat");
 registerRenderer("run.resumed", () => { if (!ctx.replay) setLive("running"); now("再開した"); }, "chat");
 registerRenderer("run.cancelled", () => {

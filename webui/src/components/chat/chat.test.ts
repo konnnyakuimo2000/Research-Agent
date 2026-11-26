@@ -81,3 +81,13 @@ describe("チャット", () => {
     expect(document.getElementById("runMeta")).toBeNull();
   });
 });
+
+describe("履歴の一覧の読み直し", () => {
+  it("ライブでは保存が済んだら一覧を読み直す（再生では読み直さない）", () => {
+    const calls = () => (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.filter(([u]) => u === "/api/runs").length;
+    ctx.replay = true; send("run.saved");
+    expect(calls()).toBe(0);
+    ctx.replay = false; send("run.saved");
+    expect(calls()).toBe(1);
+  });
+});
