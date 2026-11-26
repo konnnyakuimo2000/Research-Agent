@@ -3,9 +3,9 @@
 //
 // - agents      … エージェントの名乗り（/api/agents）。ctx.AGENTS にも写す（図の部品は ctx を読む）
 // - catalog     … モデルの窓口の一覧（/api/models。使わない構成・つながらないときは null）
-// - agentStatus … 次の依頼のエージェントの接続（/api/status）
+// - agentStatus … 次の依頼のエージェントの接続（/api/status）。modelStatus はモデルの窓口の状態と使用量
 // - prefs       … 次の依頼の設定。saved（このブラウザの既定値）と oneTime（この依頼だけ）。next は効く方
-// - runs        … 履歴の一覧（/api/runs）
+// - runs        … 履歴の一覧（/api/runs）。openRunId は開いている依頼、runMenu は行の「…」のメニュー
 // - live        … 開いている調査の動き（running / paused）と、答えを待っている依頼
 //
 // 図（流れの図・木）は毎フレーム描くので、ストアにしない（ctx と描き手のまま）
@@ -30,6 +30,11 @@ nextAgent.subscribe((a) => { if (a) ctx.agentId = a; });
 
 export const runs = writable<{ list: RunSummary[]; error: string; loaded: boolean }>({ list: [], error: "", loaded: false });
 export const runsById = derived(runs, (r) => Object.fromEntries(r.list.map((x) => [x.id, x])) as Record<string, RunSummary>);
+
+/** 開いている依頼（履歴の一覧で印を付ける。ctx.runId と同じ） */
+export const openRunId = writable<string | null>(null);
+/** 履歴の行の「…」で開いたメニュー（どの依頼の、どのボタンから） */
+export const runMenu = writable<{ run: RunSummary; anchor: HTMLElement } | null>(null);
 
 export const live = writable<{ state: "" | "running" | "paused"; waitingRun: string | null }>({ state: "", waitingRun: null });
 export const setLive = (state: "" | "running" | "paused"): void => live.update((l) => ({ ...l, state }));

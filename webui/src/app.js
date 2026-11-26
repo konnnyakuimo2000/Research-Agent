@@ -23,14 +23,16 @@ import { tree } from "./views/tree.js";
 import { GraphFlow } from "./views/flow.js";
 import { chatAgent, resetChat, setEmpty, now } from "./panels/chat.js";
 import { closeDetails } from "./panels/details.js";
-import { answeredMeta, fmtUsd, loadModels, modelMeta, runModelTag } from "./panels/models.ts";
+import { answeredMeta, fmtUsd, loadModels, modelMeta } from "./panels/models.ts";
 import { consumeOneTime, headState, hooks as setHooks, initSettings, loadAgentStatus, openPanel,
-  panelOpen, requestBody, settingsMeta, statusLabel } from "./panels/settings.ts";
+  panelOpen, requestBody, settingsMeta } from "./panels/settings.ts";
 import { initLayout, showPane } from "./panels/layout.js";
-import { agents, catalog, live as liveStore, nextAgent, refreshRuns, runs, sendAnswer, setLive, waitAnswer } from "./stores/state.ts";
-import { derived } from "svelte/store";
+import { agents, catalog, live as liveStore, nextAgent, openRunId, refreshRuns, runMenu, runsById, sendAnswer, setLive, waitAnswer } from "./stores/state.ts";
 import { mount } from "svelte";
 import SettingsPanel from "./components/settings/SettingsPanel.svelte";
+import RunList from "./components/history/RunList.svelte";
+import RunMenu from "./components/history/RunMenu.svelte";
+import Recent from "./components/history/Recent.svelte";
 
 // ---- エージェント（ゲートウェイがつないでいるもの） ----
 function setLayout(id) {
@@ -148,7 +150,7 @@ $("composer").addEventListener("submit", async (ev) => {
 });
 function newResearch() {
   openSeq++; closeSource(); ctx.runId = null; ctx.runAgent = ctx.agentId; reset(); setLayout(ctx.agentId); resetChat(); setEmpty(true);
-  ctx.replay = false; setLive(""); showMode(); waitAnswer(false); highlightRun(); $("input").focus();
+  ctx.replay = false; setLive(""); showMode(); waitAnswer(false); openRunId.set(null); $("input").focus();
 }
 $("newBtn").addEventListener("click", () => { closeSide(); newResearch(); });
 // 履歴: 広い画面では列を出す・隠す。狭い画面（列にしない幅）では、チャットの上に重ねて開く
@@ -160,7 +162,7 @@ $("runsBtn").addEventListener("click", () => {
   else { app.classList.toggle("noside"); setTimeout(() => { fitMode(true); relayout(); }, 50); }
 });
 $("scrim").addEventListener("click", closeSide);
-document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && !panelOpen()) { closeSide(); closeRunMenu(); } });
+document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && !panelOpen()) { closeSide(); runMenu.set(null); } });
 
 // 入力欄: Enter で送る（Shift+Enter は改行。日本語の変換を確定する Enter では送らない）。行が増えたら高さを伸ばす
 const input = $("input");
@@ -172,18 +174,6 @@ input.addEventListener("keydown", (e) => {
 
 setInterval(() => loadAgentStatus(), 30000);
 setInterval(loadModels, 60000);
-// 最近の依頼（調査の一覧の新しい順。同じ依頼は 1 つにまとめ、3 つまで）。押すと入力欄に入る（送るのは利用者）
-function showRecent(runs) {
-  const seen = new Set(), recent = [];
-  for (const r of runs) {
-    const q = (r.request || "").trim();
-    if (q && !seen.has(q)) { seen.add(q); recent.push(q); }
-    if (recent.length >= 3) break;
-  }
-  const box = $("examples");
-  box.innerHTML = recent.length ? `<span class="lbl">最近の依頼</span>` + recent.map((q) => `<button type="button" class="ex" title="${esc(q)}">${esc(q)}</button>`).join("") : "";
-  box.querySelectorAll(".ex").forEach((b) => b.addEventListener("click", () => { input.value = b.title; growInput(); input.focus(); }));
-}
 
 // 依頼で使ったモデル・設定・費用を、チャットの頭に小さく出す（押すと履歴の詳細）
 function showRunMeta(id, models, settings) {
@@ -229,7 +219,7 @@ async function open(id, live, agent, models, settings) {
   showRunMeta(id, models || RUNS[id]?.models, settings || RUNS[id]?.settings);
   ctx.replay = !live; clock = 0; playing = true; skipped = 0; lastSeen = Date.now();
   setLive(live ? "running" : ""); showMode();
-  waitAnswer(false); highlightRun();
+  waitAnswer(false); openRunId.set(id);
   source = new EventSource(withKey(`/api/runs/${encodeURIComponent(id)}/events`));
   source.onmessage = (m) => { lastSeen = Date.now(); const e = norm(JSON.parse(m.data)); if (ctx.replay) queue.push(e); else handle(e); };
   // 通信が切れて実行の状況を確かめられないときは、最後に受け取った時刻を出す（EventSource はつなぎ直す）
@@ -259,45 +249,8 @@ function frame(ts) {
   requestAnimationFrame(frame);
 }
 
-// ---- 履歴の一覧（各行の「…」: 詳細・削除） ----
-const LIVE = ["running", "waiting", "paused"], UNFINISHED = [...LIVE, "finishing"];
-// 一覧・エージェント・モデルのどれかが変われば描き直す（行のモデル名とエージェント名が変わるため）
-function renderRuns({ list: runs, error, loaded }) {
-  RUNS = Object.fromEntries(runs.map((r) => [r.id, r]));
-  if (error) { $("runs").innerHTML = `<p style="padding:8px;color:var(--muted)">一覧を読めません: ${esc(error)}</p>`; return; }
-  if (!loaded) return;
-  {
-    const defAgent = Object.values(ctx.AGENTS).find((a) => a.default)?.id;
-    $("runs").innerHTML = runs.map((r) => `<div class="runrow" data-id="${esc(r.id)}"><button type="button" class="run" data-id="${esc(r.id)}" data-agent="${esc(r.agent || "")}" data-live="${LIVE.includes(r.status)}">
-      <span class="r1">${esc(r.request || "(依頼なし)")}</span><span class="r2">${esc(r.id.slice(0, 13).replace(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2}).*/, "$2/$3 $4:$5"))} · ${esc(statusLabel(r.status))}${ctx.AGENTS[r.agent] && r.agent !== defAgent ? " · " + esc(ctx.AGENTS[r.agent].name) : ""}${runModelTag(r.models) ? " · " + esc(runModelTag(r.models)) : ""}</span></button>
-      <button type="button" class="more" data-id="${esc(r.id)}" aria-haspopup="menu" aria-expanded="false" aria-label="「${esc(r.request || "依頼")}」の操作" title="操作">…</button></div>`).join("")
-      || `<p class="r2" style="padding:8px;color:var(--muted)">まだ調査はありません</p>`;
-    $("runs").querySelectorAll(".run").forEach((b) => b.addEventListener("click", () => { closeSide(); open(b.dataset.id, b.dataset.live === "true", b.dataset.agent); }));
-    $("runs").querySelectorAll(".more").forEach((b) => b.addEventListener("click", (ev) => { ev.stopPropagation(); openRunMenu(b); }));
-    showRecent(runs);
-    highlightRun();
-  }
-}
-function highlightRun() { $("runs").querySelectorAll(".run").forEach((b) => b.classList.toggle("on", b.dataset.id === ctx.runId)); }
-
-let menuFor = null;
-function openRunMenu(btn) {
-  const r = RUNS[btn.dataset.id]; if (!r) return;
-  if (menuFor === btn) { closeRunMenu(); return; }
-  closeRunMenu(); menuFor = btn; btn.setAttribute("aria-expanded", "true");
-  const busyRun = UNFINISHED.includes(r.status), m = $("runMenu");
-  m.innerHTML = `<button type="button" role="menuitem" data-act="detail">詳細を見る</button>
-    <button type="button" role="menuitem" data-act="delete"${busyRun ? ` aria-disabled="true"` : ""}>削除</button>
-    ${busyRun ? `<p class="mnote">終わってから削除できます（${esc(statusLabel(r.status))}）</p>` : ""}`;
-  const rect = btn.getBoundingClientRect();
-  m.style.top = Math.min(rect.bottom + 4, window.innerHeight - 140) + "px"; m.style.left = Math.max(8, rect.right - 190) + "px";
-  m.hidden = false;
-  m.querySelector("[data-act=detail]").addEventListener("click", () => { closeRunMenu(); closeSide(); openPanel("run", btn, r); });
-  m.querySelector("[data-act=delete]").addEventListener("click", () => { if (busyRun) return; closeRunMenu(); deleteRun(r, btn); });
-  m.querySelector("button").focus();
-}
-function closeRunMenu() { if (menuFor) menuFor.setAttribute("aria-expanded", "false"); menuFor = null; $("runMenu").hidden = true; }
-document.addEventListener("click", (ev) => { if (menuFor && !$("runMenu").contains(ev.target) && ev.target !== menuFor) closeRunMenu(); });
+// ---- 履歴の一覧（components/history/。各行の「…」: 詳細・削除） ----
+const LIVE = ["running", "waiting", "paused"];
 async function deleteRun(r, btn) {
   const ok = window.confirm(`「${r.request || r.id}」を削除しますか？\n`
     + "履歴・報告・作業記録を消します（Open WebUI の会話は残ります）。元に戻せません。");
@@ -322,11 +275,17 @@ window.researchAgentFrames = ctx.frames;   // 描いた・休んだフレーム�
 
 // ストアを読む（ここで購読するのは、上の変数がすべて用意できてから呼ばれるようにするため）
 liveStore.subscribe((l) => { liveState = l.state; waitingRun = l.waitingRun; showComposer(); updateSend(); });
-derived([runs, agents, catalog], ([r]) => r).subscribe(renderRuns);
+runsById.subscribe((v) => { RUNS = v; });
 // モデルの一覧が後から届いたら、開いている調査の頭（使ったモデル・費用）を作り直す
 catalog.subscribe(() => { if (ctx.runId && RUNS[ctx.runId]) showRunMeta(ctx.runId, RUNS[ctx.runId].models, RUNS[ctx.runId].settings); });
 
 mount(SettingsPanel, { target: $("settingsRoot") });
+mount(RunList, { target: $("runs"), props: { onOpen: (r) => { closeSide(); open(r.id, LIVE.includes(r.status), r.agent); } } });
+mount(RunMenu, { target: $("runMenuRoot"), props: {
+  onDetail: (r, anchor) => { closeSide(); openPanel("run", anchor, r); },
+  onDelete: (r, anchor) => deleteRun(r, anchor),
+} });
+mount(Recent, { target: $("examples"), props: { onPick: (q) => { input.value = q; growInput(); input.focus(); } } });
 reset(); requestAnimationFrame(frame);
 const params = new URLSearchParams(location.search);
 if (params.has("speed")) speed = +params.get("speed") || 0;   // 再生の速さ（0 = すぐ全部を出す。確認用）
