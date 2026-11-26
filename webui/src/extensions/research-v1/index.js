@@ -8,7 +8,7 @@ import { sameUrl } from "../../core/util.ts";
 import { registerExtension } from "../../core/events.ts";
 import { jumpTo } from "../../core/camera.ts";
 import { tree } from "../../views/tree.js";
-import { now } from "../../panels/chat.js";
+import { now } from "../../panels/chat.ts";
 import { showDetails } from "../../panels/details.js";
 import { S, pageIdFor, resetTree, treeRenderers } from "./tree.js";
 import { ResearchFlow, linkRedirects } from "./flow.js";

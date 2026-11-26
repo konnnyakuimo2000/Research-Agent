@@ -17,7 +17,7 @@ P1, P2 = "https://ex.org/p?id=1", "https://ex.org/p?id=2"
 
 def test_links_in_old_reports_stop_before_the_tier_note():
     html = run_js("""
-      import { renderReport } from 'UI/panels/chat.js';
+      import { renderReport } from 'UI/panels/chat.ts';
       out(renderReport("[1] 資料 — https://example.org/p（Tier 1）\\n画像の出典: [東京タワー](https://example.org/t?a=1&b=2)"));
     """)
     assert 'href="https://example.org/p"' in html and "（Tier 1）" in html

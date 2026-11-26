@@ -56,6 +56,8 @@ button:focus-visible, .node:focus-visible, input:focus-visible { outline: 2px so
 .runrow:hover .more, .runrow .more:focus-visible, .runrow .more[aria-expanded="true"] { opacity: 1; }
 @media (hover: none) { .runrow .more { opacity: 1; } }
 .runrow .more:hover { background: var(--surface); color: var(--ink); }
+/* 部品を差し込む入れ物（components/）。入れ物自体は箱を作らない（.app の格子の列を取らない） */
+#runMenuRoot, #settingsRoot { display: contents; }
 .runmenu { position: fixed; z-index: 70; width: 190px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
   box-shadow: 0 10px 28px rgb(0 0 0 / .16); padding: 4px; display: grid; }
 .runmenu button { border: none; background: none; text-align: left; padding: 6px 9px; border-radius: 7px; cursor: pointer; }

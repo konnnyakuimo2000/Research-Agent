@@ -3,7 +3,7 @@
 import { esc, host, tier, icon, card, toggleBtn, link, sameUrl, imageUrl } from "../../core/util.ts";
 import { ctx, labelOf } from "../../core/ctx.ts";
 import { tree } from "../../views/tree.js";
-import { now } from "../../panels/chat.js";
+import { now } from "../../panels/chat.ts";
 import { RunSummary, WORDS, coverageWord, decisionDiff, imageWord } from "./summary.js";
 
 export const ACTION = { search: "検索する", read_pages: "ページを読む", find_images: "画像を探す", check_conflicts: "食い違いを調べる",

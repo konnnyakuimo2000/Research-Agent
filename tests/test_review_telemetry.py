@@ -169,7 +169,7 @@ def test_replay_speed_does_not_change_counts_and_history_is_read_only():
     assert a == b and a["e"] == 40 and a["s"] == {"read_pages": 2.5} and a["r"] == 1.0
     q = "どれのことですか？\\n1. 塔\\n2. 山\\n番号か、具体的な内容で答えてください。上にない場合はその内容を書いてください。"
     out = run(f"""
-      import {{ hooks }} from 'UI/panels/chat.js';
+      import {{ hooks }} from 'UI/panels/chat.ts';
       import {{ live }} from 'UI/stores/state.ts';
       const sent = [], composer = [];
       let was = null;

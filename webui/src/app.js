@@ -21,7 +21,7 @@ import { dispatch, layoutFor, loadExtensions, norm, rememberExtensions, resetExt
 import { fitMode, fitTarget, resetCamera, stepCamera, useView } from "./core/camera.ts";
 import { tree } from "./views/tree.js";
 import { GraphFlow } from "./views/flow.js";
-import { chatAgent, resetChat, setEmpty, now } from "./panels/chat.js";
+import { chatAgent, resetChat, runMeta, setEmpty, now } from "./panels/chat.ts";
 import { closeDetails } from "./panels/details.js";
 import { answeredMeta, fmtUsd, loadModels, modelMeta } from "./panels/models.ts";
 import { consumeOneTime, headState, hooks as setHooks, initSettings, loadAgentStatus, openPanel,
@@ -33,6 +33,7 @@ import SettingsPanel from "./components/settings/SettingsPanel.svelte";
 import RunList from "./components/history/RunList.svelte";
 import RunMenu from "./components/history/RunMenu.svelte";
 import Recent from "./components/history/Recent.svelte";
+import ChatLog from "./components/chat/ChatLog.svelte";
 
 // ---- エージェント（ゲートウェイがつないでいるもの） ----
 function setLayout(id) {
@@ -175,16 +176,12 @@ input.addEventListener("keydown", (e) => {
 setInterval(() => loadAgentStatus(), 30000);
 setInterval(loadModels, 60000);
 
-// 依頼で使ったモデル・設定・費用を、チャットの頭に小さく出す（押すと履歴の詳細）
+// 依頼で使ったモデル・設定・費用を、チャットの頭に小さく出す（押すと履歴の詳細。描くのは ChatLog）
+let meta = { assigned: "", priced: false };
 function showRunMeta(id, models, settings) {
   const m = modelMeta(models), s = settingsMeta(ctx.runAgent, settings);
-  $("runMeta")?.remove();                     // モデルの一覧が後から届いたら、作り直す
-  const d = document.createElement("button"); d.type = "button"; d.className = "runmeta"; d.id = "runMeta";
-  d.title = "この調査の設定を見る";
-  d.innerHTML = `${m ? `<span id="runModels">${esc(m.text)}</span>` : ""}${s ? `<span>${esc(s)}</span>` : ""}<span class="cost mono" id="runCost"></span><span class="more">詳細</span>`;
-  d.addEventListener("click", () => { const r = RUNS[id]; if (r) openPanel("run", d, r); });
-  $("chat").prepend(d);
-  if (m?.priced) d.dataset.priced = "1";
+  meta = { assigned: m?.text || "", priced: !!m?.priced };
+  runMeta.set({ models: m?.text || "", modelsTitle: "", settings: s, cost: "" });   // モデルの一覧が後から届いたら、作り直す
   if (m) showRunCost(id);
 }
 // 窓口が数えた、この調査の費用と応答したモデル。応答したモデルが分かれば、割り当ての表示をそれに置き換える
@@ -193,11 +190,12 @@ async function showRunCost(id) {
   try {
     const u = await api(`/api/runs/${encodeURIComponent(id)}/usage`);
     if (id !== ctx.runId) return;
-    const a = answeredMeta(u.answered), span = $("runModels");
-    if (a && span) { if (!span.dataset.assigned) span.dataset.assigned = span.textContent;
-      span.textContent = a.text; span.title = `${a.title}\n${span.dataset.assigned}`; }
-    const el = $("runCost");
-    if (el && $("runMeta")?.dataset.priced) el.textContent = `費用 ${fmtUsd(u.usd || 0)}${u.limit_usd ? ` / 上限 ${fmtUsd(u.limit_usd)}` : ""}`;
+    const a = answeredMeta(u.answered);
+    runMeta.update((cur) => cur && {
+      ...cur,
+      ...(a && cur.models ? { models: a.text, modelsTitle: `${a.title}\n${meta.assigned}` } : {}),
+      cost: meta.priced ? `費用 ${fmtUsd(u.usd || 0)}${u.limit_usd ? ` / 上限 ${fmtUsd(u.limit_usd)}` : ""}` : "",
+    });
   } catch (err) { /* 費用を読めなくても、調査の表示は続ける */ }
 }
 
@@ -225,7 +223,7 @@ async function open(id, live, agent, models, settings) {
   // 通信が切れて実行の状況を確かめられないときは、最後に受け取った時刻を出す（EventSource はつなぎ直す）
   source.onerror = () => { if (!ctx.replay && source) showMode(`接続が切れた（最後に受け取った ${new Date(lastSeen).toLocaleTimeString("ja-JP")}）`); };
   source.onopen = () => showMode();
-  source.addEventListener("end", () => { if (source) { source.close(); source = null; } updateSend(); if ($("runMeta")) showRunCost(id); });   // 終わったら、応答したモデルと費用を読み直す
+  source.addEventListener("end", () => { if (source) { source.close(); source = null; } updateSend(); if (ctx.runId === id) showRunCost(id); });   // 終わったら、応答したモデルと費用を読み直す
   source.addEventListener("missing", () => { if (source) { source.close(); source = null; } chatAgent("<p>この調査の記録が見つかりません。</p>"); });
 }
 function frame(ts) {
@@ -286,6 +284,7 @@ mount(RunMenu, { target: $("runMenuRoot"), props: {
   onDelete: (r, anchor) => deleteRun(r, anchor),
 } });
 mount(Recent, { target: $("examples"), props: { onPick: (q) => { input.value = q; growInput(); input.focus(); } } });
+mount(ChatLog, { target: $("chat"), props: { onMeta: (btn) => { const r = RUNS[ctx.runId]; if (r) openPanel("run", btn, r); } } });
 reset(); requestAnimationFrame(frame);
 const params = new URLSearchParams(location.search);
 if (params.has("speed")) speed = +params.get("speed") || 0;   // 再生の速さ（0 = すぐ全部を出す。確認用）
