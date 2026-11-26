@@ -156,6 +156,47 @@ npm run e2e      # 画面を通しで動かす（Playwright。この PC の Chro
 - **会話の再開**: Open WebUI は `ENABLE_FORWARD_USER_INFO_HEADERS=true`（`docker-compose.yml` に設定済み）で、利用者 ID とチャット ID をエージェントに渡す。エージェントはこの組で、質問への答えをどの調査に戻すかを決める（同じ文面で始めた別の会話を取り違えない）。この設定を変えたときは `docker compose up -d open-webui` で作り直す。ID が届かない使い方（API を直接呼ぶなど）では、質問の末尾に表示されない会話トークンを入れて見分ける
 - ゲートウェイのポート（127.0.0.1:8100）はこの PC からだけ使える。エージェントのサービスはポートを出さない（Docker の中からだけ呼べる）。研究室の外に出す場合は、`AGENT_API_KEY`（ゲートウェイ）と `AGENT_SERVICE_KEY`（ゲートウェイ → エージェント）を設定し、Open WebUI 以外から利用者 ID のヘッダーを送れないようにする
 
+### アプリとして使う（PWA）
+
+テレメトリー画面は、ブラウザのメニューの「アプリをインストール」（Chrome・Edge）か「ホーム画面に追加」（スマホ）で、単独のウィンドウのアプリになる。
+
+- 画面のファイルはアプリが覚えるので、ゲートウェイにつながらなくても画面は開く（調査の一覧と記録は、つながっているときだけ出る。古いものは出さない）
+- 画面が新しくなったら、右下に「画面の新しい版があります」と出る。調査の途中で勝手に読み直すことはない
+- 設定 › 表示 の「調査の知らせ」を入れると、画面が後ろにあるときに、開いている調査が答えを待つ・終わる・止まると OS の通知で知らせる
+- アプリと通知は HTTPS か `localhost` でしか使えない。この PC の http://localhost:8100/ui/ ではそのまま使える。研究室のほかの PC からは、次の HTTPS の入口を通す
+
+### 研究室で共有する（HTTPS の入口）
+
+Caddy（`docker-compose.yml` の `caddy`。既定では起動しない）が、この PC の 443 番で HTTPS を受けてゲートウェイへ渡す。証明書は Caddy の中の認証局が作る。
+
+1. `.env` に 2 つ書く
+   - `AGENT_API_KEY`: 長いランダムな文字列（`python -c "import secrets;print(secrets.token_urlsafe(32))"`）。**必須**。空のままだと、入口から来た API はすべて断る（403）
+   - `LAB_HOST`: ほかの PC からこの PC を呼ぶ名前か IP アドレス（例: `133.2.x.x`）
+2. ゲートウェイを鍵付きで起動し直し、入口を起動する
+
+   ```powershell
+   docker compose -p research-agent up -d --no-deps --force-recreate webui
+   docker compose -p research-agent --profile lab up -d caddy
+   ```
+
+3. Open WebUI の接続の鍵を合わせる: 管理者パネル →「設定」→「接続」→ `http://webui:8000/v1` の鍵を `AGENT_API_KEY` と同じ文字列にする（Open WebUI は初回起動時の値を覚えているため、`.env` を変えても変わらない）
+4. Windows のファイアウォールで、受信の TCP 443 と 80 を許可する（Docker Desktop が聞かれたら「許可」）
+5. 認証局の証明書を取り出し、使う PC に 1 回入れる（入れないと、ブラウザが警告を出し、アプリと通知が動かない）
+
+   ```powershell
+   docker compose -p research-agent cp caddy:/data/caddy/pki/authorities/local/root.crt ./runs/research-agent-root.crt
+   ```
+
+   - Windows: `root.crt` をダブルクリック →「証明書のインストール」→「現在のユーザー」→「証明書をすべて次のストアに配置する」→「信頼されたルート証明機関」
+   - macOS: キーチェーンアクセスに入れ、「常に信頼」にする
+   - Android: 設定 →「セキュリティ」→「暗号化と認証情報」→「証明書のインストール」→「CA 証明書」
+   - iPhone: ファイルを開いてプロファイルを入れ、設定 →「一般」→「情報」→「証明書信頼設定」で有効にする
+6. 使う PC で `https://<LAB_HOST>/ui/` を開く。鍵の欄が出るので `AGENT_API_KEY` を入れる（そのブラウザに覚える）。その後、アプリとしてインストールできる
+
+- 鍵を変えたら、各 PC で鍵の欄に入れ直す（古い鍵では鍵の欄が出る）
+- 認証局は `caddy-data` のボリュームにある。ボリュームを消すと認証局が作り直され、各 PC に証明書を入れ直すことになる
+- 入口を止める: `docker compose -p research-agent --profile lab stop caddy`
+
 ## 6. よく使うコマンド
 
 | コマンド | 内容 |

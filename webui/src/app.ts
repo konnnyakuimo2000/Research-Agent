@@ -35,6 +35,7 @@ import RunMenu from "./components/history/RunMenu.svelte";
 import Recent from "./components/history/Recent.svelte";
 import ChatLog from "./components/chat/ChatLog.svelte";
 import UpdateNotice from "./components/UpdateNotice.svelte";
+import KeyDialog from "./components/KeyDialog.svelte";
 import { registerSW } from "virtual:pwa-register";
 import { update } from "./stores/state.ts";
 import { notifyFor } from "./panels/notify.ts";
@@ -294,6 +295,7 @@ catalog.subscribe(() => { if (ctx.runId && RUNS[ctx.runId]) showRunMeta(ctx.runI
 
 mount(SettingsPanel, { target: $("settingsRoot") });
 mount(UpdateNotice, { target: $("updateRoot") });
+mount(KeyDialog, { target: $("updateRoot") });   // ゲートウェイが鍵を求めたら出す
 // Service Worker（PWA）。HTTPS か localhost でないと登録できない（そのときは普通のページとして動く）
 const applyUpdate = registerSW({ onNeedRefresh: () => update.set({ ready: true, apply: () => applyUpdate(true) }) });
 mount(RunList, { target: $("runs"), props: { onOpen: (r) => { closeSide(); open(r.id, LIVE.includes(r.status), r.agent); } } });

@@ -51,6 +51,8 @@ HEARTBEAT_SECONDS = 15
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 UI_DIR = Path(__file__).resolve().parents[1] / "ui"     # webui/ のビルド結果（npm run build。git の外）
+KEY_REQUIRED = ("研究室の入口（HTTPS）から使うには、ゲートウェイの鍵が要ります。.env の AGENT_API_KEY に"
+                "長いランダムな文字列を入れて、ゲートウェイを起動し直してください（docs/setup.md「研究室で共有する」）。")
 UI_MISSING = "画面がビルドされていません。webui/ で `npm ci` と `npm run build` を実行してください（docs/setup.md）。"
 
 
@@ -78,6 +80,16 @@ def create_app(registry: Registry | None = None, runs_dir: Path | None = None, a
     assets_dir = runs_dir / ".assets"
     app = FastAPI(title="research_agent gateway")
     app.state.gateway = gw
+
+    # 研究室で共有するとき（Caddy の HTTPS の入口を通った依頼）は、鍵を必須にする。鍵がないまま外に出すと、
+    # 研究室の誰でも調査を始め・消し、モデルの鍵を足せてしまうため。入口を通ったかは X-Forwarded-For で分かる
+    # （この PC の localhost:8100 と、Docker の中の Open WebUI はそのまま使える）
+    @app.middleware("http")
+    async def require_key_behind_proxy(request: Request, call_next):
+        path = request.url.path
+        if not api_key and "x-forwarded-for" in request.headers and (path.startswith("/api/") or path.startswith("/v1/")):
+            return PlainTextResponse(KEY_REQUIRED, status_code=403)
+        return await call_next(request)
 
     def check_key(authorization: str | None, key: str | None = None) -> None:
         # EventSource はヘッダーを付けられないので、?key= でも受ける

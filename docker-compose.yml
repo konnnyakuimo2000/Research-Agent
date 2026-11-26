@@ -60,6 +60,25 @@ services:
       - model-gateway
     restart: unless-stopped
 
+  # 研究室で共有するときの HTTPS の入口（.claude/webui-framework-and-app-plan.md）。既定では起動しない:
+  #   docker compose -p research-agent --profile lab up -d caddy
+  # 証明書は Caddy の中の認証局が作る（tls internal）。使う PC には、その認証局の証明書を 1 回入れる（docs/setup.md）。
+  # PWA（Service Worker・通知）は HTTPS でしか動かないため。ゲートウェイは、この入口からの API に鍵を求める
+  caddy:
+    image: caddy:2.10-alpine
+    profiles: [lab]
+    ports:
+      - "443:443"
+      - "80:80"                 # http:// で来たら https:// へ送る
+    environment:
+      LAB_HOST: ${LAB_HOST:-localhost}   # .env にこの PC の名前か IP アドレスを書く（未設定なら localhost だけ）
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data        # 認証局と証明書（作り直すと、各 PC に入れた証明書が使えなくなる）
+    depends_on:
+      - webui
+    restart: unless-stopped
+
   # 調査エージェント（契約の 0・1 段と research/v1）。外には出さず、ゲートウェイからだけ呼ぶ。
   # モデルはモデルの窓口を通して呼ぶ（LLM の鍵は持たない）
   agent-research:
@@ -123,3 +142,4 @@ services:
 
 volumes:
   open-webui:
+  caddy-data:

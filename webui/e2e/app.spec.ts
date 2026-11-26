@@ -61,3 +61,15 @@ test("狭い画面: 作業記録に切り替えられ、履歴の引き出しか
   await expect(page.locator("#setTitle")).toHaveText("履歴の詳細");
   await expect(page.locator("#setBody")).toContainText("東京タワーの高さ");
 });
+
+test("ゲートウェイが鍵を求めたら鍵の欄が出て、入れると開き直して使える", async ({ page }) => {
+  await mockApi(page, [DONE_RUN], "lab-secret");
+  await page.goto("");
+  await expect(page.getByRole("dialog", { name: "ゲートウェイの鍵" })).toBeVisible();
+  await expect(page.locator("#gatewayKey")).toBeFocused();
+  await page.locator("#gatewayKey").fill("lab-secret");
+  await page.getByRole("button", { name: "保存して開き直す" }).click();
+  await expect(page.locator("#runs .run")).toHaveCount(1);
+  await expect(page.getByRole("dialog", { name: "ゲートウェイの鍵" })).toHaveCount(0);
+  expect(await page.evaluate(() => localStorage.getItem("agentKey"))).toBe("lab-secret");
+});

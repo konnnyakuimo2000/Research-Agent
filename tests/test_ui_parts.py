@@ -175,3 +175,21 @@ def test_built_assets_are_cached_and_the_page_is_rechecked(tmp_path, monkeypatch
     (ui / "sw.js").write_text("", encoding="utf-8")
     assert c.get("/ui/manifest.webmanifest").headers["content-type"].startswith("application/manifest+json")
     assert c.get("/ui/sw.js").headers["cache-control"] == "no-cache"
+
+
+def test_the_lab_entrance_needs_the_gateway_key(tmp_path):
+    """研究室の HTTPS の入口（Caddy。X-Forwarded-For が付く）を通った API は、鍵がないと断る。この PC と Docker の中はそのまま。"""
+    from fastapi.testclient import TestClient
+
+    from research_agent.gateway import app as app_mod
+
+    open_app = TestClient(app_mod.create_app(runs_dir=tmp_path, resume=False, catalog=False, api_key=""))
+    proxied = {"X-Forwarded-For": "10.0.0.5"}
+    assert open_app.get("/api/runs").status_code == 200
+    r = open_app.get("/api/runs", headers=proxied)
+    assert r.status_code == 403 and "AGENT_API_KEY" in r.text
+    assert open_app.post("/v1/chat/completions", json={}, headers=proxied).status_code == 403
+    assert open_app.get("/ui/", headers=proxied).status_code != 403          # 画面のファイルは出す（鍵の入れ方を示すため）
+    keyed = TestClient(app_mod.create_app(runs_dir=tmp_path, resume=False, catalog=False, api_key="k"))
+    assert keyed.get("/api/runs", headers=proxied).status_code == 401
+    assert keyed.get("/api/runs", headers={**proxied, "Authorization": "Bearer k"}).status_code == 200

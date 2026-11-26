@@ -56,10 +56,12 @@ const json = (route: Route, body: unknown, status = 200) =>
   route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 
 /** 画面が呼ぶ /api をすべて受ける。送られた依頼（POST /api/runs の中身）を posted に積む */
-export async function mockApi(page: Page, runs: Record<string, unknown>[] = [DONE_RUN]) {
+export async function mockApi(page: Page, runs: Record<string, unknown>[] = [DONE_RUN], key = "") {
   const posted: any[] = [];
   await page.route("**/api/**", async (route) => {
-    const req = route.request(), path = new URL(req.url()).pathname;
+    const req = route.request(), url = new URL(req.url()), path = url.pathname;
+    // 鍵を求めるゲートウェイ（AGENT_API_KEY）。EventSource は ?key= で送る
+    if (key && req.headers()["authorization"] !== `Bearer ${key}` && url.searchParams.get("key") !== key) return json(route, { detail: "API キーが違います" }, 401);
     if (path === "/api/agents") return json(route, { agents: [AGENT], default: "research" });
     if (path === "/api/models" || path === "/api/models/status") return json(route, { available: false });
     if (path === "/api/status") return json(route, { agent: "research", ok: true, checks: {} });
