@@ -6,9 +6,9 @@
 // - GraphFlow（この下）: エージェントの名乗りの graph を、左から右への層に並べる一般的な並べ方。
 //   ノードの種類は step・data・terminal だけを知っている。エージェントがノードを足しても、画面を直さずに出る
 // - 拡張の並べ方（例: extensions/research-v1/flow.js の、判断を中心に作業が並ぶ図）
-import { $, esc, clamp, bezierTo, bezierPoint, easeOut, easeInOut, grownScale, fmtPt, STEM, RIPEN, ARRIVE } from "../core/util.js";
-import { ctx, labelOf, manifest } from "../core/ctx.js";
-import { nodeKind, registerNodeKind } from "../core/events.js";
+import { $, esc, clamp, bezierTo, bezierPoint, easeOut, easeInOut, grownScale, fmtPt, STEM, RIPEN, ARRIVE } from "../core/util.ts";
+import { ctx, labelOf, manifest } from "../core/ctx.ts";
+import { nodeKind, registerNodeKind } from "../core/events.ts";
 import { showDetails } from "../panels/details.js";
 
 const graphEl = $("graph"), gsvg = $("gedges");

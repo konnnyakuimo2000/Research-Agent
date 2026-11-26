@@ -5,10 +5,10 @@
 // 「この依頼に適用」は次に送る 1 件だけに効き、送ったら消える。「このブラウザの既定値に保存」は次の依頼から毎回効く。
 // 「標準に戻す」は、名乗りの既定と窓口の既定モデルに戻す（適用か保存で反映）。ブラウザの保存の形は前と同じ
 // （settings:<エージェント> = { preset, values }、models:<エージェント> = { all, roles }、agent = エージェント）
-import { $, esc } from "../core/util.js";
-import { api, store, withKey } from "../core/api.js";
-import { ctx } from "../core/ctx.js";
-import { changed, coerce, defaults, fieldsHtml, hasFields, readFields } from "../core/schema-form.js";
+import { $, esc } from "../core/util.ts";
+import { api, store, withKey } from "../core/api.ts";
+import { ctx } from "../core/ctx.ts";
+import { changed, coerce, defaults, fieldsHtml, hasFields, readFields } from "../core/schema-form.ts";
 import { answeredMeta, choiceLabel, emptyChoice, fmtUsd, gatewayStatusHtml, invalidChoices, loadModelStatus, modelOf,
   modelTabHtml, mTitle, resolveModels, roleList, usesExternal, wireModelTab } from "./models.js";
 import { keysTabHtml, loadKeys, wireKeysTab } from "./keys.js";

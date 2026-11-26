@@ -1,7 +1,7 @@
 // research/v1 の木の描き手: 判断ごとの枝、網羅表（依頼 → 網羅表 → 観点）、検索・ページ・データベース・画像・食い違い。
 // ページで確かめた事実は、観点のノードへ飛んで溜まる
-import { esc, host, tier, icon, card, toggleBtn, link, sameUrl, imageUrl } from "../../core/util.js";
-import { ctx, labelOf } from "../../core/ctx.js";
+import { esc, host, tier, icon, card, toggleBtn, link, sameUrl, imageUrl } from "../../core/util.ts";
+import { ctx, labelOf } from "../../core/ctx.ts";
 import { tree } from "../../views/tree.js";
 import { now } from "../../panels/chat.js";
 import { RunSummary, WORDS, coverageWord, decisionDiff, imageWord } from "./summary.js";

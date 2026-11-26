@@ -1,5 +1,5 @@
 // 詳細の欄（ノードを押すと右から出る）。d = { title, photo, alt, kv: [[名前, HTML]], facts, dropped, list: [HTML], note, events }
-import { $, esc } from "../core/util.js";
+import { $, esc } from "../core/util.ts";
 
 const closers = [];
 export const onDetailsClose = (fn) => closers.push(fn);

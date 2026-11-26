@@ -1,9 +1,9 @@
 // 木（1 段）: 作業の流れを、左から右へ伸びる木として描く。
 // - ノードは、親から枝が伸びた先に、実がなるように膨らんで現れる
 // - 共通の描き手は、依頼 → 作業（step）を並べる。拡張（research/v1 など）は自分のイベントの描き手で、ノードを足す
-import { $, esc, card, clamp, bezierTo, easeOut, easeInOut, grownScale, fmtPt, toggleBtn, STEM, RIPEN, ARRIVE } from "../core/util.js";
-import { ctx, labelOf } from "../core/ctx.js";
-import { registerRenderer } from "../core/events.js";
+import { $, esc, card, clamp, bezierTo, easeOut, easeInOut, grownScale, fmtPt, toggleBtn, STEM, RIPEN, ARRIVE } from "../core/util.ts";
+import { ctx, labelOf } from "../core/ctx.ts";
+import { registerRenderer } from "../core/events.ts";
 import { showDetails, onDetailsClose } from "../panels/details.js";
 
 const canvas = $("canvas"), svg = $("edges");

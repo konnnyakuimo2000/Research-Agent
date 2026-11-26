@@ -18,8 +18,8 @@ SETTINGS = Settings(llm_base_url="http://unused/v1", llm_model="m", llm_api_key=
 
 # 両方の画面を、同じイベントで動かす道具（流れの図と木の文字を読む）
 SETUP = """
-  import { ctx } from 'UI/core/ctx.js';
-  import { dispatch, norm } from 'UI/core/events.js';
+  import { ctx } from 'UI/core/ctx.ts';
+  import { dispatch, norm } from 'UI/core/events.ts';
   import { tree } from 'UI/views/tree.js';
   await import('UI/extensions/research-v1/index.js');
   const { ResearchFlow } = await import('UI/extensions/research-v1/flow.js');

@@ -11,11 +11,11 @@
 // 画面の形（.claude/ui-gateway-settings-plan.md）: チャットの下は入力欄と送信ボタンだけ。次の依頼に効く設定の要約は
 // チャットの上に 1 行で出し、設定は左の一覧の下の「設定」から開く。一時停止・再開は作業記録の上に置く
 import "./style.css";
-import { $, esc } from "./core/util.js";
-import { api, withKey } from "./core/api.js";
-import { ctx, hasFlow, caps, wake } from "./core/ctx.js";
-import { dispatch, layoutFor, loadExtensions, norm, rememberExtensions, resetExtensions, runExtensions } from "./core/events.js";
-import { fitMode, fitTarget, resetCamera, stepCamera, useView } from "./core/camera.js";
+import { $, esc } from "./core/util.ts";
+import { api, withKey } from "./core/api.ts";
+import { ctx, hasFlow, caps, wake } from "./core/ctx.ts";
+import { dispatch, layoutFor, loadExtensions, norm, rememberExtensions, resetExtensions, runExtensions } from "./core/events.ts";
+import { fitMode, fitTarget, resetCamera, stepCamera, useView } from "./core/camera.ts";
 import { tree } from "./views/tree.js";
 import { GraphFlow } from "./views/flow.js";
 import { chatAgent, hooks as chatHooks, resetChat, setEmpty, now } from "./panels/chat.js";

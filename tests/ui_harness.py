@@ -1,6 +1,6 @@
 """画面の JavaScript（ES モジュール）を Node で動かす道具。ブラウザの部品（document など）は最小限の偽物にする。
 
-使い方: run_js("import { x } from 'UI/core/util.js'; out(x(1));") → out() に渡した値（JSON）。
+使い方: run_js("import { x } from 'UI/core/util.ts'; out(x(1));") → out() に渡した値（JSON）。
 Node がなければ、そのテストは飛ばす。
 """
 
@@ -58,10 +58,23 @@ globalThis.out = (v) => console.log("__OUT__" + JSON.stringify(v));
 """
 
 
+_STRIPS: dict[str, bool] = {}
+
+
+def _strips_types(node: str) -> bool:
+    if node not in _STRIPS:
+        v = subprocess.run([node, "--version"], capture_output=True, text=True).stdout.strip().lstrip("v").split(".")
+        major, minor = int(v[0]), int(v[1])
+        _STRIPS[node] = major > 22 or (major == 22 and minor >= 18)
+    return _STRIPS[node]
+
+
 def run_js(body: str) -> object:
     node = shutil.which("node")
     if not node:
         pytest.skip("Node がない")
+    if not _strips_types(node):
+        pytest.skip("Node が古い（画面の .ts をそのまま動かすには 22.18 以上が要る）")
     base = UI.as_uri() + "/"
     # 偽物は --import で先に読み込む（静的な import は、本文のコードより先に実行されるため）
     with tempfile.TemporaryDirectory() as d:

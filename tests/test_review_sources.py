@@ -27,7 +27,7 @@ def test_links_in_old_reports_stop_before_the_tier_note():
 
 def test_the_screen_compares_urls_like_the_server():
     same = run_js(f"""
-      import {{ sameUrl, canonicalUrl }} from 'UI/core/util.js';
+      import {{ sameUrl, canonicalUrl }} from 'UI/core/util.ts';
       out([sameUrl("{P1}", "{P2}"), sameUrl("{P1}", "{P1}&utm_source=x#top"),
            sameUrl("https://ex.org/a;jsessionid=AB12/b", "https://ex.org/a/b"),
            sameUrl("https://ex.org/D%C3%BCrst/", "https://ex.org/Dürst/"),
@@ -39,8 +39,8 @@ def test_the_screen_compares_urls_like_the_server():
 
 def test_citation_two_opens_the_second_page():
     picked = run_js(f"""
-      import {{ ctx }} from 'UI/core/ctx.js';
-      import {{ active }} from 'UI/core/events.js';
+      import {{ ctx }} from 'UI/core/ctx.ts';
+      import {{ active }} from 'UI/core/events.ts';
       import {{ tree }} from 'UI/views/tree.js';
       import {{ treeRenderers }} from 'UI/extensions/research-v1/tree.js';
       await import('UI/extensions/research-v1/index.js');

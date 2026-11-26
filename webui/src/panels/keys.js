@@ -1,8 +1,8 @@
 // 設定のパネルの「API キー」: 外部の Web API の鍵を入れる。鍵の形から提供元を判別し、その提供元のモデル一覧で確かめてから、
 // 選んだモデルを窓口に足す（modelgw/keys.py）。鍵はモデルの窓口だけが持ち、画面には末尾 4 文字だけが返る。
 // 入れた鍵は、足すか「やめる」までこの画面の中だけに持つ（ブラウザには保存しない）
-import { esc } from "../core/util.js";
-import { api } from "../core/api.js";
+import { esc } from "../core/util.ts";
+import { api } from "../core/api.ts";
 import { loadModels } from "./models.js";
 
 const SHOW = 60;                     // 一覧に出すモデルの数（多い提供元は絞り込みで探す）

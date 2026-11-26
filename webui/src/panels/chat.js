@@ -1,7 +1,7 @@
 // チャット（0 段）: 依頼・状態の一行・質問・文の続き・報告。どのエージェントでも出す
-import { $, esc, imageUrl } from "../core/util.js";
-import { ctx, hasFlow } from "../core/ctx.js";
-import { active, actionsFor, registerAction, registerRenderer } from "../core/events.js";
+import { $, esc, imageUrl } from "../core/util.ts";
+import { ctx, hasFlow } from "../core/ctx.ts";
+import { active, actionsFor, registerAction, registerRenderer } from "../core/events.ts";
 
 // 画面の他の部分（入力欄・一覧）とつなぐところ。app.js が入れる
 export const hooks = { setComposer() {}, loadRuns() {}, updateSend() {}, setLive() {}, sendAnswer() {} };

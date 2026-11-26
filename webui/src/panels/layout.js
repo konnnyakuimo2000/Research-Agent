@@ -2,8 +2,8 @@
 // 履歴とチャット、チャットと作業記録の間の境界を、ドラッグか矢印キー（Shift で大きく・Home で既定）で動かす。
 // 幅はこのブラウザに覚え、窓を狭めたら今の幅に収める。幅を変えたら onChange（図の並べ直し。見ている対象と拡大は保つ）。
 // 3 列が入らない幅では履歴を引き出しにし（style.css）、さらに狭い画面では「チャット」と「作業記録」を切り替えて全面に出す
-import { $, clamp } from "../core/util.js";
-import { store } from "../core/api.js";
+import { $, clamp } from "../core/util.ts";
+import { store } from "../core/api.ts";
 
 const KEY = "paneWidths";
 export const LIMITS = { side: [160, 420], chat: [280, 760] };

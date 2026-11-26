@@ -3,8 +3,8 @@
 //       判断・判定・依頼は作業の並びの真ん中に揃える。判断と作業の間の行きと帰りの線は、判断の右端に扇形に分けた平行な 2 本。
 // 名乗りの graph にない作業（新しい版のエージェントが足したノード）は、作業の列の最後の行に、名乗りの名前で出る。
 // 情報の流れ（検索結果・ページ・事実・画像・出典）は、線を流れる粒で描く。
-import { $, esc, host, icon, link, fmtPt, imageUrl } from "../../core/util.js";
-import { ctx, labelOf } from "../../core/ctx.js";
+import { $, esc, host, icon, link, fmtPt, imageUrl } from "../../core/util.ts";
+import { ctx, labelOf } from "../../core/ctx.ts";
 import { FlowBase } from "../../views/flow.js";
 import { tree } from "../../views/tree.js";
 import { showDetails } from "../../panels/details.js";

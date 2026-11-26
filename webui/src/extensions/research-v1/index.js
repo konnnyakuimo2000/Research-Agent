@@ -3,10 +3,10 @@
 // - 木: 判断ごとの枝・網羅表・ページ・画像・食い違いの描き手（共通の描き手に代わる）
 // - 流れの図: 判断を中心に作業が並ぶ並べ方（共通の GraphFlow に代わる）
 // - 報告の出典番号: 押すと、そのページのノードと、確かめた事実・引用を出す
-import { ctx } from "../../core/ctx.js";
-import { sameUrl } from "../../core/util.js";
-import { registerExtension } from "../../core/events.js";
-import { jumpTo } from "../../core/camera.js";
+import { ctx } from "../../core/ctx.ts";
+import { sameUrl } from "../../core/util.ts";
+import { registerExtension } from "../../core/events.ts";
+import { jumpTo } from "../../core/camera.ts";
 import { tree } from "../../views/tree.js";
 import { now } from "../../panels/chat.js";
 import { showDetails } from "../../panels/details.js";

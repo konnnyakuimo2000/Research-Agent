@@ -12,7 +12,7 @@ from __future__ import annotations
 from tests.ui_harness import run_js
 
 SETUP = """
-  import { ctx } from 'UI/core/ctx.js';
+  import { ctx } from 'UI/core/ctx.ts';
   import * as S from 'UI/panels/settings.js';
   import * as M from 'UI/panels/models.js';
   ctx.AGENTS = { research: { id: "research", name: "調査", ok: true, default: true,

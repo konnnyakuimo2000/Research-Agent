@@ -1,9 +1,9 @@
 // モデル（モデルの窓口のもの。docs/telemetry_enhancement_plan.md 6.3・M4）。設定のパネルの「モデル」と「接続と使用量」に出す部品。
 // 選び方（choice = { all, roles }）: 「全部まとめて 1 つ」と、役割ごとの上書き（役割の上書きが優先）。何も選ばなければ窓口の役割の既定。
 // 使えないモデル（鍵がない）・役割に要る能力がないモデル・一覧から消えたモデルは送らず、理由と代わりに使うモデルを出す
-import { esc } from "../core/util.js";
-import { api } from "../core/api.js";
-import { ctx } from "../core/ctx.js";
+import { esc } from "../core/util.ts";
+import { api } from "../core/api.ts";
+import { ctx } from "../core/ctx.ts";
 
 let CATALOG = null, modelStatus = null, statusAt = 0;
 export const hooks = { afterLoad() {} };
