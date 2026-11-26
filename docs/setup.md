@@ -143,7 +143,11 @@ npm ci
 npm run build    # src/research_agent/ui/ に出す（ゲートウェイが /ui で配る。git の外）
 npm run dev      # 開発用: http://localhost:5173/ui/ （/api は http://localhost:8100 のゲートウェイへ渡す）
 npm run check    # 型の検査
+npm test         # 部品のテスト（Vitest）
+npm run e2e      # 画面を通しで動かす（Playwright。この PC の Chrome を使い、/api の返事はテストの中で決める）
 ```
+
+`pytest` も、Node と `webui/node_modules` があれば部品のテストと通しの確認を一緒に回す（なければ飛ばす）。
 
 ### 安全のための制限（2026-11-21 から）
 

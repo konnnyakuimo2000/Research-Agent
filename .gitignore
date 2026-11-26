@@ -184,3 +184,6 @@ runs/
 # 画面のビルド結果（webui/ から npm run build で作る）と、その道具
 src/research_agent/ui/
 webui/node_modules/
+# 画面の確認の結果（Playwright）
+webui/test-results/
+webui/playwright-report/
