@@ -12,9 +12,12 @@ import { changed, coerce, defaults, fieldsHtml, hasFields, readFields } from "..
 import { answeredMeta, choiceLabel, emptyChoice, fmtUsd, gatewayStatusHtml, invalidChoices, loadModelStatus, modelOf,
   modelTabHtml, mTitle, resolveModels, roleList, usesExternal, wireModelTab } from "./models.js";
 import { keysTabHtml, loadKeys, wireKeysTab } from "./keys.js";
+import { resetWidths, widthsText } from "./layout.js";
+import { agentStatus, agents, catalog, prefs } from "../stores/state.ts";
+import { derived } from "svelte/store";
 
-// 画面の他の部分とつなぐところ（app.js が入れる）
-export const hooks = { agentChanged() {}, summaryChanged() {}, startNew() {}, resetWidths() {}, widthsText: () => "" };
+// 「この設定を使う」で新しい調査の画面にする（app.js が入れる。画面を Svelte の部品にしたら、部品の引数にする）
+export const hooks = { startNew() {} };
 
 const schemaOf = (agent) => ctx.AGENTS[agent]?.settings_schema || {};
 const presetsOf = (agent) => ctx.AGENTS[agent]?.presets || {};
@@ -26,22 +29,18 @@ function loadSaved(agent) {
   const s = store.get("settings:" + agent, null) || {}, m = store.get("models:" + agent, null) || {};
   return { agent, settings: { preset: s.preset || "", values: { ...(s.values || {}) } }, models: { all: m.all || "", roles: { ...(m.roles || {}) } } };
 }
-let saved = null, oneTime = null, draft = null, tab = "research", runView = null, opener = null, notice = "";
-let agentStatus = null, agentStatusAt = 0;
-export const current = () => oneTime || saved;
-export const isOneTime = () => !!oneTime;
+let draft = null, tab = "research", runView = null, opener = null, notice = "";
+let P = { saved: null, oneTime: null }, ST = { data: null, at: 0 };
+prefs.subscribe((v) => { P = v; });
+agentStatus.subscribe((v) => { ST = v; });
+export const current = () => P.oneTime || P.saved;
+export const isOneTime = () => !!P.oneTime;
+const setPrefs = (saved, oneTime) => prefs.set({ saved, oneTime });
 
 // エージェントの一覧が届いたら呼ぶ（覚えているエージェントがもうなければ既定に）
 export function initSettings(defaultAgent) {
   const a = store.get("agent", "");
-  saved = loadSaved(ctx.AGENTS[a] ? a : defaultAgent);
-  if (oneTime && !ctx.AGENTS[oneTime.agent]) oneTime = null;
-  syncAgent(true);
-}
-function syncAgent(force = false) {
-  const a = current()?.agent;
-  if (a && (force || ctx.agentId !== a)) { ctx.agentId = a; hooks.agentChanged(); }
-  hooks.summaryChanged();
+  setPrefs(loadSaved(ctx.AGENTS[a] ? a : defaultAgent), P.oneTime && ctx.AGENTS[P.oneTime.agent] ? P.oneTime : null);
 }
 // 送る中身（設定は既定と違うものだけ。モデルは使えるものだけ）
 export function requestBody() {
@@ -49,7 +48,7 @@ export function requestBody() {
   return { agent: c.agent, settings: hasFields(sc) ? changed(sc, c.settings.values) : {}, models: resolveModels(c.models, c.agent).send };
 }
 // 送ったら「この依頼だけ」を消す（次の依頼に持ち越さない）
-export function consumeOneTime() { if (oneTime) { oneTime = null; syncAgent(); } }
+export function consumeOneTime() { if (P.oneTime) setPrefs(P.saved, null); }
 
 // 「標準」「すばやく」など。どのプリセットとも違えば「カスタム」。設定の欄がなければ空
 export function presetName(agent, values) {
@@ -64,28 +63,37 @@ export function presetName(agent, values) {
 export function summary() {
   const c = current(); if (!c) return null;
   return { agent: ctx.AGENTS[c.agent]?.name || c.agent, preset: presetName(c.agent, c.settings.values), models: choiceLabel(c.models, c.agent),
-    oneTime: oneTime ? oneTime.label || "この依頼だけ" : "", external: usesExternal(c.models, c.agent), warnings: invalidChoices(c.models, c.agent) };
+    oneTime: P.oneTime ? P.oneTime.label || "この依頼だけ" : "", external: usesExternal(c.models, c.agent), warnings: invalidChoices(c.models, c.agent) };
 }
 
 // ---- 接続（エージェントと、エージェントが使うモデル・検索） ----
 export async function loadAgentStatus(agent = ctx.agentId) {
-  try { agentStatus = await api(`/api/status?agent=${encodeURIComponent(agent)}`); }
-  catch (err) { agentStatus = { agent, ok: false, error: err.message || "応答なし", checks: {} }; }
-  agentStatusAt = Date.now(); hooks.summaryChanged();
+  let data;
+  try { data = await api(`/api/status?agent=${encodeURIComponent(agent)}`); }
+  catch (err) { data = { agent, ok: false, error: err.message || "応答なし", checks: {} }; }
+  agentStatus.set({ data, at: Date.now() });
   if (!panel.hidden && tab === "status") render();
-  return agentStatus;
+  return data;
 }
 // 送信に響く接続の異常（チャットの上に短く出す。なければ空）
 export function connectionProblem() {
-  if (!agentStatus) return "";
-  if (!agentStatus.ok) return "エージェントにつながらない";
-  const bad = Object.values(agentStatus.checks || {}).find((c) => !c.ok);
+  const st = ST.data;
+  if (!st) return "";
+  if (!st.ok) return "エージェントにつながらない";
+  const bad = Object.values(st.checks || {}).find((c) => !c.ok);
   return bad ? bad.hint || `${bad.title}につながらない` : "";
 }
+// チャットの上の要約と、送信に響く異常。どれかのストアが変われば作り直す
+export const headState = derived([prefs, agents, catalog, agentStatus], () => {
+  const s = summary();
+  if (!s) return null;
+  const warnings = [connectionProblem(), ...s.warnings, s.external ? "外部のモデルに依頼文と読んだページを送ります" : ""].filter(Boolean);
+  return { ...s, warnings };
+});
 function agentStatusHtml() {
-  const st = agentStatus, name = ctx.AGENTS[ctx.agentId]?.name || ctx.agentId;
+  const st = ST.data, name = ctx.AGENTS[ctx.agentId]?.name || ctx.agentId;
   if (!st) return `<p class="note">まだ確かめていません。</p>`;
-  const at = `<p class="since">${new Date(agentStatusAt).toLocaleTimeString("ja-JP")} に確認</p>`;
+  const at = `<p class="since">${new Date(ST.at).toLocaleTimeString("ja-JP")} に確認</p>`;
   if (!st.ok) return `${at}<p class="ngline"><i class="dot ng"></i>${esc(name)}につながらない（${esc(st.error || "応答なし")}）</p>`;
   const checks = Object.values(st.checks || {});
   return `${at}<table class="usage"><thead><tr><th>確かめたこと</th><th>結果</th></tr></thead><tbody>
@@ -131,7 +139,7 @@ function render() {
   if (tab === "models") wireModelTab(body, draft.models, render);
   if (tab === "keys") wireKeysTab(body, render);
   if (tab === "status") { body.querySelector("#recheck")?.addEventListener("click", refreshStatus); fillRunCost(); }
-  if (tab === "display") body.querySelector("#resetWidths")?.addEventListener("click", () => { hooks.resetWidths(); notice = "幅を既定に戻した"; render(); });
+  if (tab === "display") body.querySelector("#resetWidths")?.addEventListener("click", () => { resetWidths(); notice = "幅を既定に戻した"; render(); });
   if (tab === "run") fillAnswered(runView);
   renderFoot();
   if (focused && $(focused) && body.contains($(focused))) $(focused).focus();   // 欄を変えて描き直しても、その欄に戻す
@@ -159,14 +167,14 @@ function renderFoot() {
   } else { foot.hidden = true; foot.innerHTML = ""; }
 }
 // 適用・保存したら、チャットに戻って上の要約を変える
-function closeToChat() { closePanel(); syncAgent(); $("input").focus(); }
+function closeToChat() { closePanel(); $("input").focus(); }
 // パネルのボタンの動き（テストからも呼ぶ）。draft はパネルで編集中の値
 export const draftState = () => draft;
-export function applyOnce() { oneTime = { ...clone(draft), label: "この依頼だけ" }; closeToChat(); }
+export function applyOnce() { const once = { ...clone(draft), label: "この依頼だけ" }; closeToChat(); setPrefs(P.saved, once); }
 export function saveDefault() {
-  saved = clone(draft); oneTime = null;
+  const saved = clone(draft);
   store.set("agent", saved.agent); store.set("settings:" + saved.agent, saved.settings); store.set("models:" + saved.agent, saved.models);
-  closeToChat();
+  closeToChat(); setPrefs(saved, null);
 }
 export function resetDraft() {
   draft.settings = { preset: "", values: {} }; draft.models = emptyChoice();
@@ -212,7 +220,7 @@ async function fillRunCost() {
 function displayHtml() {
   return `${notice ? `<p class="notice" role="status">${esc(notice)}</p>` : ""}
     <p class="note">境界のドラッグか矢印キーで幅を変えられます。</p>
-    <p class="since">${esc(hooks.widthsText())}</p>
+    <p class="since">${esc(widthsText())}</p>
     <div class="fbtns"><button type="button" id="resetWidths">幅を既定に戻す</button></div>`;
 }
 
@@ -264,8 +272,9 @@ export function useRun(r) {
   const sc = schemaOf(r.agent), props = sc.properties || {};
   const base = r.effective_settings ? r.effective_settings : { ...defaults(sc), ...(r.settings || {}) };
   const values = Object.fromEntries(Object.entries(base).filter(([k]) => k in props).map(([k, v]) => [k, coerce(sc, k, v)]));
-  oneTime = { agent: r.agent, settings: { preset: "", values }, models: { all: "", roles: { ...(r.models || {}) } }, label: "過去の設定" };
-  closePanel(); syncAgent(); hooks.startNew(); $("input").focus();
+  closePanel();
+  setPrefs(P.saved, { agent: r.agent, settings: { preset: "", values }, models: { all: "", roles: { ...(r.models || {}) } }, label: "過去の設定" });
+  hooks.startNew(); $("input").focus();
 }
 
 $("setClose").addEventListener("click", closePanel);

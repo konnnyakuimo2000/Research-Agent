@@ -4,9 +4,10 @@
 import { esc } from "../core/util.ts";
 import { api } from "../core/api.ts";
 import { ctx } from "../core/ctx.ts";
+import { catalog } from "../stores/state.ts";
 
 let CATALOG = null, modelStatus = null, statusAt = 0;
-export const hooks = { afterLoad() {} };
+catalog.subscribe((v) => { CATALOG = v; });
 export const roleList = (agentId) => ctx.AGENTS[agentId]?.model_roles || [];
 export const modelOf = (id) => CATALOG?.models.find((m) => m.id === id);
 export const mTitle = (id) => modelOf(id)?.title || id;
@@ -56,12 +57,12 @@ export function choiceLabel(choice, agentId) {
   return ids.length === 1 ? mTitle(ids[0]) : "役割ごとのモデル";
 }
 
+// 一覧を読み直す（届いたら、ストアを読む部品が描き直す）
 export async function loadModels() {
   try {
     const v = await api("/api/models");
-    CATALOG = v.available ? v : null;
-  } catch (err) { CATALOG = null; }
-  await hooks.afterLoad();
+    catalog.set(v.available ? v : null);
+  } catch (err) { catalog.set(null); }
 }
 // モデルの窓口の状態と使用量（null = 窓口につながらない・窓口を使っていない）
 export async function loadModelStatus() {

@@ -170,8 +170,12 @@ def test_replay_speed_does_not_change_counts_and_history_is_read_only():
     q = "どれのことですか？\\n1. 塔\\n2. 山\\n番号か、具体的な内容で答えてください。上にない場合はその内容を書いてください。"
     out = run(f"""
       import {{ hooks }} from 'UI/panels/chat.js';
+      import {{ live }} from 'UI/stores/state.ts';
       const sent = [], composer = [];
-      hooks.sendAnswer = (a) => sent.push(a); hooks.setComposer = (on) => composer.push(on);
+      let was = null;
+      ctx.runId = "r1";
+      hooks.sendAnswer = (a) => sent.push(a);
+      live.subscribe((l) => {{ if (l.waitingRun !== was) {{ was = l.waitingRun; composer.push(!!was); }} }});   // 入力欄が答えの形に変わったとき
       ctx.replay = true;
       send("question", {{ question: "{q}", choices: true }});
       send("run.waiting", {{ question: "{q}" }});

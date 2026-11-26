@@ -82,7 +82,7 @@ export interface RunSummary {
   request: string;
   status: RunStatus;
   question: string;
-  created: string;
+  created: number;        // 始めた時刻（UNIX 秒）
   events: number;
   seconds: number | null;
   models: Record<string, string>;        // 依頼ごとに選び直したモデル（"*" は全部の役割）
@@ -90,3 +90,38 @@ export interface RunSummary {
   effective_settings: SettingsValues | null;   // 始めたときに効いた設定（前の版の記録にはない）
 }
 export interface RunsReply { runs: RunSummary[] }
+
+// ---- モデル（/api/models） ----
+
+export interface ModelEntry {
+  id: string;
+  title?: string;
+  capabilities?: string[];
+  available?: boolean;
+  unavailable?: string;    // 使えない理由
+  external?: boolean;      // 外部の API に送る
+  price?: { input_per_mtok?: number; output_per_mtok?: number };
+  [key: string]: any;
+}
+export interface Catalog {
+  available: boolean;
+  default: string;
+  roles: Record<string, string>;   // 役割 → 窓口の既定のモデル
+  models: ModelEntry[];
+}
+/** モデルの選び方: 全部まとめて 1 つ（all）と、役割ごとの上書き（roles） */
+export interface ModelChoice { all: string; roles: Record<string, string> }
+
+// ---- 次の依頼の設定（ブラウザの既定値と、この依頼だけの上書き） ----
+
+export interface RequestPrefs {
+  agent: string;
+  settings: { preset: string; values: SettingsValues };
+  models: ModelChoice;
+  label?: string;          // この依頼だけの上書きの名前（「この依頼だけ」「過去の設定」）
+}
+
+// ---- 接続（/api/status） ----
+
+export interface StatusCheck { title: string; ok: boolean; seconds?: number; error?: string; hint?: string }
+export interface AgentStatus { agent: string; ok: boolean; error?: string; checks: Record<string, StatusCheck>; model?: string }

@@ -10,6 +10,9 @@
 //
 // 画面の形（.claude/ui-gateway-settings-plan.md）: チャットの下は入力欄と送信ボタンだけ。次の依頼に効く設定の要約は
 // チャットの上に 1 行で出し、設定は左の一覧の下の「設定」から開く。一時停止・再開は作業記録の上に置く
+//
+// 部品の間で共有する状態（エージェント・モデルの一覧・次の依頼の設定・履歴・調査の動き）は stores/state.ts のストア。
+// ここはそれを読んで（subscribe）、チャットの上・履歴・ボタンを描き直す
 import "./style.css";
 import { $, esc } from "./core/util.ts";
 import { api, withKey } from "./core/api.ts";
@@ -18,12 +21,14 @@ import { dispatch, layoutFor, loadExtensions, norm, rememberExtensions, resetExt
 import { fitMode, fitTarget, resetCamera, stepCamera, useView } from "./core/camera.ts";
 import { tree } from "./views/tree.js";
 import { GraphFlow } from "./views/flow.js";
-import { chatAgent, hooks as chatHooks, resetChat, setEmpty, now } from "./panels/chat.js";
+import { chatAgent, resetChat, setEmpty, now } from "./panels/chat.js";
 import { closeDetails } from "./panels/details.js";
-import { answeredMeta, fmtUsd, hooks as modelHooks, loadModels, modelMeta, runModelTag } from "./panels/models.js";
-import { closePanel, connectionProblem, consumeOneTime, hooks as setHooks, initSettings, loadAgentStatus, openPanel,
-  panelOpen, requestBody, settingsMeta, statusLabel, summary } from "./panels/settings.js";
-import { initLayout, resetWidths, showPane, widthsText } from "./panels/layout.js";
+import { answeredMeta, fmtUsd, loadModels, modelMeta, runModelTag } from "./panels/models.js";
+import { consumeOneTime, headState, hooks as setHooks, initSettings, loadAgentStatus, openPanel,
+  panelOpen, requestBody, settingsMeta, statusLabel } from "./panels/settings.js";
+import { initLayout, showPane } from "./panels/layout.js";
+import { agents, catalog, live as liveStore, nextAgent, refreshRuns, runs, sendAnswer, setLive, waitAnswer } from "./stores/state.ts";
+import { derived } from "svelte/store";
 
 // ---- エージェント（ゲートウェイがつないでいるもの） ----
 function setLayout(id) {
@@ -36,11 +41,11 @@ function setLayout(id) {
 let defaultAgent = "research";
 async function loadAgents() {
   try {
-    const { agents, default: def } = await api("/api/agents");
-    ctx.AGENTS = Object.fromEntries(agents.map((a) => [a.id, a]));
+    const { agents: list, default: def } = await api("/api/agents");
     defaultAgent = def;
-    rememberExtensions(agents);
-    await loadExtensions([...new Set(agents.flatMap((a) => a.extensions || []))]);
+    rememberExtensions(list);
+    await loadExtensions([...new Set(list.flatMap((a) => a.extensions || []))]);
+    agents.set(Object.fromEntries(list.map((a) => [a.id, a])));
     initSettings(def);                                   // 覚えているエージェントと設定（ctx.agentId を決める）
     if (!ctx.runId) { ctx.runAgent = ctx.agentId; reset(); }
     setLayout(ctx.runId ? ctx.runAgent : ctx.agentId);   // 名乗りが届く前に開いた依頼も、段に合わせて出し直す
@@ -48,27 +53,25 @@ async function loadAgents() {
   } catch (err) { /* 一覧が取れなければ、既定のエージェントに送る */ }
 }
 // 次の依頼のエージェントが変わったとき。開いている履歴と、ライブの購読はそのまま
-setHooks.agentChanged = () => {
-  if (!ctx.runId) { ctx.runAgent = ctx.agentId; reset(); setLayout(ctx.agentId); }
-  loadAgentStatus();
-};
-setHooks.summaryChanged = renderHead;
+nextAgent.subscribe((a) => {
+  if (!a) return;
+  if (!ctx.runId) { ctx.runAgent = a; reset(); setLayout(a); }
+  loadAgentStatus(a);
+});
 setHooks.startNew = () => newResearch();
-setHooks.resetWidths = resetWidths;
-setHooks.widthsText = widthsText;
 
 // チャットの上: 次の依頼に効くエージェント・プリセット・モデルと、送信に響く異常（外部モデル・接続・使えなくなったモデル）
-function renderHead() {
-  const s = summary(), btn = $("headSummary");
+headState.subscribe(renderHead);
+function renderHead(s) {
+  const btn = $("headSummary");
   if (!s) { btn.textContent = ""; $("headWarn").hidden = true; return; }
   const parts = [s.agent, s.preset, s.models].filter(Boolean);
   btn.innerHTML = `<span class="lbl">次の依頼</span><span class="txt">${esc(parts.join(" · "))}</span>`
     + (s.oneTime ? `<span class="badge">${esc(s.oneTime)}</span>` : "") + (s.external ? `<span class="ext">外部</span>` : "");
   btn.title = `次の依頼: ${parts.join(" · ")}${s.oneTime ? `（${s.oneTime}）` : ""}`;   // 幅が狭くて切れても読めるように
   btn.setAttribute("aria-label", `次の依頼:${parts.join("、")}${s.oneTime ? `（${s.oneTime}）` : ""}${s.external ? "、外部のモデルを使う" : ""}。押すと設定を開く`);
-  const warn = [connectionProblem(), ...s.warnings, s.external ? "外部のモデルに依頼文と読んだページを送ります" : ""].filter(Boolean);
-  $("headWarn").hidden = !warn.length;
-  $("headWarn").innerHTML = warn.map(esc).join("<br>");
+  $("headWarn").hidden = !s.warnings.length;
+  $("headWarn").innerHTML = s.warnings.map(esc).join("<br>");
 }
 $("headSummary").addEventListener("click", (ev) => openPanel("research", ev.currentTarget));
 $("settingsBtn").addEventListener("click", (ev) => { closeSide(); openPanel("research", narrow() ? $("runsBtn") : ev.currentTarget); });
@@ -96,12 +99,11 @@ document.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("clic
 function handle(e) { dispatch(e); ctx.flow.on(e); wake(); }
 
 // ---- 調査の開始・答え・一覧 ----
-let source = null, waitingRun = null, liveState = "";   // liveState: 動いている調査の状態（running / paused / ""）
-function setComposer(answerMode) {
-  waitingRun = answerMode ? ctx.runId : null;
-  $("composer").classList.toggle("answer", answerMode);
-  $("input").placeholder = answerMode ? "答えを入力（番号でも可）" : "調べたいことを入力";
-  updateSend();
+// liveState（動いている調査の状態: running / paused / ""）と waitingRun（答えを待っている依頼）は、ストアの写し
+let source = null, waitingRun = null, liveState = "";
+function showComposer() {
+  $("composer").classList.toggle("answer", !!waitingRun);
+  $("input").placeholder = waitingRun ? "答えを入力（番号でも可）" : "調べたいことを入力";
 }
 // 調査が動いている間（再生中も）は、作業記録の上のボタンで一時停止・再開（止めるだけのエージェントは「止める」）
 function busy() { return !waitingRun && (ctx.replay ? queue.length > 0 || !!source : liveState !== ""); }
@@ -125,28 +127,26 @@ async function togglePause() {
   catch (err) { chatAgent(`<p>${action === "resume" ? "再開できませんでした" : "止められませんでした"}: ${esc(err.message)}</p>`); }
 }
 $("runCtl").addEventListener("click", togglePause);
-async function sendAnswer(text) {
-  if (!waitingRun || !text) return;
-  try { await api(`/api/runs/${waitingRun}/answer`, { answer: text }); setComposer(false); }
-  catch (err) { chatAgent(`<p>答えを送れませんでした: ${esc(err.message)}</p>`); }
-}
-Object.assign(chatHooks, { setComposer, loadRuns, updateSend, sendAnswer, setLive: (v) => { liveState = v; } });
 $("composer").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   if (busy() && !ctx.replay) return;
   const text = input.value.trim(); if (!text) return;
-  if (waitingRun) { input.value = ""; growInput(); sendAnswer(text); return; }
+  if (waitingRun) {
+    input.value = ""; growInput();
+    sendAnswer(text).catch((err) => chatAgent(`<p>答えを送れませんでした: ${esc(err.message)}</p>`));
+    return;
+  }
   const body = requestBody();
   try {
     const r = await api("/api/runs", { request: text, ...body });
     input.value = ""; growInput();
     consumeOneTime();                                  // 「この依頼だけ」は次の依頼に持ち越さない
-    open(r.id, true, r.agent, r.models, r.settings || body.settings); loadRuns();
+    open(r.id, true, r.agent, r.models, r.settings || body.settings); refreshRuns();
   } catch (err) { chatAgent(`<p>始められませんでした: ${esc(err.message)}</p>`); }   // 送れなければ、入力した文は残す
 });
 function newResearch() {
   openSeq++; closeSource(); ctx.runId = null; ctx.runAgent = ctx.agentId; reset(); setLayout(ctx.agentId); resetChat(); setEmpty(true);
-  ctx.replay = false; liveState = ""; showMode(); setComposer(false); highlightRun(); $("input").focus();
+  ctx.replay = false; setLive(""); showMode(); waitAnswer(false); highlightRun(); $("input").focus();
 }
 $("newBtn").addEventListener("click", () => { closeSide(); newResearch(); });
 // 履歴: 広い画面では列を出す・隠す。狭い画面（列にしない幅）では、チャットの上に重ねて開く
@@ -208,11 +208,6 @@ async function showRunCost(id) {
     if (el && $("runMeta")?.dataset.priced) el.textContent = `費用 ${fmtUsd(u.usd || 0)}${u.limit_usd ? ` / 上限 ${fmtUsd(u.limit_usd)}` : ""}`;
   } catch (err) { /* 費用を読めなくても、調査の表示は続ける */ }
 }
-modelHooks.afterLoad = async () => {
-  renderHead();
-  await loadRuns();
-  if (ctx.runId && RUNS[ctx.runId]) showRunMeta(ctx.runId, RUNS[ctx.runId].models, RUNS[ctx.runId].settings);   // 一覧が届く前に開いた調査にも出す
-};
 
 // 再生: 終わった調査は、記録の時刻どおりに（速さを掛けて）流す。動いている調査は届いたらすぐ描く
 let RUNS = {};   // 一覧の依頼（id → 要約。使ったモデル・設定を出すため）
@@ -230,9 +225,9 @@ async function open(id, live, agent, models, settings) {
   if (seq !== openSeq) return;                    // 待っている間に別の依頼を開いた
   ctx.runId = id; ctx.runAgent = agentId; reset(); setLayout(agentId); resetChat();
   showRunMeta(id, models || RUNS[id]?.models, settings || RUNS[id]?.settings);
-  ctx.replay = !live; clock = 0; playing = true; liveState = live ? "running" : ""; skipped = 0; lastSeen = Date.now();
-  showMode();
-  setComposer(false); highlightRun();
+  ctx.replay = !live; clock = 0; playing = true; skipped = 0; lastSeen = Date.now();
+  setLive(live ? "running" : ""); showMode();
+  waitAnswer(false); highlightRun();
   source = new EventSource(withKey(`/api/runs/${encodeURIComponent(id)}/events`));
   source.onmessage = (m) => { lastSeen = Date.now(); const e = norm(JSON.parse(m.data)); if (ctx.replay) queue.push(e); else handle(e); };
   // 通信が切れて実行の状況を確かめられないときは、最後に受け取った時刻を出す（EventSource はつなぎ直す）
@@ -264,10 +259,12 @@ function frame(ts) {
 
 // ---- 履歴の一覧（各行の「…」: 詳細・削除） ----
 const LIVE = ["running", "waiting", "paused"], UNFINISHED = [...LIVE, "finishing"];
-async function loadRuns() {
-  try {
-    const { runs } = await api(withKey("/api/runs"));
-    RUNS = Object.fromEntries(runs.map((r) => [r.id, r]));
+// 一覧・エージェント・モデルのどれかが変われば描き直す（行のモデル名とエージェント名が変わるため）
+function renderRuns({ list: runs, error, loaded }) {
+  RUNS = Object.fromEntries(runs.map((r) => [r.id, r]));
+  if (error) { $("runs").innerHTML = `<p style="padding:8px;color:var(--muted)">一覧を読めません: ${esc(error)}</p>`; return; }
+  if (!loaded) return;
+  {
     const defAgent = Object.values(ctx.AGENTS).find((a) => a.default)?.id;
     $("runs").innerHTML = runs.map((r) => `<div class="runrow" data-id="${esc(r.id)}"><button type="button" class="run" data-id="${esc(r.id)}" data-agent="${esc(r.agent || "")}" data-live="${LIVE.includes(r.status)}">
       <span class="r1">${esc(r.request || "(依頼なし)")}</span><span class="r2">${esc(r.id.slice(0, 13).replace(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2}).*/, "$2/$3 $4:$5"))} · ${esc(statusLabel(r.status))}${ctx.AGENTS[r.agent] && r.agent !== defAgent ? " · " + esc(ctx.AGENTS[r.agent].name) : ""}${runModelTag(r.models) ? " · " + esc(runModelTag(r.models)) : ""}</span></button>
@@ -277,7 +274,7 @@ async function loadRuns() {
     $("runs").querySelectorAll(".more").forEach((b) => b.addEventListener("click", (ev) => { ev.stopPropagation(); openRunMenu(b); }));
     showRecent(runs);
     highlightRun();
-  } catch (err) { $("runs").innerHTML = `<p style="padding:8px;color:var(--muted)">一覧を読めません: ${esc(err.message)}</p>`; }
+  }
 }
 function highlightRun() { $("runs").querySelectorAll(".run").forEach((b) => b.classList.toggle("on", b.dataset.id === ctx.runId)); }
 
@@ -306,7 +303,7 @@ async function deleteRun(r, btn) {
   try {
     await api(`/api/runs/${encodeURIComponent(r.id)}`, undefined, "DELETE");
     if (ctx.runId === r.id) newResearch();        // 開いていた履歴なら、購読と再生を閉じて新しい調査に戻る
-    await loadRuns();
+    await refreshRuns();
   } catch (err) { window.alert(`削除できませんでした: ${err.message}`); }
 }
 
@@ -320,11 +317,18 @@ initLayout((snap) => relayout(snap));
 
 window.addEventListener("resize", () => relayout());
 window.researchAgentFrames = ctx.frames;   // 描いた・休んだフレームの数（ブラウザで確かめるため）
+
+// ストアを読む（ここで購読するのは、上の変数がすべて用意できてから呼ばれるようにするため）
+liveStore.subscribe((l) => { liveState = l.state; waitingRun = l.waitingRun; showComposer(); updateSend(); });
+derived([runs, agents, catalog], ([r]) => r).subscribe(renderRuns);
+// モデルの一覧が後から届いたら、開いている調査の頭（使ったモデル・費用）を作り直す
+catalog.subscribe(() => { if (ctx.runId && RUNS[ctx.runId]) showRunMeta(ctx.runId, RUNS[ctx.runId].models, RUNS[ctx.runId].settings); });
+
 reset(); requestAnimationFrame(frame);
 const params = new URLSearchParams(location.search);
 if (params.has("speed")) speed = +params.get("speed") || 0;   // 再生の速さ（0 = すぐ全部を出す。確認用）
 if (params.has("at")) stopAt = +params.get("at");   // この時刻（秒）の状態で止める
-const ready = Promise.all([loadAgents(), loadRuns()]);
+const ready = Promise.all([loadAgents(), refreshRuns()]);
 const first = params.get("run");
 ready.then(() => {
   if (["research", "models", "status", "display"].includes(params.get("panel"))) openPanel(params.get("panel"));   // 確認用: 開いた状態で出す

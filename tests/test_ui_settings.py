@@ -161,3 +161,18 @@ def test_pane_widths_fit_the_window():
     assert out["narrow"] == {"side": 300, "chat": 640}                   # 1300 - 300 - 作業記録の 360
     assert out["tiny"] == {"side": 160, "chat": 280}
     assert out["none"] == {"side": None, "chat": None}
+
+
+def test_the_header_follows_the_stores_without_wiring():
+    """チャットの上の要約は、設定のストアを読むだけで変わる（前は app.js への hooks.summaryChanged の手配線）。"""
+    out = run_js(SETUP + """
+      const seen = [];
+      S.headState.subscribe((s) => s && seen.push([s.preset, s.oneTime]));
+      S.openPanel("research");
+      S.draftState().settings = { preset: "quick", values: { max_seconds: 420, max_pages: 6, images: true } };
+      S.applyOnce();
+      const applied = seen.at(-1);
+      S.consumeOneTime();
+      out({ first: seen[0], applied, last: seen.at(-1) });
+    """)
+    assert out == {"first": ["標準", ""], "applied": ["すばやく", "この依頼だけ"], "last": ["標準", ""]}

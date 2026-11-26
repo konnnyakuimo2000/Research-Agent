@@ -2,9 +2,11 @@
 import { $, esc, imageUrl } from "../core/util.ts";
 import { ctx, hasFlow } from "../core/ctx.ts";
 import { active, actionsFor, registerAction, registerRenderer } from "../core/events.ts";
+import { refreshRuns, sendAnswer, setLive, waitAnswer } from "../stores/state.ts";
 
-// 画面の他の部分（入力欄・一覧）とつなぐところ。app.js が入れる
-export const hooks = { setComposer() {}, loadRuns() {}, updateSend() {}, setLive() {}, sendAnswer() {} };
+// 動き（running / paused）・答え待ち・一覧の読み直しはストア（stores/state.ts）に出す。
+// app.js がそれを読んで、ボタンと入力欄を変える。番号の答えのボタンは hooks.sendAnswer を呼ぶ（テストで差し替える）
+export const hooks = { sendAnswer: (text) => sendAnswer(text).catch((err) => chatAgent(`<p>答えを送れませんでした: ${esc(err.message)}</p>`)) };
 
 let statusEl = null, questions = new Set(), streamText = "", lastReport = "";
 export function resetChat() { statusEl = null; questions = new Set(); streamText = ""; lastReport = ""; $("chat").innerHTML = ""; }
@@ -82,7 +84,7 @@ function wireActions(el, report) {
 function finish(html, report = "") {
   const el = statusEl || chatAgent("");
   el.querySelector(".body").innerHTML = html; wireCites(el); wireActions(el, report);   // 報告は頭から読めるよう、送らない
-  statusEl = null; hooks.setLive("");
+  statusEl = null; setLive("");
   return el;
 }
 
@@ -93,28 +95,28 @@ registerRenderer("run.start", (e) => { chatUser(e.request); statusBubble(); now(
 registerRenderer("question", (e) => { if (!questions.has(e.question)) { questions.add(e.question); showQuestion(e.question, !!e.choices); } }, "chat");
 registerRenderer("answer", (e) => {
   const key = "a:" + e.answer + e.question; if (!questions.has(key)) { questions.add(key); chatUser(e.answer); }
-  hooks.setComposer(false); statusBubble();
+  waitAnswer(false); statusBubble();
 }, "chat");
 registerRenderer("run.waiting", (e) => {
   if (!questions.has(e.question)) { questions.add(e.question); showQuestion(e.question); }
-  if (!ctx.replay) hooks.setComposer(true);                  // 履歴の再生では、入力欄を答えの形にしない
+  if (!ctx.replay) waitAnswer(true);                  // 履歴の再生では、入力欄を答えの形にしない
 }, "chat");
 registerRenderer("run.end", (e) => {
   lastReport = e.report ?? e.answer ?? "";
-  finish(renderReport(lastReport), lastReport); hooks.setComposer(false); hooks.loadRuns();
+  finish(renderReport(lastReport), lastReport); waitAnswer(false); refreshRuns();
 }, "chat");
-registerRenderer("run.error", (e) => { chatAgent(`<p>エラーで続けられませんでした: ${esc(e.error)}</p>`); statusEl = null; hooks.setLive(""); hooks.updateSend(); }, "chat");
-registerRenderer("run.paused", () => { if (!ctx.replay) hooks.setLive("paused"); now("一時停止を受け付けた（区切りで止まる）"); hooks.updateSend(); }, "chat");
+registerRenderer("run.error", (e) => { chatAgent(`<p>エラーで続けられませんでした: ${esc(e.error)}</p>`); statusEl = null; setLive(""); }, "chat");
+registerRenderer("run.paused", () => { if (!ctx.replay) setLive("paused"); now("一時停止を受け付けた（区切りで止まる）"); }, "chat");
 // 一時停止: 作業の区切りで実際に止まった（run.paused は受け付けただけ）
-registerRenderer("run.held", () => { if (!ctx.replay) hooks.setLive("paused"); now("作業の区切りで止まった（再開すると続く）"); hooks.updateSend(); }, "chat");
+registerRenderer("run.held", () => { if (!ctx.replay) setLive("paused"); now("作業の区切りで止まった（再開すると続く）"); }, "chat");
 // ゲートウェイが報告と成果物を保存した（報告の下に小さく出す）
 registerRenderer("run.saved", () => {
   const last = [...$("chat").querySelectorAll(".a .body")].pop();
   if (last && !last.querySelector(".saved")) last.insertAdjacentHTML("beforeend", `<p class="q saved">報告と成果物を保存した</p>`);
 }, "chat");
-registerRenderer("run.resumed", () => { if (!ctx.replay) hooks.setLive("running"); now("再開した"); hooks.updateSend(); }, "chat");
+registerRenderer("run.resumed", () => { if (!ctx.replay) setLive("running"); now("再開した"); }, "chat");
 registerRenderer("run.cancelled", () => {
-  finish((streamText ? renderReport(streamText) : "") + `<p class="q">止めました。</p>`, streamText); hooks.setComposer(false); hooks.loadRuns();
+  finish((streamText ? renderReport(streamText) : "") + `<p class="q">止めました。</p>`, streamText); waitAnswer(false); refreshRuns();
 }, "chat");
 // 文の続きをそのまま描く
 registerRenderer("message.delta", (e) => {
