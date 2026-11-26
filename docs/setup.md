@@ -171,7 +171,7 @@ Caddy（`docker-compose.yml` の `caddy`。既定では起動しない）が、�
 
 1. `.env` に 2 つ書く
    - `AGENT_API_KEY`: 長いランダムな文字列（`python -c "import secrets;print(secrets.token_urlsafe(32))"`）。**必須**。空のままだと、入口から来た API はすべて断る（403）
-   - `LAB_HOST`: ほかの PC からこの PC を呼ぶ名前か IP アドレス（例: `133.2.x.x`）
+   - `LAB_HOST`: ほかの PC からこの PC を呼ぶ名前か IP アドレス（例: `133.2.x.x`）。VPN の IP は、つなぎ直すと変わることがある。変わったら `LAB_HOST` を直して `docker compose -p research-agent --profile lab up -d --force-recreate caddy`（証明書は作り直され、認証局は同じなので各 PC はそのまま）
 2. ゲートウェイを鍵付きで起動し直し、入口を起動する
 
    ```powershell
@@ -180,7 +180,13 @@ Caddy（`docker-compose.yml` の `caddy`。既定では起動しない）が、�
    ```
 
 3. Open WebUI の接続の鍵を合わせる: 管理者パネル →「設定」→「接続」→ `http://webui:8000/v1` の鍵を `AGENT_API_KEY` と同じ文字列にする（Open WebUI は初回起動時の値を覚えているため、`.env` を変えても変わらない）
-4. Windows のファイアウォールで、受信の TCP 443 と 80 を許可する（Docker Desktop が聞かれたら「許可」）
+4. Windows のファイアウォールで、受信の TCP 443 と 80 を許可する。管理者の PowerShell で:
+
+   ```powershell
+   New-NetFirewallRule -DisplayName "Research-Agent HTTPS（研究室）" -Direction Inbound -Protocol TCP -LocalPort 443,80 -Profile Private -Action Allow
+   ```
+
+   VPN（Cisco Secure Client）の接続はネットワークの種類が「プライベート」になる。Docker Desktop が入れた規則は「パブリック」だけを許可しているので、この規則が要る
 5. 認証局の証明書を取り出し、使う PC に 1 回入れる（入れないと、ブラウザが警告を出し、アプリと通知が動かない）
 
    ```powershell

@@ -3,6 +3,11 @@
 # 証明書は Caddy の中の認証局が作る。使う PC には、その認証局の証明書（root.crt）を 1 回入れる。
 # 守りはゲートウェイの鍵（AGENT_API_KEY。鍵がないと、ここを通った API は断る）。届く範囲は、この PC の 443 番に
 # 届く範囲（学内の LAN・VPN）。Docker Desktop では、Caddy から見た相手の IP は Docker の中の番地になるので、IP では絞らない
+{
+	# IP アドレスで開くと、ブラウザは名前（SNI）を送らない。そのときもこの証明書を出す
+	default_sni {$LAB_HOST}
+}
+
 {$LAB_HOST} {
 	tls internal
 	# 調査のイベント（SSE）は、届いたらすぐ画面へ流す（ためない）
