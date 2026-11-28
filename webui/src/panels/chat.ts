@@ -63,7 +63,14 @@ export function now(text: string): void {
 // 履歴の再生では、質問と選択肢は読むだけ（押しても答えを送らない）。答えられるのはライブで答えを待っている依頼だけ
 function showQuestion(q: string, choices = false): void {
   const opts = choices ? q.split("\n").filter((l) => /^\d+\.\s/.test(l)).map((l) => ({ a: l.match(/^(\d+)/)![1], label: l })) : [];
+  dropStatus();
   chatAgent("", { question: { text: q, opts, readOnly: ctx.replay } });
+}
+// 状態の一行だけの吹き出し（本文がまだない「調べています」）を消す。聞き返し・エラーで作業が止まったとき。
+// 前は手放すだけだったので、点が回ったままの「判断 5 · 次の作業を決めている」が報告の後も残っていた（2026-11-28）
+function dropStatus(): void {
+  const m = find(statusId);
+  if (m && !m.html) { list = list.filter((x) => x.id !== m.id); commit(false); }
   statusId = null;
 }
 
@@ -112,7 +119,7 @@ registerRenderer("run.end", (e: UIEvent) => {
   lastReport = e.report ?? e.answer ?? "";
   finish(renderReport(lastReport), lastReport); waitAnswer(false); refreshRuns();
 }, "chat");
-registerRenderer("run.error", (e: UIEvent) => { chatAgent(`<p>エラーで続けられませんでした: ${esc(e.error)}</p>`); statusId = null; setLive(""); }, "chat");
+registerRenderer("run.error", (e: UIEvent) => { dropStatus(); chatAgent(`<p>エラーで続けられませんでした: ${esc(e.error)}</p>`); setLive(""); }, "chat");
 registerRenderer("run.paused", () => { if (!ctx.replay) setLive("paused"); now("一時停止を受け付けた（区切りで止まる）"); }, "chat");
 // 一時停止: 作業の区切りで実際に止まった（run.paused は受け付けただけ）
 registerRenderer("run.held", () => { if (!ctx.replay) setLive("paused"); now("作業の区切りで止まった（再開すると続く）"); }, "chat");

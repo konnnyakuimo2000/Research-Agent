@@ -91,3 +91,22 @@ describe("履歴の一覧の読み直し", () => {
     expect(calls()).toBe(1);
   });
 });
+
+describe("状態の一行の吹き出し", () => {
+  it("聞き返し・エラーの後に、止まった「調べています」の吹き出しを残さない", () => {
+    ctx.AGENTS = { research: { levels: [0, 1] } as any }; ctx.runAgent = "research";   // 作業記録のあるエージェント
+    send("run.start", { request: "エージェントメモリについて" });
+    send("status", { text: "x" });                                     // 図に出るので吹き出しには出さない
+    send("question", { question: "製品ですか、一般的な概念ですか？" });
+    send("run.waiting", { question: "製品ですか、一般的な概念ですか？" });
+    expect(chat().querySelectorAll(".status")).toHaveLength(0);          // 前は「判断 5 · …」が点を回したまま残った
+    send("question", { question: "製品ですか、一般的な概念ですか？" });  // 再開すると同じ質問がもう一度届く
+    send("answer", { question: "製品ですか、一般的な概念ですか？", answer: "一般的な概念" });
+    expect(chat().querySelectorAll(".status")).toHaveLength(1);          // 答えた後の「調べています」は 1 つ
+    send("run.end", { report: "## 定義\n本文" });
+    expect(chat().querySelectorAll(".status")).toHaveLength(0);
+    send("run.start", { request: "y" });
+    send("run.error", { error: "LLM が応答しない" });
+    expect(chat().querySelectorAll(".status")).toHaveLength(0);          // エラーの後も残さない
+  });
+});
