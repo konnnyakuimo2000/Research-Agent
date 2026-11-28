@@ -45,6 +45,26 @@ def mentions(text: str, names: list[str]) -> bool:
     return False
 
 
+def mentions_parts(text: str, names: list[str]) -> bool:
+    """mentions に加えて、概念の複合語（「エージェントメモリ」）を 2 つに分けた部分が両方出てくれば一致とみなす。
+
+    題名は「AI エージェント**の**メモリ」のように言葉を挟むことが多く、続け書きの名前のままでは 1 件も当たらなかった
+    （2026-11-28「エージェントメモリについて」: 関係のあるページを見つけたのに 1 枚も読まなかった）。
+    人の名前には使わない（「伊藤」と「雄一」が別々に出てくるページを本人のページとみなしてしまう）。
+    型番（数字を含む名前）と 4 文字未満の名前は分けない。
+    """
+    if mentions(text, names):
+        return True
+    t = normalize(text).lower()
+    for name in names:
+        n = normalize(name).lower()
+        if len(n) < 4 or re.search(r"\d", n) or re.search(_LATIN_WORD, n):
+            continue                          # 英語の語の並びは mentions が語ごとに見る
+        if any(n[:k] in t and n[k:] in t for k in range(2, len(n) - 1)):
+            return True
+    return False
+
+
 def _distance(a: str, b: str) -> int:
     """編集距離（文字の挿入・削除・置き換えの回数）。"""
     prev = list(range(len(b) + 1))

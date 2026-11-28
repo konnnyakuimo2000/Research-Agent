@@ -288,7 +288,9 @@ class Nodes:
             label = current["label"] if current else ""
             names_for_match = ([label] + [n for n in names if not (mentions(label, [n]) and normalize(n) != normalize(label))]
                                if current else list(names))
-            choice = choose_pages(state, result, web.results, decision, names_for_match)
+            # 人でなく、百科事典の項目（id）で決まった対象でもない（概念の言葉）ときは、複合語を分けた部分でも当てる
+            loose = not person and not (current and current.get("id"))
+            choice = choose_pages(state, result, web.results, decision, names_for_match, loose)
             relevant, urls = choice.relevant, list(choice.urls)
             if not state.get("tier1_searched"):
                 # Tier 1（公的機関・大学）のページを狙って探す。横の展開なのでプログラムが行う（設計書 6.3）

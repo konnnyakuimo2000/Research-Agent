@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
-from research_agent.agent.names import mentions, sibling_only
+from research_agent.agent.names import mentions, mentions_parts, sibling_only
 from research_agent.tiers import by_tier, canonical
 from research_agent.tools import fetch
 
@@ -28,10 +28,12 @@ class PageChoice:
     new_relevant: int = 0                              # この検索で初めて見つかった、対象のページの数
 
 
-def relevant_results(results: Iterable, names: list[str]) -> list:
+def relevant_results(results: Iterable, names: list[str], loose: bool = False) -> list:
     """題名・抜粋に対象の名前がある検索結果（names が空なら、すべて）。題名の名前が、どれも番号の続く別の物
-    （「はやぶさ」に対する「はやぶさ2」）だけなら外す（前は「はやぶさ」の調査で、はやぶさ2 のページも読んでいた）。"""
-    return [w for w in results if not names or (mentions(f"{w.title} {w.snippet}", names)
+    （「はやぶさ」に対する「はやぶさ2」）だけなら外す（前は「はやぶさ」の調査で、はやぶさ2 のページも読んでいた）。
+    loose: 概念の複合語は、分けた部分が両方あれば当たりとする（names.mentions_parts。人の名前では使わない）"""
+    match = mentions_parts if loose else mentions
+    return [w for w in results if not names or (match(f"{w.title} {w.snippet}", names)
                                                 and not (names and sibling_only(w.title, names[0])))]
 
 
@@ -43,12 +45,12 @@ def keep_for_target(urls: list[str], titles: dict[str, str], names: list[str]) -
                                                      and not (names and sibling_only(titles[u], names[0])))]
 
 
-def choose_pages(state: dict, found: dict, results: list, decision: dict, names: list[str]) -> PageChoice:
+def choose_pages(state: dict, found: dict, results: list, decision: dict, names: list[str], loose: bool = False) -> PageChoice:
     """state は検索の前の状態、found はこの検索で分かったこと（summary_url・official_urls）。"""
     read = {canonical(p["url"]) for p in state.get("pages_read", [])}
     first = [found["summary_url"]] if found.get("summary_url") else []
     first += [u for u in found.get("official_urls", []) if not fetch.is_unreadable(u)]
-    relevant = relevant_results(results, names)
+    relevant = relevant_results(results, names, loose)
     urls = first + [w.url for w in relevant if not fetch.is_unreadable(w.url)]
 
     priority = None
