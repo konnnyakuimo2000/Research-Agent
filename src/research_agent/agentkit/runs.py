@@ -38,6 +38,19 @@ log = logging.getLogger(__name__)
 LIVE = ("running", "paused", "waiting")
 
 
+def _replace(tmp: Path, path: Path, tries: int = 20) -> None:
+    """書き終えた一時ファイルで置き換える。Windows では、置き換える先を誰かが読んでいる間は置き換えられない
+    （PermissionError）ので、少し待ってやり直す（前は 1 回で諦め、答え待ちを残せないことがあった）。"""
+    for i in range(tries):
+        try:
+            tmp.replace(path)
+            return
+        except PermissionError:
+            if i == tries - 1:
+                raise
+            time.sleep(0.05)
+
+
 @dataclass
 class Done:
     report: str
@@ -145,7 +158,7 @@ class RunManager:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(".tmp")
             tmp.write_bytes(pickle.dumps(data))
-            tmp.replace(path)
+            _replace(tmp, path)
         except Exception:  # noqa: BLE001 - 残せなくても答え待ちは続ける（立ち上げ直したら続けられないだけ）
             log.exception("could not keep waiting run %s", run.id)
 

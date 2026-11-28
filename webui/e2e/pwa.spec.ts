@@ -55,5 +55,5 @@ test("知らせを入れると、ライブの調査が終わったとき（画�
   await expect.poll(() => page.evaluate(async () => {
     const reg = await navigator.serviceWorker.getRegistration("/ui/");
     return (await reg!.getNotifications()).map((n) => `${n.title} / ${n.body}`);
-  })).toEqual(["報告ができました / 「東京タワーの高さ」"]);
+  }), { timeout: 15_000 }).toEqual(["報告ができました / 「東京タワーの高さ」"]);   // 全体のテストで PC が混んでいても待てるように
 });

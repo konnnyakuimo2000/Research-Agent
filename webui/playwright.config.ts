@@ -12,6 +12,8 @@ export default defineConfig({
   testDir: "e2e",
   timeout: 30_000,
   reporter: "list",
+  // 1 つずつ動かす（並べて動かすと、通知の確認がときどき通知を受け取れなかった。原因は突き止めていない。1 つずつでも 30 秒ほど）
+  workers: 1,
   use: {
     channel: process.env.PW_BUNDLED ? undefined : "chrome",
     viewport: { width: 1500, height: 900 },
