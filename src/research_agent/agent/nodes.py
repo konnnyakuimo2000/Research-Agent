@@ -756,7 +756,10 @@ class Nodes:
         # 回答を選択肢と照らし合わせて、その場で対象を決める（決めないまま進むと同じ質問を繰り返すため）
         # 番号での回答はプログラムが対応づける（LLM には番号付きの選択肢が見えないため）
         picked = pick_candidate(answer, candidates)
-        matched = [picked] if picked else self._match_answer(question, answer, candidates, state)
+        # 「一般的な概念」「全般」のような答えは、どの候補（製品・作品などの項目）も指さない。前は LLM がそれを
+        # 「AI エージェントメモリソフトウェア」（製品）に対応づけ、概念を調べたのに製品として報告を書き出していた（2026-11-28）
+        general = not picked and bool(GENERAL_ANSWER.search(answer))
+        matched = [picked] if picked else [] if general else self._match_answer(question, answer, candidates, state)
         if len(matched) == 1:
             result["target"] = matched[0]
             answer_text = f"{answer}（{matched[0]['label']}: {matched[0]['description']}）"
@@ -771,7 +774,9 @@ class Nodes:
         else:
             answer_text = answer   # 選択肢にない内容（例:「川のほうです」）→ 次の検索で対象を探す
             target = state.get("target")
-            if target and not names_target(answer, target):
+            if general and target and not target.get("id"):
+                pass                          # 依頼の言葉を対象にした概念のまま調べる
+            elif target and not names_target(answer, target):
                 # 決めた対象（九州大学）と違うことを答えた（「松田泰治」）→ 対象と、それで集めたものを捨てて決め直す。
                 # 答えが対象の名前を含むだけ（対象「伊藤」に「伊藤雄一」）では、同じ対象とみなさない
                 result.update(forget_target())
@@ -823,6 +828,10 @@ class Nodes:
                                                                for e in table.entries()],
                             db_cited=cited_db_records(state, table))
         return {"answer": answer, "trace": [{"node": "respond", "answer": answer}]}
+
+
+# 特定の候補を指さない答え（概念・全体として知りたい）
+GENERAL_ANSWER = re.compile(r"一般|概念|全般|全体|総論|総合|特定の.{0,8}(?:ではな|じゃな)|どれでもな")
 
 
 def not_found_body(state: AgentState) -> str:

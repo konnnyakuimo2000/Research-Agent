@@ -130,3 +130,29 @@ def test_the_search_node_remembers_when_nothing_relevant_came_back():
     assert out["no_relevant_names"] == ["量子もつれ"]
     hit = search({"request": "エージェントメモリについて"}, [PRODUCT], NAMES)
     assert hit["no_relevant_names"] == []
+
+
+# ---- 5. 「一般的な概念」という答えは、製品などの候補に対応づけない ----
+
+class MatchProductLLM:
+    """答えを製品の候補に対応づけてしまう LLM（2026-11-28 の再実行と同じ）。"""
+
+    def chat_json(self, system, user, schema, **kw):
+        return {"matched_ids": ["Q140639670"]}
+
+
+def test_a_general_answer_keeps_the_concept_and_does_not_pick_a_product():
+    concept = {"id": "", "label": "エージェントメモリ", "description": "百科事典（Wikidata）に同じ名前の項目がない言葉", "sitelinks": 0}
+    product = {"id": "Q140639670", "label": "AIエージェントメモリソフトウェア", "description": "software", "sitelinks": 0}
+    n = Nodes(Settings(llm_base_url="http://llm.test/v1", llm_model="m", llm_api_key="k", searxng_url="http://s.test"), MatchProductLLM())
+    base = {"request": "エージェントメモリについて", "candidates": [product], "verified": [{"text": "x"}], "questions_asked": 0,
+            "decision": {"action": "ask_user", "question": "一般的な概念ですか？ それとも Mem0 などの製品ですか？"}}
+    with patch.object(nodes_mod, "interrupt", return_value="一般的な概念"), \
+            patch.object(nodes_mod.telemetry, "emitter", return_value=lambda *a, **k: None):
+        kept = n.ask_user({**base, "target": concept})
+        dropped = n.ask_user({**base, "target": product})
+    assert "target" not in kept and "verified" not in kept and kept["clarifications"] == ["一般的な概念"]   # 概念のまま
+    assert dropped["target"] is None                     # 製品で決まっていたら捨て、次の検索で依頼の言葉を対象にする
+    with patch.object(nodes_mod, "interrupt", return_value="Mem0 のほう"), \
+            patch.object(nodes_mod.telemetry, "emitter", return_value=lambda *a, **k: None):
+        assert n.ask_user({**base, "target": concept})["target"]["id"] == "Q140639670"   # 製品を指した答えは対応づける
