@@ -109,3 +109,24 @@ def test_no_facts_means_no_image_search_and_a_plain_not_found_report():
     assert answer.startswith("「エージェントメモリ」について、出典で確かめられた事実は見つかりませんでした。")
     assert "- 検索: AI agent memory" in answer and "対象の名前を含むページがなかった" in answer
     assert "### 画像" not in answer
+
+
+# ---- 4. 対象の名前を含むページが 1 件もなければ、別の表記で 1 回だけ探し直す ----
+
+def test_no_relevant_page_means_one_retry_with_another_spelling():
+    state = {"request": "エージェントメモリについて", "target": {"id": "", "label": "エージェントメモリ", "description": "", "sitelinks": 0},
+             "settings": {}, "steps": 5, "searched": ["エージェントメモリ 定義"], "pages_read": [], "reading_list": [],
+             "verified": [], "coverage": [], "aspects": [], "candidates": [], "no_relevant_names": NAMES}
+    d = check_decision(state, {"action": "respond"})
+    assert (d["action"], d["query"], d.get("retry")) == ("search", '"Agent Memory"', True)   # 英語の表記を先に
+    once = {**state, "searched": state["searched"] + ['"Agent Memory"'], "retry_searched": ['"Agent Memory"']}
+    assert check_decision(once, {"action": "respond"})["action"] == "respond"                  # 1 回だけ
+    found = {**state, "no_relevant_names": []}
+    assert check_decision(found, {"action": "respond"})["action"] == "respond"                 # 当たりがあれば打たない
+
+
+def test_the_search_node_remembers_when_nothing_relevant_came_back():
+    out = search({"request": "エージェントメモリについて"}, [PRODUCT], ["量子もつれ"])
+    assert out["no_relevant_names"] == ["量子もつれ"]
+    hit = search({"request": "エージェントメモリについて"}, [PRODUCT], NAMES)
+    assert hit["no_relevant_names"] == []

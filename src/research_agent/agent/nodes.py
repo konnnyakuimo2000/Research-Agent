@@ -259,6 +259,7 @@ class Nodes:
             "conflict_searched": state.get("conflict_searched", [])
             + ([decision["conflict_topic"]] if decision.get("conflict_topic") else []),
             "rephrase_searched": state.get("rephrase_searched", []) + ([query] if decision.get("rephrase") else []),
+            "retry_searched": state.get("retry_searched", []) + ([query] if decision.get("retry") else []),
             "unresponsive": sorted(set(state.get("unresponsive", []) + web.unresponsive)),
             "pages": pages,
             # 使えなかった道具は記録して、報告で申告する（調べ尽くしていないのに調べたように見せない。設計書 G-6）
@@ -304,6 +305,8 @@ class Nodes:
             loose = not person and not (current and current.get("id"))
             choice = choose_pages(state, result, web.results, decision, names_for_match, loose)
             relevant, urls = choice.relevant, list(choice.urls)
+            # 結果はあったのに、対象の名前を含むものが 1 件もなかった: 別の表記で探し直す材料にする（guard.retry_step）
+            result["no_relevant_names"] = list(dict.fromkeys(names_for_match)) if web.results and not relevant else []
             if not state.get("tier1_searched"):
                 # Tier 1（公的機関・大学）のページを狙って探す。横の展開なのでプログラムが行う（設計書 6.3）
                 name = current["label"] if current else query

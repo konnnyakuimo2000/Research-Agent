@@ -83,7 +83,8 @@ def _name(state: AgentState) -> str:
 def free_searches(state: AgentState) -> int:
     """LLM が自分で選んだ検索の回数（観点・食い違い・言い換えでプログラムが決めた検索は除く）。"""
     return (len(state.get("searched", [])) - len(state.get("aspect_searched", []))
-            - len(state.get("conflict_searched", [])) - len(state.get("rephrase_searched", [])))
+            - len(state.get("conflict_searched", [])) - len(state.get("rephrase_searched", []))
+            - len(state.get("retry_searched", [])))
 
 
 def candidates_fit(state: AgentState) -> bool:
@@ -118,6 +119,36 @@ def rephrase_step(state: AgentState, d: Decision) -> Decision | None:
         return None
     return {**d, "action": "search", "query": query, "names": [], "rephrase": True,
             "guard": "候補が依頼文の手がかりに合わないため、聞き返す前に依頼文の言葉で検索し直す"}
+
+
+MAX_RETRY_SEARCHES = 1
+
+
+def retry_query(state: AgentState) -> str:
+    """対象の名前を含む結果がなかったときに打ち直す検索: 名前の別の表記をそのまま（引用符で 1 語として）。
+    英語などの表記（「Agent Memory」）を先に使う。題名の日本語は「AI エージェントのメモリ」のように言葉を挟むが、
+    英語の記事の題名には名前がそのまま出ることが多い。すでに打った検索は打たない。"""
+    names = state.get("no_relevant_names") or []
+    ordered = [n for n in names if re.search(r"[A-Za-z]", n)] + [n for n in names if not re.search(r"[A-Za-z]", n)]
+    for n in ordered:
+        q = f'"{n.strip()}"'
+        if n.strip() and q not in state.get("searched", []):
+            return q
+    return ""
+
+
+def retry_step(state: AgentState, d: Decision, unread: list[str]) -> Decision | None:
+    """検索の結果に対象の名前を含むページが 1 件もなく、まだ何も読んでいない → 別の表記で 1 回だけ探し直す。
+    前は、関係のあるページを見つけられないまま「情報が不足しています」と答えていた（2026-11-28「エージェントメモリ」）。"""
+    if (not state.get("no_relevant_names") or state.get("pages_read") or unread
+            or len(state.get("retry_searched", [])) >= MAX_RETRY_SEARCHES
+            or state.get("web_failures_in_row", 0) >= MAX_WEB_FAILURES):
+        return None
+    query = retry_query(state)
+    if not query:
+        return None
+    return {**d, "action": "search", "query": query, "names": state["no_relevant_names"], "retry": True,
+            "guard": "検索の結果に対象の名前を含むページがなかったため、名前の別の表記で検索し直す"}
 
 
 def read_keys(state: AgentState) -> set[str]:
@@ -192,6 +223,10 @@ def research_step(state: AgentState, d: Decision) -> Decision | None:
     if state.get("new_ambiguity") and not state.get("ambiguity_asked") and asked < MAX_QUESTIONS:
         return {**d, "action": "ask_user", "question": build_confirm_question(state), "confirm_target": True,
                 "guard": "調査の途中で同名の別の対象が見つかったため、対象を確認する"}
+
+    # 0. 対象の名前を含むページが 1 件も見つかっていない → 別の表記で探し直す（読むものがなければ、何も確かめられない）
+    if step := retry_step(state, d, unread):
+        return step
 
     # 1. まずページを読んで事実を確かめる（まだ読んでいない、事実がない）
     if not converged and unread and can_read and (not read or not verified):

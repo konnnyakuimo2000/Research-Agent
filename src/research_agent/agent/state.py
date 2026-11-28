@@ -141,6 +141,8 @@ class AgentState(TypedDict, total=False):
     conflicts_checked_at: int         # 食い違いを調べたときの事実の数（増えていれば調べ直す）
     conflict_searched: list[str]      # 確かめ直す検索をした食い違いの事柄（R-6）
     rephrase_searched: list[str]      # 対象が決まらないときに、依頼文の言葉で検索し直した検索の言葉
+    retry_searched: list[str]         # 対象の名前を含む結果がなかったときに、名前の別の表記で検索し直した検索の言葉
+    no_relevant_names: list[str]      # 直前の検索で結果はあったが、対象の名前を含むものがなかったときの名前（なければ空）
     priority_urls: list[str]          # 観点や食い違いを狙った検索で見つけたページ（先に読む）
     stale_reads: int                  # 新しい事実が出なかった読み込みが何回続いているか（収束の判定）
     link_depth: dict[str, int]        # 参照をたどって見つけたページの深さ（R-2）
