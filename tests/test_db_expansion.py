@@ -93,7 +93,8 @@ def test_only_databases_the_request_asks_for_are_queried():
         "国立国会図書館サーチ": "skipped", "ジャパンサーチ": "skipped"}
     assert photo[2] == ["ジャパンサーチ"]
     assert general[2] == ["国立国会図書館サーチ"]                           # 所蔵品（写真）は、求めたときだけ
-    assert no_request[2] == ["国立国会図書館サーチ", "ジャパンサーチ"]        # 依頼文がなければ、これまでどおり全部引く
+    # 依頼文がなければ、全体を尋ねるときに引くものだけ（求めたときだけ引く所蔵品・論文・EC は引かない。2026-11-28）
+    assert no_request[2] == ["国立国会図書館サーチ"]
 
 
 def test_the_four_outcomes_are_told_apart(monkeypatch):

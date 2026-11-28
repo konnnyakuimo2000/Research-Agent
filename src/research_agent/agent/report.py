@@ -63,7 +63,22 @@ def assemble(state: AgentState, body: str, table: SourceTable) -> str:
         parts.append("\n※ 検索の一部が使えなかったため、調べきれていない可能性があります。")
     if table.sources:
         parts.append("\n### 出典\n" + sources_text(state, table.sources))
+        if credits := credit_lines(state, table):
+            parts.append(credits)
     return "\n".join(parts)
+
+
+# 使ったときに表示を求められているデータベース（提供元の利用規約のクレジット表示）
+CREDITS = {
+    "Yahoo!ショッピング": "Webサービス by Yahoo! JAPAN（https://developer.yahoo.co.jp/sitemap/）",
+    "楽天市場": "Supported by Rakuten Developers（https://developers.rakuten.com/）",
+}
+
+
+def credit_lines(state: AgentState, table: SourceTable) -> str:
+    """報告に引用したデータベースのうち、クレジットの表示が要るもの（出典の下に 1 行ずつ）。"""
+    used = dict.fromkeys(r["database"] for r in cited_db_records(state, table) if r["database"] in CREDITS)
+    return "\n".join(CREDITS[d] for d in used)
 
 
 # プログラムが付ける節の見出し。LLM が本文に同じ節を書いたら取り除く（同じ内容が二重に出ないように）

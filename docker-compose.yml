@@ -92,6 +92,12 @@ services:
       VL_BASE_URL: ${VL_BASE_URL:?.env に VL_BASE_URL を設定してください}
       AGENT_SERVICE_KEY: ${AGENT_SERVICE_KEY:-}
       CINII_APPID: ${CINII_APPID:-}
+      ESTAT_APPID: ${ESTAT_APPID:-}
+      OPENALEX_API_KEY: ${OPENALEX_API_KEY:-}
+      YAHOO_CLIENT_ID: ${YAHOO_CLIENT_ID:-}
+      RAKUTEN_APP_ID: ${RAKUTEN_APP_ID:-}
+      RAKUTEN_ACCESS_KEY: ${RAKUTEN_ACCESS_KEY:-}
+      RAKUTEN_REFERER: ${RAKUTEN_REFERER:-}
       SEARXNG_URL: http://searxng:8080
     volumes:
       - ./runs/agent-research:/app/runs/agent-research   # 調べた状態の全体（調べ直すため）

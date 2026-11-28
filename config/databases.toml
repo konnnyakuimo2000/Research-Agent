@@ -9,7 +9,7 @@
 # types:         使う対象の種類
 # auth:          認証・登録の要否
 # limits:        確認した利用制限（2026-11-19 時点。確認できなかったものはそう書く）
-# requires_env:  この環境変数（.env）がないときは使わない
+# requires_env:  この環境変数（.env）がないときは使わない（いくつも要るときは配列）
 # available:     false なら使わない（API が使えないもの。下の [sites] で site: 検索に回す）
 # when:          この言葉が依頼にあるときだけ引く（依頼が「〜について」など対象の全体を尋ねるときも引く）。
 #                書いていなければいつも引く。例: 「東京タワーの高さ」では、題名に「東京タワー」を含む本や写真の記録を読まない
@@ -71,6 +71,60 @@ requires_env = "ESTAT_APPID"
 # 使う統計表 ID（国勢調査の市区町村の人口の表）。e-Stat の統計表を見て設定する（空なら使わない）
 stats_data_id = ""
 
+# --- 論文（対象の題目についての研究）。「論文」「研究」などを頼まれたときだけ引く ---
+# J-STAGE は API を使わない（API の規約で、結果を 24 時間以上機械で読める形で残せない。調査の記録に残るため）。
+# 代わりに [sites] の jstage.jst.go.jp を site: で検索し、ページとして読む
+
+[[databases]]
+name = "Crossref（論文）"
+function = "crossref_search"
+types = ["技術・概念", "生物", "自然物", "出来事", "製品・機械", "その他"]
+when = ["論文", "研究", "文献", "学術", "先行研究", "学会", "ジャーナル", "査読", "サーベイ"]
+general = false
+auth = "不要（書誌は CC0。User-Agent に連絡先を入れると優先の窓口になるが、入れていない）"
+limits = "匿名: 1 秒に数回まで（Crossref の REST API の説明）。1 回の調査で 1 回"
+
+[[databases]]
+name = "arXiv"
+function = "arxiv"
+types = ["技術・概念", "自然物", "生物", "その他"]
+when = ["論文", "研究", "文献", "学術", "先行研究", "プレプリント", "arXiv", "サーベイ"]
+general = false
+auth = "不要（書誌は CC0）"
+limits = "3 秒に 1 回まで（arXiv の API の利用規約）。1 回の調査で 1 回"
+
+[[databases]]
+name = "OpenAlex（論文）"
+function = "openalex"
+types = ["技術・概念", "生物", "自然物", "出来事", "製品・機械", "その他"]
+when = ["論文", "研究", "文献", "学術", "先行研究", "学会", "ジャーナル", "査読", "サーベイ"]
+general = false
+auth = "API キーが要る（2026-02 から。openalex.org で無料の登録。データは CC0）"
+limits = "1 日 $1 分まで無料（キーごと）。30 回/秒まで"
+requires_env = "OPENALEX_API_KEY"
+
+# --- 商品の販売（EC）。「価格」「最安」などを頼まれたときだけ引く。価格は取った日時を添える ---
+
+[[databases]]
+name = "Yahoo!ショッピング"
+function = "yahoo_shopping"
+types = ["製品・機械", "その他"]
+when = ["価格", "値段", "最安", "安い", "通販", "販売", "在庫", "買える", "購入", "売って", "いくら", "相場"]
+general = false
+auth = "Client ID（アプリケーション ID）が要る。Yahoo!デベロッパーネットワークで無料の登録"
+limits = "1 クエリー/秒（商品検索 v3 の利用制限）。クレジット表示が要る（報告の出典の下に出す）"
+requires_env = "YAHOO_CLIENT_ID"
+
+[[databases]]
+name = "楽天市場"
+function = "rakuten"
+types = ["製品・機械", "その他"]
+when = ["価格", "値段", "最安", "安い", "通販", "販売", "在庫", "買える", "購入", "売って", "いくら", "相場"]
+general = false
+auth = "アプリ ID（UUID）とアクセスキーが要る（楽天ウェブサービスで無料の登録。2026 年の新しい API）。Referer にアプリに登録したサイトの URL"
+limits = "公式の説明を確かめられていない（2026-11-28 に公式のページが 503）。1 回の調査で 1 回"
+requires_env = ["RAKUTEN_APP_ID", "RAKUTEN_ACCESS_KEY", "RAKUTEN_REFERER"]
+
 [[databases]]
 name = "researchmap"
 function = "researchmap"
@@ -90,6 +144,6 @@ available = false
 # API が使えない（登録が必要な）データベースは、そのサイトを site: で狙って検索する（query_plan の候補に入る）
 [sites]
 "人物" = ["researchmap.jp", "nrid.nii.ac.jp", "cir.nii.ac.jp"]
-"技術・概念" = ["cir.nii.ac.jp"]
+"技術・概念" = ["cir.nii.ac.jp", "jstage.jst.go.jp"]
 "生物" = ["biodic.go.jp"]
 "場所・建造物" = ["bunka.nii.ac.jp"]

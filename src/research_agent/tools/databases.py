@@ -71,8 +71,11 @@ def wanted(db: dict, request: str) -> bool:
     """依頼で求められた項目に、このデータベースが答えられるか。when（その資料を求める言葉）がなければいつも引く。
     when があれば、依頼にその言葉があるか、依頼が対象の全体を尋ねているときだけ引く。"""
     when = db.get("when") or []
-    if not when or not request:
+    if not when:
         return True
+    if not request:
+        # 依頼文がない（CLI・テストで種類だけを渡す）ときは、その資料を求めたときだけ引くもの（general = false）は引かない
+        return db.get("general", True)
     # general = false のデータベース（写真などの所蔵品）は、全体を尋ねる依頼では引かない（その資料を求めたときだけ）
     return any(w in request for w in when) or (db.get("general", True) and bool(_GENERAL.search(request)))
 
@@ -415,8 +418,183 @@ def estat_population(name: str, request: str = "", stats_data_id: str = "") -> l
     return out[:MAX_ITEMS]
 
 
+# --- 論文（対象の題目についての研究）-----------------------------------------
+# 人の業績（CiNii。kind = 論文の書誌情報）とは分ける: 題目の論文は、同名の別人の照合（match_papers）に回さない
+PAPER = "研究論文の書誌情報"
+PAPER_MAX = 5
+
+
+def _plain(s: str) -> str:
+    """書誌の題・要旨の飾り（JATS の <jats:p> など）を外す。"""
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", s or "")).strip()
+
+
+def _paper(url: str, database: str, source_id: str, fields: list[tuple[str, str]], abstract: str = "") -> Record:
+    fields = [(k, v) for k, v in fields if v]
+    lines = [f"{database} の書誌情報（論文 1 本）", *(f"{k}: {v}" for k, v in fields)]
+    if abstract:
+        lines.append(f"要旨: {abstract[:1200]}")
+    return Record(url, f"{database}: {dict(fields).get('論文名', '')}", "\n".join(lines), database,
+                  source_id=source_id, kind=PAPER, fields=fields)
+
+
+# 論文として読む Crossref の種類（図・表の部品 component、データセット、本全体などは読まない）
+_CROSSREF_TYPES = {"journal-article", "proceedings-article", "posted-content", "book-chapter", "report", "dissertation"}
+
+
+def crossref_search(name: str) -> list[Record]:
+    """Crossref の書誌の検索（登録なし）。題か要旨に対象の名前がある論文だけ（関連の薄いものを読まない）。"""
+    data = _json("https://api.crossref.org/works",
+                 {"query.bibliographic": name, "rows": 40,
+                  "select": "DOI,title,author,issued,container-title,is-referenced-by-count,type,abstract"})
+    out = []
+    # 候補 40 件のうち、よく引用されている順に読む（Crossref の関連順のままだと、ほとんど引用のない論文が先に来る）
+    items = sorted((data.get("message") or {}).get("items") or [], key=lambda it: -(it.get("is-referenced-by-count") or 0))
+    for it in items:
+        title, abstract = _plain("".join(it.get("title") or [])), _plain(it.get("abstract", ""))
+        doi = normalize_doi(it.get("DOI", ""))
+        if not title or not doi or it.get("type") not in _CROSSREF_TYPES or not mentions(f"{title} {abstract}", [name]):
+            continue
+        authors = [" ".join(x for x in (a.get("given"), a.get("family")) if x) or a.get("name", "") for a in it.get("author") or []]
+        year = str(((it.get("issued") or {}).get("date-parts") or [[""]])[0][0] or "")
+        out.append(_paper(f"https://doi.org/{doi}", "Crossref", doi, [
+            ("論文名", title), ("著者", "、".join(authors[:6]) + ("ほか" if len(authors) > 6 else "")),
+            ("掲載誌", "".join(it.get("container-title") or [])), ("発行年", year), ("種類", it.get("type", "")),
+            ("被引用数（Crossref）", str(it.get("is-referenced-by-count", ""))), ("DOI", doi)], abstract))
+        if len(out) >= PAPER_MAX:
+            break
+    return out
+
+
+_ATOM = {"a": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
+
+
+def arxiv(name: str) -> list[Record]:
+    """arXiv のプレプリント（登録なし。査読前の論文）。arXiv の求め: 3 秒に 1 回まで。"""
+    r = http.get("https://export.arxiv.org/api/query",
+                 params={"search_query": f'all:"{name}"', "max_results": PAPER_MAX, "sortBy": "relevance"},
+                 headers=http.HEADERS, timeout=45.0, min_interval=3.0)   # arXiv の API は混むと 40 秒ほどかかる
+    r.raise_for_status()
+    out = []
+    for e in ET.fromstring(r.content).findall("a:entry", _ATOM):
+        title = _plain(e.findtext("a:title", "", _ATOM))
+        url = (e.findtext("a:id", "", _ATOM) or "").strip()
+        if not title or not url:
+            continue
+        authors = [_plain(a.findtext("a:name", "", _ATOM)) for a in e.findall("a:author", _ATOM)]
+        cat = e.find("arxiv:primary_category", _ATOM)
+        out.append(_paper(url, "arXiv", url.rsplit("/abs/", 1)[-1], [
+            ("論文名", title), ("著者", "、".join(authors[:6]) + ("ほか" if len(authors) > 6 else "")),
+            ("公開日", (e.findtext("a:published", "", _ATOM) or "")[:10]), ("分野", cat.get("term", "") if cat is not None else ""),
+            ("種類", "プレプリント（査読前）")], _plain(e.findtext("a:summary", "", _ATOM))))
+    return out
+
+
+def openalex(name: str) -> list[Record]:
+    """OpenAlex の論文（OPENALEX_API_KEY が要る。無料の登録）。被引用数・掲載誌・要旨がそろう。"""
+    data = _json("https://api.openalex.org/works", {"search": name, "per_page": PAPER_MAX, "api_key": os.getenv("OPENALEX_API_KEY", "")})
+    out = []
+    for w in data.get("results") or []:
+        title = _plain(w.get("display_name", ""))
+        doi = normalize_doi(w.get("doi") or "")
+        url = f"https://doi.org/{doi}" if doi else (w.get("id") or "")
+        if not title or not url:
+            continue
+        inv = w.get("abstract_inverted_index") or {}
+        words = sorted((p, word) for word, ps in inv.items() for p in ps)
+        authors = [(a.get("author") or {}).get("display_name", "") for a in w.get("authorships") or []]
+        source = ((w.get("primary_location") or {}).get("source") or {}).get("display_name", "")
+        out.append(_paper(url, "OpenAlex", doi or url.rsplit("/", 1)[-1], [
+            ("論文名", title), ("著者", "、".join(authors[:6]) + ("ほか" if len(authors) > 6 else "")),
+            ("掲載誌", source), ("発行年", str(w.get("publication_year") or "")), ("種類", w.get("type", "")),
+            ("被引用数（OpenAlex）", str(w.get("cited_by_count", ""))), ("DOI", doi)], " ".join(word for _, word in words)))
+    return out
+
+
+# --- 商品の販売（EC）--------------------------------------------------------
+# 価格は変わるので、取った日時を必ず書く。在庫のある商品だけ。1 件 = 店の商品 1 つ
+SHOP = "商品の販売情報"
+SHOP_MAX = 5
+
+
+def _now() -> str:
+    from datetime import datetime
+    return datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")
+
+
+def _item(url: str, database: str, source_id: str, fields: list[tuple[str, str]]) -> Record:
+    fields = [(k, v) for k, v in fields if v] + [("取得日時", _now())]
+    text = "\n".join([f"{database} の商品情報（店の商品 1 つ。価格は取得日時のもの）", *(f"{k}: {v}" for k, v in fields)])
+    return Record(url, f"{database}: {dict(fields).get('商品名', '')}", text, database, source_id=source_id, kind=SHOP, fields=fields)
+
+
+def _yen(v) -> str:
+    try:
+        return f"{int(float(v)):,} 円"
+    except (TypeError, ValueError):
+        return ""
+
+
+def yahoo_shopping(name: str) -> list[Record]:
+    """Yahoo!ショッピングの商品検索 v3（YAHOO_CLIENT_ID が要る。1 秒に 1 回まで。クレジット表示が要る）。"""
+    r = http.get("https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch",
+                 params={"appid": os.getenv("YAHOO_CLIENT_ID", ""), "query": name, "results": 10, "in_stock": "true", "sort": "-score"},
+                 headers={**http.HEADERS, "Accept": "application/json"}, timeout=TIMEOUT, min_interval=1.0)
+    r.raise_for_status()
+    out = []
+    for h in r.json().get("hits") or []:
+        title, url = h.get("name", ""), h.get("url", "")
+        if not title or not url or not mentions(title, [name]):
+            continue
+        review = h.get("review") or {}
+        taxed = (h.get("priceLabel") or {}).get("taxable")
+        out.append(_item(url, "Yahoo!ショッピング", h.get("code", "") or url, [
+            ("商品名", title), ("価格", _yen(h.get("price")) + ("（税込）" if taxed else "")), ("店", (h.get("seller") or {}).get("name", "")),
+            ("ブランド", (h.get("brand") or {}).get("name", "")), ("JAN コード", h.get("janCode", "")),
+            ("レビュー", f"{review.get('rate')}（{review.get('count')} 件）" if review.get("count") else "")]))
+        if len(out) >= SHOP_MAX:
+            break
+    return out
+
+
+# 楽天市場の商品検索 API（2026 年の新しい API）。公式の説明が読めなかったので、移行の報告（2026-07 〜 10）に合わせている:
+# 住所 openapi.rakuten.co.jp、applicationId（UUID）と accessKey の両方、Referer（アプリに登録したサイトの URL）が要る
+RAKUTEN_SEARCH = "https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20260701"
+
+
+def rakuten(name: str) -> list[Record]:
+    """楽天市場の商品検索（RAKUTEN_APP_ID・RAKUTEN_ACCESS_KEY・RAKUTEN_REFERER が要る）。"""
+    r = http.get(RAKUTEN_SEARCH,
+                 params={"applicationId": os.getenv("RAKUTEN_APP_ID", ""), "accessKey": os.getenv("RAKUTEN_ACCESS_KEY", ""),
+                         "keyword": name, "hits": 10, "availability": 1, "formatVersion": 2, "format": "json"},
+                 headers={**http.HEADERS, "Accept": "application/json", "Referer": os.getenv("RAKUTEN_REFERER", "")},
+                 timeout=TIMEOUT, min_interval=1.0)
+    if r.status_code >= 400:
+        try:
+            body = r.json()
+            err = (body.get("errors") or {}).get("errorMessage") or body.get("error_description") or body.get("error") or ""
+        except ValueError:
+            err = ""
+        raise RuntimeError(f"HTTP {r.status_code} {err}".strip())
+    out = []
+    for it in r.json().get("Items") or []:
+        it = it.get("Item", it) if isinstance(it, dict) else {}           # formatVersion 1 は {"Item": {...}}
+        title, url = it.get("itemName", ""), it.get("itemUrl", "")
+        if not title or not url or not mentions(title, [name]):
+            continue
+        out.append(_item(url, "楽天市場", it.get("itemCode", "") or url, [
+            ("商品名", title), ("価格", _yen(it.get("itemPrice")) + ("（税込）" if it.get("taxFlag") == 0 else "")),
+            ("店", it.get("shopName", "")),
+            ("レビュー", f"{it.get('reviewAverage')}（{it.get('reviewCount')} 件）" if it.get("reviewCount") else "")]))
+        if len(out) >= SHOP_MAX:
+            break
+    return out
+
+
 FUNCTIONS = {"orcid": orcid, "cinii": cinii, "inaturalist": inaturalist, "japan_search": japan_search,
-             "ndl": ndl, "ndl_creator": ndl_creator, "estat_population": estat_population}
+             "ndl": ndl, "ndl_creator": ndl_creator, "estat_population": estat_population,
+             "crossref_search": crossref_search, "arxiv": arxiv, "openalex": openalex,
+             "yahoo_shopping": yahoo_shopping, "rakuten": rakuten}
 # 依頼文や設定（config の項目）も受け取る関数
 _WITH_CONTEXT = {"estat_population"}
 
@@ -448,8 +626,10 @@ def lookup(subject_type: str, name: str, request: str = "") -> LookupResult:
         if not db.get("available", True):
             statuses.append(_status(db["name"], "disabled", "API を使わない設定（site: 検索に回す）"))
             continue
-        if db.get("requires_env") and not os.getenv(db["requires_env"]):
-            statuses.append(_status(db["name"], "unconfigured", f"{db['requires_env']} が設定されていない"))
+        need = db.get("requires_env") or []
+        missing = [e for e in ([need] if isinstance(need, str) else need) if not os.getenv(e)]
+        if missing:
+            statuses.append(_status(db["name"], "unconfigured", f"{'・'.join(missing)} が設定されていない"))
             continue
         if not wanted(db, request):
             statuses.append(_status(db["name"], "skipped", "依頼の項目に合わない"))

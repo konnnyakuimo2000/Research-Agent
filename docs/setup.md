@@ -34,6 +34,10 @@ cp .env.example .env
 | `VL_API_KEY` | `dummy`（そのままでよい） |
 | `SEARXNG_SECRET` | ランダムな文字列。下のコマンドで作る |
 | `CINII_APPID` | 任意。CiNii Research の API の appid（CiNii の API 利用登録で取得）。空でも動く（その場合 CiNii は site: 検索で探す） |
+| `ESTAT_APPID` | 任意。e-Stat の API の appId（人口を尋ねたとき）。`config/databases.toml` の `stats_data_id` も要る |
+| `OPENALEX_API_KEY` | 任意。論文の OpenAlex の API キー。空なら論文は Crossref と arXiv だけで探す |
+| `YAHOO_CLIENT_ID` | 任意。Yahoo!ショッピングの商品検索の Client ID。空なら Yahoo! の価格は引かない |
+| `RAKUTEN_APP_ID`・`RAKUTEN_ACCESS_KEY`・`RAKUTEN_REFERER` | 任意。楽天市場の商品検索のアプリ ID・アクセスキー・アプリに登録したサイトの URL。3 つそろわなければ楽天は引かない |
 
 ```sh
 # どちらか一方で、ランダムな文字列を作る
@@ -75,6 +79,20 @@ curl -X POST http://localhost:8100/api/runs -H "Content-Type: application/json" 
 
 選べるモデルは `GET /api/models` で見られる。役割に要る能力（画像の確認なら `vision`）がないモデルは、始める前に断る。
 どの依頼でどのモデルを使ったかは、一覧（`GET /api/runs` の `models`）に残る。エージェントを足すときはサービスを足して `agents.toml` に 1 項目、モデルを足すときは `models.toml` に 1 項目足す。
+
+### 論文と商品の価格（任意の登録）
+
+依頼に「論文」「研究」「文献」などがあると論文のデータベースを、「価格」「値段」「最安」「在庫」などがあると EC の商品検索を引く（それ以外の依頼では引かない）。どれも無料。登録したら `.env` に書き、調査エージェントを作り直す（`docker compose -p research-agent up -d --no-deps --force-recreate agent-research`。動いている調査がないときに）。
+
+| 何を | 登録しなくても | 登録すると |
+|---|---|---|
+| 論文 | Crossref（世界の論文の書誌。よく引用されている順）・arXiv（プレプリント）・J-STAGE（日本の論文。ページを検索して読む） | OpenAlex（被引用数・要旨がそろい、題目に合う論文を探しやすい） |
+| 商品の価格 | Web 検索だけ（価格はページから読めたときだけ） | Yahoo!ショッピング・楽天市場の在庫のある商品の価格・店・レビュー（価格は取得日時付き） |
+
+- **OpenAlex**: https://openalex.org/ でアカウントを作り、設定の API の画面でキーを作る → `OPENALEX_API_KEY`
+- **Yahoo!ショッピング**: https://developer.yahoo.co.jp/ でアプリケーションを登録（Yahoo! JAPAN ID が要る）→ Client ID を `YAHOO_CLIENT_ID`。1 秒に 1 回まで。報告に使ったときは「Webサービス by Yahoo! JAPAN」を出典の下に出す（規約のクレジット表示）
+- **楽天市場**: https://webservice.rakuten.co.jp/ でアプリを登録（楽天会員が要る。2026 年の新しい API）→ アプリ ID（UUID の形）を `RAKUTEN_APP_ID`、アクセスキー（`pk_` で始まる）を `RAKUTEN_ACCESS_KEY`、アプリに登録したサイトの URL を `RAKUTEN_REFERER`（呼ぶときに Referer として送る）。楽天の公式の説明は 2026-11-28 に読めなかったため、移行の報告に合わせて作った。最初に使うとき、調査の作業記録の「分野別データベース」で楽天が「失敗」になっていないか確かめる
+- **J-STAGE の API は使わない**: API の規約で、結果を 24 時間以上機械で読める形で残せない（調査の記録に残るため）
 
 ### Web API のモデル（Claude・OpenAI・Google Gemini・OpenRouter）
 

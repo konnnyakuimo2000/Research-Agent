@@ -61,6 +61,7 @@ default = 4
 "springer.com" = 2
 "sciencedirect.com" = 2
 "arxiv.org" = 1
+"doi.org" = 2        # DOI の付いた論文（Crossref・OpenAlex の書誌の出典）
 
 # Tier 5: 転載・まとめ・機械翻訳の量産サイト・画像の転載
 "pinterest.com" = 5
