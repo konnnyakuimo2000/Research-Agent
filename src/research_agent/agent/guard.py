@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 
-from research_agent.agent import query_plan
+from research_agent.agent import imaging, query_plan
 from research_agent.agent.coverage import MISSING, WEAK
 from research_agent.agent.names import fix_spelling, mentions
 from research_agent.tiers import by_tier, canonical
@@ -158,7 +158,10 @@ def pages_to_read(state: AgentState, limit: int | None = None) -> list[str]:
 
 
 def wants_more_images(state: AgentState) -> bool:
-    return bool(state.get("wants_images")) and not state.get("images_checked")
+    """画像を探すか。確かめた事実がまだ 1 件もなければ探さない（依頼がはっきり画像を求めているときを除く）。
+    事実がないまま画像だけを探して載せ、「情報が不足しています」と画像だけの報告になっていた（2026-11-28）。"""
+    return (bool(state.get("wants_images")) and not state.get("images_checked")
+            and (bool(state.get("verified")) or imaging.asks_for_images(state.get("request", ""))))
 
 
 def research_step(state: AgentState, d: Decision) -> Decision | None:

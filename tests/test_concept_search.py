@@ -83,3 +83,29 @@ def test_a_general_answer_settles_the_subject_but_competing_entries_are_still_as
     assert asked["target"] is None                                                 # 水星か歌手か: 聞き返す
     general = search({"request": "マーキュリーについて", "clarifications": ["一般的な概念"]}, [PLANET, SINGER], ["マーキュリー"])
     assert general["target"]["label"] == "マーキュリー" and "一般的な概念" in general["target"]["description"]
+
+
+# ---- 3. 事実が 0 件なら画像を探さず、試したことと見つからなかった理由をプログラムが書く ----
+
+from research_agent.agent.guard import check_decision  # noqa: E402
+
+
+class NoReportLLM:
+    def chat_text(self, *a, **k):
+        raise AssertionError("事実がないのに LLM に報告を書かせた")
+
+
+def test_no_facts_means_no_image_search_and_a_plain_not_found_report():
+    state = {"request": "エージェントメモリについて", "target": {"id": "", "label": "エージェントメモリ", "description": "", "sitelinks": 0},
+             "wants_images": True, "settings": {}, "steps": 5, "searched": ["エージェントメモリ 定義", "AI agent memory"],
+             "pages_read": [], "reading_list": [], "verified": [], "coverage": [], "aspects": [], "candidates": []}
+    assert check_decision(state, {"action": "respond"})["action"] == "respond"              # 画像を探さない
+    asks = {**state, "request": "エージェントメモリの画像", "verified": []}
+    assert check_decision(asks, {"action": "respond"})["action"] == "find_images"          # 画像・写真を頼まれたら探す
+    n = Nodes(Settings(llm_base_url="http://llm.test/v1", llm_model="m", llm_api_key="k", searxng_url="http://s.test"), NoReportLLM())
+    with patch.object(nodes_mod.telemetry, "emitter", return_value=lambda *a, **k: None):
+        out = n.respond(state)
+    answer = out["answer"]
+    assert answer.startswith("「エージェントメモリ」について、出典で確かめられた事実は見つかりませんでした。")
+    assert "- 検索: AI agent memory" in answer and "対象の名前を含むページがなかった" in answer
+    assert "### 画像" not in answer

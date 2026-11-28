@@ -797,8 +797,14 @@ class Nodes:
         # 本人のものか確かめていない資料（著者名が同じだけ）の事実は、本文の材料にしない。別の節にプログラムが並べる
         # （2026-11-25「松田教授」: 同じ名前の別の人の画像処理の論文を、本人の業績として書いていた）
         unsure = unconfirmed_sources(state)
-        materials = prompts.respond_user({**state, "verified": [k for k in state.get("verified", [])
-                                                                if canonical(k["source"]) not in unsure]}, table.sources)
+        usable = [k for k in state.get("verified", []) if canonical(k["source"]) not in unsure]
+        if not usable and not state.get("target_summary"):
+            # 確かめた事実も概要もない: LLM に書かせず（材料がないので「情報が不足しています」とだけ書いていた）、
+            # 何を試して、なぜ見つからなかったかをプログラムが書く（2026-11-28「エージェントメモリについて」）
+            answer = assemble(state, not_found_body(state), table)
+            telemetry.emitter()("report", answer=answer, sources=[], db_cited=[])
+            return {"answer": answer, "trace": [{"node": "respond", "answer": answer}]}
+        materials = prompts.respond_user({**state, "verified": usable}, table.sources)
         body = strip_program_sections(self._llm("report", state).chat_text(prompts.RESPOND_SYSTEM, materials))
         if bad := unsupported_names(body, materials):
             # 材料にない名前（読みから作った英語名など）を書いた → 1 回だけ書き直させ、それでも残る文は除く
@@ -814,6 +820,22 @@ class Nodes:
                                                                for e in table.entries()],
                             db_cited=cited_db_records(state, table))
         return {"answer": answer, "trace": [{"node": "respond", "answer": answer}]}
+
+
+def not_found_body(state: AgentState) -> str:
+    """確かめた事実が 1 件もないときの報告の本文: 試したこと（検索の言葉・読んだページ）と、見つからなかった理由。"""
+    name = (state.get("target") or {}).get("label") or state.get("request", "")
+    read = state.get("pages_read", [])
+    ok = sum(1 for p in read if p.get("ok"))
+    lines = [f"「{name}」について、出典で確かめられた事実は見つかりませんでした。", "", "### 試したこと"]
+    lines += [f"- 検索: {q}" for q in state.get("searched", [])]
+    if read:
+        lines.append(f"- 読んだページ: {len(read)} 件（本文を読めたもの {ok} 件）。どのページからも、引用で確かめられる記述を取り出せなかった")
+    else:
+        lines.append("- 検索結果に、対象の名前を含むページがなかったため、ページは読んでいない")
+    # 道具の名前（検索エンジン・データベース）は書かない。検索が使えなかったことは assemble が 1 文で知らせる
+    lines += ["", "別の言い方（英語の名前・正式な名前）や、もっと具体的な言葉（「〜の仕組み」「〜の論文」など）で頼むと、見つかることがあります。"]
+    return "\n".join(lines)
 
 
 _GENERIC_PHRASES = ("について", "に関して", "調べて", "教えて", "知りたい", "ください", "とは", "の情報", "情報")

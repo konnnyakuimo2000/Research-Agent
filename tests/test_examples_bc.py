@@ -47,7 +47,8 @@ class NamingLLM:
 
 
 def test_respond_retries_then_drops_made_up_names():
-    state = {"request": "マーティン先生", "target": {"id": "", "label": "マーティン", "description": "", "sitelinks": 0}}
+    state = {"request": "マーティン先生", "target": {"id": "", "label": "マーティン", "description": "", "sitelinks": 0},
+             "verified": [{"text": "教授である", "source": "https://example.ac.jp/m", "aspect": "所属"}]}   # 事実があるとき（ないときは LLM を呼ばない）
     llm = NamingLLM(fixed=True)
     out = Nodes(SETTINGS, llm).respond(state)
     assert len(llm.calls) == 2 and "Tullberg" in llm.calls[1] and "Tullberg" not in out["answer"]
