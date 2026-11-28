@@ -227,6 +227,18 @@ class Nodes:
             # 利用者に確かめずに対象を決めた場合は、その判断を前提として報告に書く
             assumptions = assumptions + [assumption_text(target, candidates,
                                                          by_dominance=target == dominant(candidates))]
+        if (not target and not person and names and (state.get("clarifications") or len(candidates) <= 1)
+                and not any(normalize(c["label"]) == normalize(n) for c in candidates for n in names)):
+            # 概念の言葉（「エージェントメモリ」）で、百科事典に同じ名前の項目がない（似た名前の製品が 1 つあるだけ、
+            # または何もない）、あるいは利用者が「一般的な概念」のように名前でない答えをした: 依頼の言葉そのものを対象にする。
+            # 前は対象が決まらず、観点も作られず、ページも読まずに「対象が指定されていない」と答えていた（2026-11-28）。
+            # 同じ名前の項目が 2 つ以上あるとき（マーキュリー）は、これまでどおり聞き返す
+            clar = state.get("clarifications", [])
+            target = {"id": "", "label": names[0], "sitelinks": 0,
+                      "description": "百科事典（Wikidata）に同じ名前の項目がない言葉" + (f"（利用者の答え: {'、'.join(clar)}）" if clar else "")}
+            candidates = [target]
+            assumptions = assumptions + [f"「{names[0]}」は百科事典に同じ名前の項目がないため、依頼の言葉そのものを対象として調べた"
+                                         + (f"（利用者の答え: {'、'.join(clar)}）" if clar else "")]
 
         # 根拠の URL は、実際に取得した検索結果・項目のものだけを認める（設計書 M-4 の簡易版）
         pages = {**state.get("pages", {}),
