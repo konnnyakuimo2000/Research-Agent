@@ -365,10 +365,13 @@ button:focus-visible, .node:focus-visible, input:focus-visible { outline: 2px so
   font-size: 12px; }
 .runctl.on { background: var(--strong) !important; color: var(--on-strong) !important; }
 .headctl .runctl { font: inherit; font-size: 12px; }
-/* 設定のパネル: 広い画面では右側、狭い画面では全面。開閉しても、入力中の文・開いている履歴・購読はそのまま */
-.panel-scrim { position: fixed; inset: 0; z-index: 80; background: rgb(0 0 0 / .22); }
-.setpanel { position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 100vw); z-index: 90; background: var(--bg); border-left: 1px solid var(--line);
-  box-shadow: -12px 0 32px rgb(0 0 0 / .14); display: flex; flex-direction: column; }
+/* 設定のパネル: 広い画面では中央のウィンドウ、狭い画面では全面。開閉しても、入力中の文・開いている履歴・購読はそのまま。
+   高さは決めておく（タブを切り替えても、ウィンドウの大きさと位置が変わらないように） */
+.panel-scrim { position: fixed; inset: 0; z-index: 80; background: rgb(0 0 0 / .32); }
+.setpanel { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 90;
+  width: min(560px, calc(100vw - 32px)); height: min(720px, calc(100dvh - 48px));
+  background: var(--bg); border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+  box-shadow: 0 18px 48px rgb(0 0 0 / .28); display: flex; flex-direction: column; }
 .setpanel > header { display: flex; align-items: center; gap: 8px; padding: 12px 14px 6px; }
 .setpanel h2 { margin: 0; font-size: 15px; flex: 1; }
 .setpanel h2:focus { outline: none; }
@@ -418,7 +421,7 @@ button:focus-visible, .node:focus-visible, input:focus-visible { outline: 2px so
   .app:not(.chatonly):not(.show-tele) .tele { display: none; }
   .app.show-tele:not(.chatonly) .chatpane { display: none; }
   #splitChat { display: none; }
-  .setpanel { width: 100vw; border-left: none; }
+  .setpanel { top: 0; left: 0; transform: none; width: 100vw; height: 100dvh; border: none; border-radius: 0; }
 }
 
 /* 流れの図（エージェントのフロー）。ノードの位置は決まっていて、今いるノードが光り、線の上を点が流れる */
